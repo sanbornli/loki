@@ -1,5 +1,3 @@
-import type { LokiClient } from "@lokiplay/sdk";
-
 export interface OverlayState {
   connected: boolean;
   roomCode?: string;
@@ -109,8 +107,13 @@ export interface BindOverlayOptions {
   releaseFocus?(): void;
 }
 
+export interface OverlayClient {
+  onMessage(listener: (message: any) => void): () => void;
+  sendChat(text: string): Promise<void>;
+}
+
 export function bindLokiOverlay(
-  client: LokiClient,
+  client: OverlayClient,
   options: BindOverlayOptions = {},
 ): { element?: LokiOverlayElement; destroy(): void } {
   const state: OverlayState = {
@@ -131,7 +134,10 @@ export function bindLokiOverlay(
   };
   const unsubscribe = client.onMessage((message) => {
     if (message.type === "presence") {
-      state.players = message.members.map((presence) => ({
+      state.players = message.members.map((presence: {
+        playerId: string;
+        host: boolean;
+      }) => ({
         id: presence.playerId,
         name: options.playerName?.(presence.playerId) ?? presence.playerId,
         host: presence.host,
