@@ -5,7 +5,7 @@ plugins {
     signing
 }
 
-group = "play.loki"
+group = "cc.lokiplay"
 version = "0.1.1"
 
 repositories { mavenCentral() }

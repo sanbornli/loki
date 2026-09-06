@@ -19,6 +19,8 @@ gradle build
 To generate a wrapper for consumers, run `gradle wrapper`. The tests parse a
 copy of the shared conformance fixture and replay a protocol-v1 envelope.
 
+Consumers use `cc.lokiplay:loki-sdk:0.1.1`.
+
 ## Publish
 
 ```sh

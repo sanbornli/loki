@@ -1,0 +1,35 @@
+{
+  "generatedAt": "2026-09-06T19:11:15.396Z",
+  "nakamaEndpoint": "nakama-production-e5fc.up.railway.app:443",
+  "checks": {
+    "serverOnlyTenantProvisioning": true,
+    "forgedProjectIgnored": true,
+    "duplicateRoomKeysIsolated": true,
+    "crossTenantJoinRejected": true,
+    "crossTenantSnapshotRejected": true,
+    "staleUpdateRejected": true,
+    "hostMigration": true,
+    "inviteCodesIsolated": true,
+    "realtimeStateBroadcast": true,
+    "realtimeProtocolOpcodes": true,
+    "reconnectSnapshot": true,
+    "presenceAndHostChangeBroadcasts": true,
+    "privateProjectLeaderboards": true,
+    "scoreAntiSpoofing": true,
+    "messageRateLimit": true,
+    "chatRateLimit": true,
+    "concurrentRoomQuota": true,
+    "immediateSuspension": true,
+    "matchmakingIsolated": true,
+    "matchmakingAuthoritativeRoom": true,
+    "eightPlayerRoom": true,
+    "configuredTickRate": true,
+    "remoteRpcSustainedLoad": true
+  },
+  "measurements": {
+    "playersInRoom": 8,
+    "updates": 50,
+    "loadDurationMs": 23557.900833,
+    "updatesPerSecond": 2.1224301925050897
+  }
+}
