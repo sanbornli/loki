@@ -1,0 +1,37 @@
+{
+  "name": "lokiplay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "nakama:up": "sh -c 'if docker compose version >/dev/null 2>&1; then docker compose -f infra/compose.yaml up -d --wait; else docker-compose -f infra/compose.yaml up -d --wait; fi'",
+    "nakama:down": "sh -c 'if docker compose version >/dev/null 2>&1; then docker compose -f infra/compose.yaml down; else docker-compose -f infra/compose.yaml down; fi'",
+    "test:nakama": "node -e \"require('node:fs').rmSync('artifacts/nakama-integration.json', { force: true })\" && tsx --test test/nakama.integration.ts",
+    "validate:nakama": "npm run nakama:up && npm run test:nakama",
+    "evaluate": "tsx src/evaluate.ts",
+    "check": "tsc --noEmit && npm test && npm run evaluate",
+    "lokiplay": "tsx packages/cli/src/index.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "providers:check": "tsx scripts/check-providers.ts",
+    "production:check": "tsx scripts/check-production.ts"
+  },
+  "devDependencies": {
+    "@heroiclabs/nakama-js": "^2.8.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "ws": "^8.21.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1121.0",
+    "fflate": "^0.8.3",
+    "zod": "^4.5.2"
+  }
+}

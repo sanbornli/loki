@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  package-install-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build publishable packages
+        run: |
+          npm run build --workspace @lokiplay/protocol
+          npm run build --workspace @lokiplay/sdk
+          npm run build --workspace @lokiplay/ui-web
+          npm run build --workspace @lokiplay/mcp
+          npm run build --workspace lokiplay
+      - name: Pack without publishing
+        run: |
+          mkdir -p "$RUNNER_TEMP/loki-packs"
+          npm pack --workspace @lokiplay/protocol --pack-destination "$RUNNER_TEMP/loki-packs"
+          npm pack --workspace @lokiplay/sdk --pack-destination "$RUNNER_TEMP/loki-packs"
+          npm pack --workspace @lokiplay/ui-web --pack-destination "$RUNNER_TEMP/loki-packs"
+          npm pack --workspace @lokiplay/mcp --pack-destination "$RUNNER_TEMP/loki-packs"
+          npm pack --workspace lokiplay --pack-destination "$RUNNER_TEMP/loki-packs"
+      - name: Install packed artifacts outside monorepo
+        run: npx tsx scripts/package-install-smoke.ts "$RUNNER_TEMP"/loki-packs/*.tgz
+
+  nakama-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run nakama:up
+      - run: npm run test:nakama
+      - if: always()
+        run: npm run nakama:down
+
+  swift-client:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+
+  kotlin-client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: gradle --project-dir clients/kotlin test
+
+  unity-client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Compile Unity C# client
+        run: |
+          mkdir -p "$RUNNER_TEMP/loki-unity"
+          cp clients/unity/Runtime/LokiClient.cs "$RUNNER_TEMP/loki-unity/"
+          cat > "$RUNNER_TEMP/loki-unity/Loki.Unity.csproj" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net8.0</TargetFramework>
+              <Nullable>enable</Nullable>
+            </PropertyGroup>
+          </Project>
+          EOF
+          dotnet build "$RUNNER_TEMP/loki-unity/Loki.Unity.csproj" --configuration Release
+
+  unity-editmode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: game-ci/unity-test-runner@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: clients/unity/TestProject
+          unityVersion: 2021.3.45f1
+          testMode: EditMode
+          artifactsPath: artifacts/unity
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          checkName: Unity EditMode tests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unity-editmode-results
+          path: artifacts/unity

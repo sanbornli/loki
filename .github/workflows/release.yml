@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - name: Verify tag and package versions
+        run: |
+          node --input-type=module <<'EOF'
+          import { readFileSync } from "node:fs";
+          const expected = process.env.GITHUB_REF_NAME.slice(1);
+          const files = [
+            "packages/protocol/package.json",
+            "packages/sdk-js/package.json",
+            "packages/ui-web/package.json",
+            "packages/mcp/package.json",
+            "packages/cli/package.json",
+            "clients/unity/package.json",
+          ];
+          for (const file of files) {
+            const value = JSON.parse(readFileSync(file, "utf8"));
+            if (value.version !== expected) {
+              throw new Error(`${file} is ${value.version}, expected ${expected}`);
+            }
+          }
+          EOF
+      - run: npm run check
+      - run: npm publish --workspace @lokiplay/protocol --access public --provenance
+      - run: npm publish --workspace @lokiplay/sdk --access public --provenance
+      - run: npm publish --workspace @lokiplay/ui-web --access public --provenance
+      - run: npm publish --workspace @lokiplay/mcp --access public --provenance
+      - run: npm publish --workspace lokiplay --access public --provenance
+      - name: Verify public registry installation
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          export LOKI_REGISTRY_PACKAGE_SPECS="[\"@lokiplay/protocol@$version\",\"@lokiplay/sdk@$version\",\"@lokiplay/ui-web@$version\",\"@lokiplay/mcp@$version\",\"lokiplay@$version\"]"
+          npx tsx scripts/package-install-smoke.ts --registry
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+  publish-kotlin:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Verify tag version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -F "version = \"$version\"" clients/kotlin/build.gradle.kts
+      - name: Test and publish signed Maven package
+        env:
+          MAVEN_REPOSITORY_URL: ${{ secrets.MAVEN_REPOSITORY_URL }}
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+          MAVEN_SIGNING_KEY: ${{ secrets.MAVEN_SIGNING_KEY }}
+          MAVEN_SIGNING_PASSWORD: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+        run: gradle --project-dir clients/kotlin test publish

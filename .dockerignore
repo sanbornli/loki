@@ -1,0 +1,15 @@
+.git
+.cursor
+.env
+.env.*
+!.env.example
+.loki
+artifacts
+node_modules
+test
+clients
+src
+supabase
+infra
+docs
+*.md

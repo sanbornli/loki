@@ -1,0 +1,90 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "name": "Counter Party",
+    "entrypoint": "index.html",
+    "multiplayer": {
+      "enabled": true,
+      "authority": "host",
+      "maxPlayers": 8,
+      "tickRate": 10
+    },
+    "networkAllowlist": []
+  },
+  "canonicalState": {
+    "input": { "players": ["a", "b"], "score": { "b": 1, "a": 2 }, "tick": 7 },
+    "json": "{\"players\":[\"a\",\"b\"],\"score\":{\"a\":2,\"b\":1},\"tick\":7}",
+    "sha256": "039c5612a00a3ea03835619893ad0b6ddadcf6e331a0b1be69e0ad89fb5e676c"
+  },
+  "hello": {
+    "protocolVersion": 1,
+    "minimumProtocolVersion": 1,
+    "capabilities": ["rooms", "invites", "matchmaking", "host_migration", "reconnect", "presence", "chat", "private_leaderboards"],
+    "limits": {
+      "maxPlayersPerRoom": 16,
+      "maxMessageBytes": 16384,
+      "maxChatBytes": 500,
+      "messagesPerSecond": 10
+    }
+  },
+  "roomConfig": {
+    "roomKey": "fixture-room",
+    "visibility": "private",
+    "maxPlayers": 8,
+    "teamSize": 2,
+    "tickRate": 10
+  },
+  "clientMessages": [
+    {
+      "protocolVersion": 1,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 1,
+      "type": "action",
+      "payload": { "move": 1 }
+    },
+    {
+      "protocolVersion": 1,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 2,
+      "type": "host_state",
+      "expectedVersion": 0,
+      "state": { "tick": 1 }
+    },
+    {
+      "protocolVersion": 1,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 3,
+      "type": "chat",
+      "channel": "match",
+      "text": "ready"
+    }
+  ],
+  "serverReplay": [
+    {
+      "protocolVersion": 1,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 0,
+      "type": "snapshot",
+      "hostId": "00000000-0000-4000-8000-000000000002",
+      "state": { "tick": 0 }
+    },
+    {
+      "protocolVersion": 1,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 1,
+      "type": "host_changed",
+      "previousHostId": "00000000-0000-4000-8000-000000000002",
+      "hostId": "00000000-0000-4000-8000-000000000003",
+      "stateVersion": 0
+    },
+    {
+      "protocolVersion": 1,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 2,
+      "type": "error",
+      "code": "RATE_LIMITED",
+      "message": "message rate exceeded",
+      "retryAfterMs": 1000
+    }
+  ]
+}

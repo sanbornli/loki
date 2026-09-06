@@ -1,0 +1,45 @@
+{
+  "name": "lokiplay",
+  "version": "0.1.1",
+  "description": "Command-line tools for Loki game projects and deployments.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sanbornli/loki.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/sanbornli/loki#readme",
+  "bugs": "https://github.com/sanbornli/loki/issues",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "lokiplay": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -b --force && node ../../scripts/rewrite-package-imports.mjs dist",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@lokiplay/protocol": "0.1.1",
+    "fflate": "^0.8.3"
+  }
+}

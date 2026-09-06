@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "release": "vX.Y.Z",
+  "generatedAt": "2026-09-07T00:00:00.000Z",
+  "evidence": [
+    {
+      "gate": "tenant-isolation",
+      "status": "pass",
+      "observedAt": "2026-09-07T00:00:00.000Z",
+      "environment": "production",
+      "evidenceFile": "../release-vX.Y.Z/tenant-isolation.json",
+      "evidenceSha256": "REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS"
+    }
+  ],
+  "_instructions": [
+    "Add exactly one passing entry for every gate listed by scripts/verify-release-gates.ts.",
+    "Evidence paths are resolved relative to this manifest.",
+    "External security and legal entries must include external.organization, reviewer, reportReference, and approvedAt.",
+    "The verifier rejects missing, stale, future-dated, duplicate, unreadable, or digest-mismatched evidence."
+  ]
+}

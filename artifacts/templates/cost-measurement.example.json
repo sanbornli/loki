@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-07T00:00:00.000Z",
+  "currency": "USD",
+  "windowHours": 24,
+  "activePlayerHours": 1,
+  "activeMatchHours": 1,
+  "costs": {
+    "compute": 0,
+    "database": 0,
+    "objectStorage": 0,
+    "bandwidth": 0,
+    "monitoring": 0,
+    "other": 0
+  },
+  "sourceReferences": [
+    "replace-with-dated-provider-export-or-invoice-reference"
+  ]
+}

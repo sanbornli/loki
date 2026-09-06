@@ -1,0 +1,43 @@
+{
+  "name": "@lokiplay/protocol",
+  "version": "0.1.1",
+  "description": "Shared schemas, message types, and hashing utilities for Loki.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sanbornli/loki.git",
+    "directory": "packages/protocol"
+  },
+  "homepage": "https://github.com/sanbornli/loki#readme",
+  "bugs": "https://github.com/sanbornli/loki/issues",
+  "type": "module",
+  "files": [
+    "dist",
+    "fixtures",
+    "schema",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -b --force",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "zod": "^4.5.2"
+  }
+}

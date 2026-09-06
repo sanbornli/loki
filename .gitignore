@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+.env
+.env.*
+!.env.example
+.loki/
+.cursor/
+dist/
+*.tsbuildinfo
+.build/
+.gradle/
+build/
+supabase/.temp/
+artifacts/*.json

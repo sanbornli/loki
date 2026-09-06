@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.lokiplay.dev/game/v1.json",
+  "title": "Loki game manifest",
+  "$defs": {
+    "errorCode": {
+      "enum": [
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "TENANT_MISMATCH",
+        "PROJECT_SUSPENDED",
+        "ROOM_NOT_FOUND",
+        "ROOM_FULL",
+        "INVITE_INVALID",
+        "INVITE_EXPIRED",
+        "STALE_VERSION",
+        "HOST_REQUIRED",
+        "RATE_LIMITED",
+        "QUOTA_EXCEEDED",
+        "INVALID_MESSAGE",
+        "UNSUPPORTED_VERSION",
+        "SERVICE_UNAVAILABLE"
+      ]
+    },
+    "roomConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roomKey", "visibility", "maxPlayers", "tickRate"],
+      "properties": {
+        "roomKey": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+        "visibility": { "enum": ["private", "unlisted", "matchmaking"] },
+        "maxPlayers": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "teamSize": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "tickRate": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "envelopeBase": {
+      "type": "object",
+      "required": ["protocolVersion", "roomId", "sequence", "type"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "roomId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "type": { "type": "string" }
+      }
+    },
+    "capability": {
+      "enum": [
+        "rooms",
+        "invites",
+        "matchmaking",
+        "host_migration",
+        "reconnect",
+        "presence",
+        "chat",
+        "private_leaderboards"
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "entrypoint"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "entrypoint": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+\\.html$"
+    },
+    "multiplayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "authority", "maxPlayers", "tickRate"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "authority": { "const": "host" },
+        "maxPlayers": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "tickRate": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "networkAllowlist": {
+      "type": "array",
+      "maxItems": 10,
+      "items": { "type": "string", "format": "uri" },
+      "default": []
+    }
+  }
+}

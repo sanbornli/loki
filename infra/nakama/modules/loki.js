@@ -1,0 +1,1287 @@
+// Loki's authoritative Nakama runtime. All project identity, status, limits,
+// and room defaults come from server-only storage provisioned with the HTTP key.
+var PROTOCOL_VERSION = 1;
+var MATCH_NAME = "loki_room";
+var TENANT_COLLECTION = "_loki_tenants";
+var TENANT_KEY = "membership";
+var PROJECT_COLLECTION = "_loki_projects";
+var INVITE_COLLECTION = "_loki_invites";
+var DEFAULT_MAX_PLAYERS = 16;
+var DEFAULT_TICK_RATE = 5;
+var DEFAULT_INVITE_TTL_SECONDS = 900;
+var DEFAULT_ROOM_QUOTA = 20;
+var MAX_MESSAGE_BYTES = 16384;
+var MAX_CHAT_BYTES = 500;
+var MESSAGE_RATE_LIMIT = 20;
+var CHAT_RATE_LIMIT = 5;
+var CHAT_RATE_WINDOW_MS = 10000;
+
+var OP_ACTION = 10;
+var OP_EVENT = 11;
+var OP_HOST_STATE = 12;
+var OP_SNAPSHOT = 13;
+var OP_CHAT = 14;
+var OP_SCORE = 15;
+
+var nowMs = function () {
+  return Date.now();
+};
+
+var codedError = function (code, message) {
+  return Error(code + ": " + message);
+};
+
+var parsePayload = function (payload) {
+  if (!payload) return {};
+  try {
+    return JSON.parse(payload);
+  } catch (_) {
+    throw codedError("INVALID_MESSAGE", "invalid JSON payload");
+  }
+};
+
+var integerInRange = function (value, minimum, maximum) {
+  return (
+    typeof value === "number" &&
+    isFinite(value) &&
+    Math.floor(value) === value &&
+    value >= minimum &&
+    value <= maximum
+  );
+};
+
+var validRoomKey = function (value) {
+  return typeof value === "string" && /^[a-z0-9-]{1,64}$/.test(value);
+};
+
+var validLeaderboardId = function (value) {
+  return typeof value === "string" && /^[a-z0-9-]{1,64}$/.test(value);
+};
+
+var defaultProjectConfig = function (projectId) {
+  return {
+    projectId: projectId,
+    status: "active",
+    maxPlayers: DEFAULT_MAX_PLAYERS,
+    tickRate: DEFAULT_TICK_RATE,
+    visibility: "matchmaking",
+    teamSize: 0,
+    inviteTtlSeconds: DEFAULT_INVITE_TTL_SECONDS,
+    concurrentRoomQuota: DEFAULT_ROOM_QUOTA,
+    leaderboardNamespace: "",
+  };
+};
+
+var validateProjectConfig = function (projectId, input, previous) {
+  var config = previous || defaultProjectConfig(projectId);
+  var next = {
+    projectId: projectId,
+    status: input.status === undefined ? config.status : input.status,
+    maxPlayers:
+      input.maxPlayers === undefined ? config.maxPlayers : input.maxPlayers,
+    tickRate: input.tickRate === undefined ? config.tickRate : input.tickRate,
+    visibility:
+      input.visibility === undefined ? config.visibility : input.visibility,
+    teamSize: input.teamSize === undefined ? config.teamSize : input.teamSize,
+    inviteTtlSeconds:
+      input.inviteTtlSeconds === undefined
+        ? config.inviteTtlSeconds
+        : input.inviteTtlSeconds,
+    concurrentRoomQuota:
+      input.concurrentRoomQuota === undefined
+        ? config.concurrentRoomQuota
+        : input.concurrentRoomQuota,
+    leaderboardNamespace: config.leaderboardNamespace || "",
+  };
+  if (next.status !== "active" && next.status !== "suspended") {
+    throw codedError("INVALID_MESSAGE", "status must be active or suspended");
+  }
+  if (!integerInRange(next.maxPlayers, 1, 16)) {
+    throw codedError("INVALID_MESSAGE", "maxPlayers must be between 1 and 16");
+  }
+  if (!integerInRange(next.tickRate, 1, 10)) {
+    throw codedError("INVALID_MESSAGE", "tickRate must be between 1 and 10");
+  }
+  if (
+    next.visibility !== "private" &&
+    next.visibility !== "unlisted" &&
+    next.visibility !== "matchmaking"
+  ) {
+    throw codedError("INVALID_MESSAGE", "invalid visibility");
+  }
+  if (!integerInRange(next.teamSize, 0, 16)) {
+    throw codedError("INVALID_MESSAGE", "teamSize must be between 0 and 16");
+  }
+  if (next.teamSize && next.maxPlayers % next.teamSize !== 0) {
+    throw codedError("INVALID_MESSAGE", "teamSize must divide maxPlayers");
+  }
+  if (!integerInRange(next.inviteTtlSeconds, 30, 86400)) {
+    throw codedError("INVALID_MESSAGE", "inviteTtlSeconds must be between 30 and 86400");
+  }
+  if (!integerInRange(next.concurrentRoomQuota, 1, 100)) {
+    throw codedError("INVALID_MESSAGE", "concurrentRoomQuota must be between 1 and 100");
+  }
+  return next;
+};
+
+var readProjectConfig = function (nk, projectId) {
+  var objects = nk.storageRead([
+    { collection: PROJECT_COLLECTION, key: projectId },
+  ]);
+  if (!objects || objects.length !== 1 || !objects[0].value) {
+    throw codedError("FORBIDDEN", "project not configured");
+  }
+  return validateProjectConfig(projectId, {}, objects[0].value);
+};
+
+var requireActiveProject = function (nk, projectId) {
+  var config = readProjectConfig(nk, projectId);
+  if (config.status !== "active") {
+    throw codedError("PROJECT_SUSPENDED", "project suspended");
+  }
+  return config;
+};
+
+var tenantForUser = function (nk, userId, requireActive) {
+  var objects = nk.storageRead([
+    { collection: TENANT_COLLECTION, key: TENANT_KEY, userId: userId },
+  ]);
+  if (!objects || objects.length !== 1) {
+    throw codedError("FORBIDDEN", "project not activated");
+  }
+  var projectId = objects[0].value && objects[0].value.projectId;
+  if (!projectId || typeof projectId !== "string") {
+    throw codedError("FORBIDDEN", "invalid tenant mapping");
+  }
+  if (requireActive !== false) requireActiveProject(nk, projectId);
+  return projectId;
+};
+
+var rpcProvisionTenant = function (ctx, logger, nk, payload) {
+  if (ctx.userId) {
+    throw codedError("FORBIDDEN", "server authentication required");
+  }
+  var input = parsePayload(payload);
+  if (typeof input.userId !== "string" || typeof input.projectId !== "string") {
+    throw codedError("INVALID_MESSAGE", "userId and projectId are required");
+  }
+
+  var existingObjects = nk.storageRead([
+    { collection: PROJECT_COLLECTION, key: input.projectId },
+  ]);
+  var existing =
+    existingObjects && existingObjects.length === 1
+      ? existingObjects[0].value
+      : null;
+  var hasConfig =
+    input.status !== undefined ||
+    input.maxPlayers !== undefined ||
+    input.tickRate !== undefined ||
+    input.visibility !== undefined ||
+    input.teamSize !== undefined ||
+    input.inviteTtlSeconds !== undefined ||
+    input.concurrentRoomQuota !== undefined;
+  var config = hasConfig || !existing
+    ? validateProjectConfig(input.projectId, input, existing)
+    : validateProjectConfig(input.projectId, {}, existing);
+  if (!config.leaderboardNamespace) config.leaderboardNamespace = nk.uuidv4();
+
+  nk.storageWrite([
+    {
+      collection: TENANT_COLLECTION,
+      key: TENANT_KEY,
+      userId: input.userId,
+      value: { projectId: input.projectId },
+      permissionRead: 0,
+      permissionWrite: 0,
+    },
+    {
+      collection: PROJECT_COLLECTION,
+      key: input.projectId,
+      value: config,
+      permissionRead: 0,
+      permissionWrite: 0,
+    },
+  ]);
+  logger.info("Provisioned Loki tenant %s for user %s", input.projectId, input.userId);
+  return JSON.stringify({
+    ok: true,
+    code: "OK",
+    userId: input.userId,
+    projectId: input.projectId,
+    status: config.status,
+    config: publicProjectConfig(config),
+  });
+};
+
+var publicProjectConfig = function (config) {
+  return {
+    status: config.status,
+    maxPlayers: config.maxPlayers,
+    tickRate: config.tickRate,
+    visibility: config.visibility,
+    teamSize: config.teamSize,
+    inviteTtlSeconds: config.inviteTtlSeconds,
+    concurrentRoomQuota: config.concurrentRoomQuota,
+  };
+};
+
+var rpcTenant = function (ctx, logger, nk) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var projectId = tenantForUser(nk, ctx.userId);
+  var config = requireActiveProject(nk, projectId);
+  return JSON.stringify({
+    projectId: projectId,
+    userId: ctx.userId,
+    status: config.status,
+    config: publicProjectConfig(config),
+  });
+};
+
+var activeRoomCount = function (nk, projectId, quota) {
+  var escapedProjectId = projectId.replace(/([+\-=&|>])/g, "\\$1");
+  var matches = nk.matchList(
+    quota,
+    true,
+    "",
+    0,
+    DEFAULT_MAX_PLAYERS,
+    "+label.projectId:" + escapedProjectId,
+  );
+  return matches ? matches.length : 0;
+};
+
+var createInvite = function (nk, matchId, projectId, ttlSeconds) {
+  var expiresAt = nowMs() + ttlSeconds * 1000;
+  for (var attempt = 0; attempt < 8; attempt += 1) {
+    var inviteCode = nk.uuidv4().replace(/-/g, "").slice(0, 16).toUpperCase();
+    try {
+      nk.storageWrite([
+        {
+          collection: INVITE_COLLECTION,
+          key: inviteCode,
+          value: {
+            matchId: matchId,
+            projectId: projectId,
+            expiresAt: expiresAt,
+          },
+          version: "*",
+          permissionRead: 0,
+          permissionWrite: 0,
+        },
+      ]);
+      return { inviteCode: inviteCode, expiresAt: expiresAt };
+    } catch (error) {
+      if (attempt === 7) throw error;
+    }
+  }
+  throw codedError("SERVICE_UNAVAILABLE", "invite allocation failed");
+};
+
+var roomParams = function (projectId, roomKey, creatorId, config, source) {
+  return {
+    projectId: projectId,
+    roomKey: roomKey,
+    creatorId: creatorId || "",
+    maxPlayers: config.maxPlayers,
+    tickRate: config.tickRate,
+    visibility: source === "matchmaking" ? "matchmaking" : config.visibility,
+    teamSize: config.teamSize,
+    source: source,
+  };
+};
+
+var rpcCreateRoom = function (ctx, logger, nk, payload) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  if (!validRoomKey(input.roomKey)) {
+    throw codedError("INVALID_MESSAGE", "invalid room key");
+  }
+  var projectId = tenantForUser(nk, ctx.userId);
+  var config = requireActiveProject(nk, projectId);
+  if (activeRoomCount(nk, projectId, config.concurrentRoomQuota) >= config.concurrentRoomQuota) {
+    throw codedError("QUOTA_EXCEEDED", "concurrent room quota exceeded");
+  }
+  var params = roomParams(projectId, input.roomKey, ctx.userId, config, "rpc");
+  var matchId = nk.matchCreate(MATCH_NAME, params);
+  var invite = createInvite(nk, matchId, projectId, config.inviteTtlSeconds);
+  return JSON.stringify({
+    ok: true,
+    code: "OK",
+    matchId: matchId,
+    projectId: projectId,
+    roomKey: input.roomKey,
+    inviteCode: invite.inviteCode,
+    inviteExpiresAt: invite.expiresAt,
+    maxPlayers: params.maxPlayers,
+    tickRate: params.tickRate,
+    visibility: params.visibility,
+    teamSize: params.teamSize || undefined,
+  });
+};
+
+var rpcResolveInvite = function (ctx, logger, nk, payload) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  var inviteCode =
+    typeof input.inviteCode === "string" ? input.inviteCode.toUpperCase() : "";
+  if (!/^[A-F0-9]{16}$/.test(inviteCode)) {
+    throw codedError("INVITE_INVALID", "invalid invite code");
+  }
+  var objects = nk.storageRead([
+    { collection: INVITE_COLLECTION, key: inviteCode },
+  ]);
+  if (!objects || objects.length !== 1 || !objects[0].value) {
+    throw codedError("INVITE_INVALID", "invite not found");
+  }
+  var invite = objects[0].value;
+  if (!integerInRange(invite.expiresAt, 0, 9007199254740991) || invite.expiresAt <= nowMs()) {
+    try {
+      nk.storageDelete([
+        { collection: INVITE_COLLECTION, key: inviteCode },
+      ]);
+    } catch (_) {
+      // Expiry is enforced even if best-effort cleanup races another resolver.
+    }
+    throw codedError("INVITE_EXPIRED", "invite expired");
+  }
+  var projectId = tenantForUser(nk, ctx.userId);
+  if (invite.projectId !== projectId) {
+    throw codedError("TENANT_MISMATCH", "tenant mismatch");
+  }
+  requireActiveProject(nk, projectId);
+  return JSON.stringify({
+    ok: true,
+    code: "OK",
+    matchId: invite.matchId,
+    inviteCode: inviteCode,
+    expiresAt: invite.expiresAt,
+  });
+};
+
+var signalRoom = function (ctx, nk, payload, operation) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  if (typeof input.matchId !== "string") {
+    throw codedError("INVALID_MESSAGE", "matchId is required");
+  }
+  var projectId = tenantForUser(nk, ctx.userId);
+  return nk.matchSignal(
+    input.matchId,
+    JSON.stringify({
+      operation: operation,
+      projectId: projectId,
+      actorId: ctx.userId,
+      expectedVersion: input.expectedVersion,
+      state: input.state,
+    }),
+  );
+};
+
+var rpcRoomSnapshot = function (ctx, logger, nk, payload) {
+  return signalRoom(ctx, nk, payload, "snapshot");
+};
+
+var rpcRoomUpdate = function (ctx, logger, nk, payload) {
+  return signalRoom(ctx, nk, payload, "update");
+};
+
+var beforeMatchmakerAdd = function (ctx, logger, nk, envelope) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var projectId = tenantForUser(nk, ctx.userId);
+  var config = requireActiveProject(nk, projectId);
+  if (config.visibility !== "matchmaking") {
+    throw codedError("FORBIDDEN", "project matchmaking is disabled");
+  }
+  envelope.matchmakerAdd.stringProperties =
+    envelope.matchmakerAdd.stringProperties || {};
+  envelope.matchmakerAdd.numericProperties =
+    envelope.matchmakerAdd.numericProperties || {};
+  envelope.matchmakerAdd.stringProperties.projectId = projectId;
+  envelope.matchmakerAdd.stringProperties.lokiConfig = JSON.stringify(config);
+  envelope.matchmakerAdd.numericProperties.teamSize = config.teamSize;
+  envelope.matchmakerAdd.query = "+properties.projectId:" + projectId;
+  return envelope;
+};
+
+var matchedProperty = function (entry, name) {
+  if (!entry) return undefined;
+  if (entry.properties && entry.properties[name] !== undefined) return entry.properties[name];
+  if (entry.stringProperties && entry.stringProperties[name] !== undefined) {
+    return entry.stringProperties[name];
+  }
+  if (entry.numericProperties && entry.numericProperties[name] !== undefined) {
+    return entry.numericProperties[name];
+  }
+  return undefined;
+};
+
+var matchmakerMatched = function (ctx, logger, nk, matches) {
+  if (!matches || !matches.length) {
+    throw codedError("INVALID_MESSAGE", "empty matchmaker result");
+  }
+  var projectId = matchedProperty(matches[0], "projectId");
+  if (typeof projectId !== "string") {
+    throw codedError("FORBIDDEN", "trusted matchmaking properties missing");
+  }
+  for (var index = 1; index < matches.length; index += 1) {
+    if (matchedProperty(matches[index], "projectId") !== projectId) {
+      throw codedError("TENANT_MISMATCH", "matchmaker crossed tenant boundary");
+    }
+  }
+  var config = requireActiveProject(nk, projectId);
+  if (activeRoomCount(nk, projectId, config.concurrentRoomQuota) >= config.concurrentRoomQuota) {
+    throw codedError("QUOTA_EXCEEDED", "concurrent room quota exceeded");
+  }
+  return nk.matchCreate(
+    MATCH_NAME,
+    roomParams(projectId, "match-" + nk.uuidv4().slice(0, 8), "", config, "matchmaking"),
+  );
+};
+
+var orderedMemberIds = function (members) {
+  var userIds = Object.keys(members);
+  userIds.sort(function (left, right) {
+    var difference = members[left].ordinal - members[right].ordinal;
+    return difference === 0 ? left.localeCompare(right) : difference;
+  });
+  return userIds;
+};
+
+var electHost = function (members) {
+  var users = orderedMemberIds(members);
+  return users.length ? users[0] : "";
+};
+
+var memberPresence = function (userId, member, hostId) {
+  var result = {
+    playerId: userId,
+    sessionId: member.sessionId,
+    joinedAt: member.joinedAt,
+    host: userId === hostId,
+  };
+  if (member.team !== undefined) result.team = member.team;
+  return result;
+};
+
+var presenceList = function (members, hostId) {
+  return orderedMemberIds(members).map(function (userId) {
+    return memberPresence(userId, members[userId], hostId);
+  });
+};
+
+var nextServerSequence = function (state) {
+  var sequence = state.sequence;
+  state.sequence += 1;
+  return sequence;
+};
+
+var envelope = function (state, type, fields) {
+  var result = {
+    protocolVersion: PROTOCOL_VERSION,
+    roomId: state.roomId,
+    sequence: nextServerSequence(state),
+    type: type,
+  };
+  Object.keys(fields || {}).forEach(function (key) {
+    if (fields[key] !== undefined) result[key] = fields[key];
+  });
+  return result;
+};
+
+var broadcastEnvelope = function (
+  dispatcher,
+  state,
+  opCode,
+  type,
+  fields,
+  presences,
+  sender,
+  reliable
+) {
+  dispatcher.broadcastMessage(
+    opCode,
+    JSON.stringify(envelope(state, type, fields)),
+    presences || null,
+    sender || null,
+    reliable !== false,
+  );
+};
+
+var snapshotFields = function (state) {
+  return {
+    hostId: state.hostId,
+    state: state.sharedState,
+  };
+};
+
+var legacySnapshot = function (state) {
+  return {
+    type: "snapshot",
+    projectId: state.projectId,
+    roomKey: state.roomKey,
+    hostId: state.hostId,
+    version: state.version,
+    state: state.sharedState,
+    members: orderedMemberIds(state.members),
+  };
+};
+
+var updateLabel = function (dispatcher, state) {
+  dispatcher.matchLabelUpdate(JSON.stringify({
+    projectId: state.projectId,
+    roomKey: state.roomKey,
+    playerCount: Object.keys(state.members).length,
+    maxPlayers: state.maxPlayers,
+    tickRate: state.tickRate,
+    visibility: state.visibility,
+    teamSize: state.teamSize,
+  }));
+};
+
+var matchInit = function (ctx, logger, nk, params) {
+  if (!params || !params.projectId || !params.roomKey) {
+    throw codedError("FORBIDDEN", "trusted room parameters required");
+  }
+  var config = requireActiveProject(nk, params.projectId);
+  var maxPlayers = integerInRange(params.maxPlayers, 1, 16)
+    ? params.maxPlayers
+    : config.maxPlayers;
+  var tickRate = integerInRange(params.tickRate, 1, 10)
+    ? params.tickRate
+    : config.tickRate;
+  var teamSize = integerInRange(params.teamSize, 0, maxPlayers)
+    ? params.teamSize
+    : config.teamSize;
+  return {
+    state: {
+      roomId: ctx.matchId || "",
+      projectId: params.projectId,
+      roomKey: params.roomKey,
+      maxPlayers: maxPlayers,
+      tickRate: tickRate,
+      visibility: params.visibility || config.visibility,
+      teamSize: teamSize,
+      hostId: "",
+      version: 0,
+      sequence: 0,
+      sharedState: {},
+      nextJoinOrdinal: 0,
+      members: {},
+      rateLimits: {},
+      emptyTicks: 0,
+      lastStatusCheckTick: -1,
+    },
+    tickRate: tickRate,
+    label: JSON.stringify({
+      projectId: params.projectId,
+      roomKey: params.roomKey,
+      playerCount: 0,
+      maxPlayers: maxPlayers,
+      tickRate: tickRate,
+      visibility: params.visibility || config.visibility,
+      teamSize: teamSize,
+    }),
+  };
+};
+
+var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, presence) {
+  var accepted = false;
+  var reason = "TENANT_MISMATCH: tenant mismatch";
+  try {
+    accepted = tenantForUser(nk, presence.userId) === state.projectId;
+    if (accepted && !state.members[presence.userId] &&
+        Object.keys(state.members).length >= state.maxPlayers) {
+      accepted = false;
+      reason = "ROOM_FULL: room full";
+    }
+  } catch (error) {
+    reason = String(error && error.message ? error.message : error);
+  }
+  return {
+    state: state,
+    accept: accepted,
+    rejectMessage: accepted ? undefined : reason,
+  };
+};
+
+var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
+  var joins = [];
+  for (var index = 0; index < presences.length; index += 1) {
+    var presence = presences[index];
+    var member = state.members[presence.userId];
+    if (!member) {
+      var ordinal = state.nextJoinOrdinal++;
+      member = {
+        ordinal: ordinal,
+        sessionId: presence.sessionId,
+        joinedAt: nowMs(),
+        team: state.teamSize ? Math.floor(ordinal / state.teamSize) : undefined,
+        lastSequence: -1,
+      };
+      state.members[presence.userId] = member;
+    } else {
+      member.sessionId = presence.sessionId;
+    }
+    if (!state.hostId) state.hostId = presence.userId;
+    joins.push(memberPresence(presence.userId, member, state.hostId));
+  }
+
+  // Legacy snapshots keep the existing SDK and Phase 0 tests compatible.
+  dispatcher.broadcastMessage(
+    2,
+    JSON.stringify(legacySnapshot(state)),
+    presences,
+    null,
+    true,
+  );
+  broadcastEnvelope(
+    dispatcher,
+    state,
+    OP_SNAPSHOT,
+    "snapshot",
+    snapshotFields(state),
+    presences,
+    null,
+    true,
+  );
+  broadcastEnvelope(
+    dispatcher,
+    state,
+    OP_SNAPSHOT,
+    "presence",
+    {
+      joins: joins,
+      leaves: [],
+      members: presenceList(state.members, state.hostId),
+    },
+    null,
+    null,
+    true,
+  );
+  updateLabel(dispatcher, state);
+  return { state: state };
+};
+
+var matchLeave = function (ctx, logger, nk, dispatcher, tick, state, presences) {
+  var previousHostId = state.hostId;
+  var leaves = [];
+  for (var index = 0; index < presences.length; index += 1) {
+    var presence = presences[index];
+    var member = state.members[presence.userId];
+    // Ignore a delayed leave from the socket which a reconnect replaced.
+    if (member && member.sessionId === presence.sessionId) {
+      leaves.push(memberPresence(presence.userId, member, state.hostId));
+      delete state.members[presence.userId];
+      delete state.rateLimits[presence.userId];
+    }
+  }
+  if (!Object.keys(state.members).length) return null;
+  if (!state.members[state.hostId]) state.hostId = electHost(state.members);
+
+  broadcastEnvelope(
+    dispatcher,
+    state,
+    OP_SNAPSHOT,
+    "presence",
+    {
+      joins: [],
+      leaves: leaves,
+      members: presenceList(state.members, state.hostId),
+    },
+    null,
+    null,
+    true,
+  );
+  if (previousHostId !== state.hostId) {
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_SNAPSHOT,
+      "host_changed",
+      {
+        previousHostId: previousHostId || undefined,
+        hostId: state.hostId,
+        stateVersion: state.version,
+      },
+      null,
+      null,
+      true,
+    );
+  }
+  updateLabel(dispatcher, state);
+  return { state: state };
+};
+
+var rateLimit = function (state, userId, kind, timestamp) {
+  var limits = state.rateLimits[userId];
+  if (!limits) {
+    limits = {
+      messageStartedAt: timestamp,
+      messageCount: 0,
+      chatStartedAt: timestamp,
+      chatCount: 0,
+    };
+    state.rateLimits[userId] = limits;
+  }
+  var windowMs = kind === "chat" ? CHAT_RATE_WINDOW_MS : 1000;
+  var startedKey = kind + "StartedAt";
+  var countKey = kind + "Count";
+  if (timestamp - limits[startedKey] >= windowMs) {
+    limits[startedKey] = timestamp;
+    limits[countKey] = 0;
+  }
+  limits[countKey] += 1;
+  var maximum = kind === "chat" ? CHAT_RATE_LIMIT : MESSAGE_RATE_LIMIT;
+  if (limits[countKey] > maximum) {
+    return Math.max(1, windowMs - (timestamp - limits[startedKey]));
+  }
+  return 0;
+};
+
+var sendProtocolError = function (
+  dispatcher,
+  state,
+  opCode,
+  presence,
+  code,
+  message,
+  retryAfterMs
+) {
+  broadcastEnvelope(
+    dispatcher,
+    state,
+    opCode,
+    "error",
+    {
+      code: code,
+      message: message,
+      retryAfterMs: retryAfterMs,
+    },
+    [presence],
+    null,
+    true,
+  );
+};
+
+var validClientEnvelope = function (state, message, input, expectedType) {
+  return (
+    input &&
+    input.protocolVersion === PROTOCOL_VERSION &&
+    input.roomId === state.roomId &&
+    integerInRange(input.sequence, 0, 9007199254740991) &&
+    input.type === expectedType &&
+    message.sender &&
+    state.members[message.sender.userId] &&
+    state.members[message.sender.userId].sessionId === message.sender.sessionId
+  );
+};
+
+var leaderboardName = function (nk, projectId, leaderboardId) {
+  // The random server-only namespace prevents clients from bypassing these RPCs
+  // with Nakama's generic leaderboard read endpoint.
+  var config = requireActiveProject(nk, projectId);
+  return "loki." + config.leaderboardNamespace + "." + leaderboardId;
+};
+
+var writeScore = function (nk, projectId, actorId, username, input) {
+  if (!validLeaderboardId(input.leaderboardId)) {
+    throw codedError("INVALID_MESSAGE", "invalid leaderboardId");
+  }
+  if (!integerInRange(input.score, -9007199254740991, 9007199254740991)) {
+    throw codedError("INVALID_MESSAGE", "score must be a safe integer");
+  }
+  var subscore = input.subscore === undefined ? 0 : input.subscore;
+  if (!integerInRange(subscore, -9007199254740991, 9007199254740991)) {
+    throw codedError("INVALID_MESSAGE", "subscore must be a safe integer");
+  }
+  var internalId = leaderboardName(nk, projectId, input.leaderboardId);
+  nk.leaderboardCreate(internalId, true, "desc", "best", "", {});
+  // ownerId is always the authenticated actor; client-supplied identity fields
+  // are deliberately ignored.
+  return nk.leaderboardRecordWrite(
+    internalId,
+    actorId,
+    username || "",
+    input.score,
+    subscore,
+    {},
+  );
+};
+
+var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
+  // Nakama exposes int64 opcodes as numeric wrapper values in the JS runtime.
+  var opCode = parseInt(String(message.opCode), 10);
+  var expectedTypes = {};
+  expectedTypes[OP_ACTION] = "action";
+  expectedTypes[OP_EVENT] = "event";
+  expectedTypes[OP_HOST_STATE] = "host_state";
+  expectedTypes[OP_SNAPSHOT] = "snapshot_request";
+  expectedTypes[OP_CHAT] = "chat";
+  expectedTypes[OP_SCORE] = "score_submit";
+  var expectedType = expectedTypes[opCode];
+  if (!expectedType || !message.sender) return;
+
+  var raw =
+    typeof message.data === "string"
+      ? message.data
+      : nk.binaryToString(message.data);
+  if (raw.length > MAX_MESSAGE_BYTES) {
+    sendProtocolError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "INVALID_MESSAGE",
+      "message exceeds maximum size",
+    );
+    return;
+  }
+
+  var input;
+  try {
+    input = parsePayload(raw);
+  } catch (_) {
+    sendProtocolError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "INVALID_MESSAGE",
+      "invalid JSON payload",
+    );
+    return;
+  }
+  if (input.protocolVersion !== PROTOCOL_VERSION) {
+    sendProtocolError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "UNSUPPORTED_VERSION",
+      "protocol version 1 required",
+    );
+    return;
+  }
+  if (!validClientEnvelope(state, message, input, expectedType)) {
+    sendProtocolError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "INVALID_MESSAGE",
+      "invalid protocol envelope",
+    );
+    return;
+  }
+
+  try {
+    if (tenantForUser(nk, message.sender.userId) !== state.projectId) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        opCode,
+        message.sender,
+        "TENANT_MISMATCH",
+        "tenant mismatch",
+      );
+      return;
+    }
+  } catch (error) {
+    var suspended = String(error).indexOf("PROJECT_SUSPENDED") !== -1;
+    sendProtocolError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      suspended ? "PROJECT_SUSPENDED" : "FORBIDDEN",
+      suspended ? "project suspended" : "project not activated",
+    );
+    return;
+  }
+
+  var member = state.members[message.sender.userId];
+  if (input.sequence <= member.lastSequence) {
+    sendProtocolError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "INVALID_MESSAGE",
+      "sequence must increase",
+    );
+    return;
+  }
+  member.lastSequence = input.sequence;
+
+  var retryAfterMs = rateLimit(state, message.sender.userId, "message", nowMs());
+  if (retryAfterMs) {
+    sendProtocolError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "RATE_LIMITED",
+      "message rate exceeded",
+      retryAfterMs,
+    );
+    return;
+  }
+
+  if (opCode === OP_ACTION) {
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_ACTION,
+      "action",
+      { senderId: message.sender.userId, payload: input.payload },
+      null,
+      null,
+      true,
+    );
+    return;
+  }
+  if (opCode === OP_EVENT) {
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_EVENT,
+      "event",
+      {
+        senderId: message.sender.userId,
+        reliable: input.reliable !== false,
+        payload: input.payload,
+      },
+      null,
+      null,
+      input.reliable !== false,
+    );
+    return;
+  }
+  if (opCode === OP_HOST_STATE) {
+    if (message.sender.userId !== state.hostId) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_HOST_STATE,
+        message.sender,
+        "HOST_REQUIRED",
+        "host required",
+      );
+      return;
+    }
+    if (input.expectedVersion !== state.version) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_HOST_STATE,
+        message.sender,
+        "STALE_VERSION",
+        "stale version",
+      );
+      return;
+    }
+    state.sharedState = input.state;
+    state.version += 1;
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_HOST_STATE,
+      "state",
+      { hostId: state.hostId, state: state.sharedState },
+      null,
+      null,
+      true,
+    );
+    return;
+  }
+  if (opCode === OP_SNAPSHOT) {
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_SNAPSHOT,
+      "snapshot",
+      snapshotFields(state),
+      [message.sender],
+      null,
+      true,
+    );
+    return;
+  }
+  if (opCode === OP_CHAT) {
+    if (
+      (input.channel !== "lobby" && input.channel !== "match") ||
+      typeof input.text !== "string" ||
+      !input.text.trim() ||
+      input.text.length > MAX_CHAT_BYTES
+    ) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_CHAT,
+        message.sender,
+        "INVALID_MESSAGE",
+        "invalid chat message",
+      );
+      return;
+    }
+    retryAfterMs = rateLimit(state, message.sender.userId, "chat", nowMs());
+    if (retryAfterMs) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_CHAT,
+        message.sender,
+        "RATE_LIMITED",
+        "chat rate exceeded",
+        retryAfterMs,
+      );
+      return;
+    }
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_CHAT,
+      "chat",
+      {
+        channel: input.channel,
+        messageId: nk.uuidv4(),
+        senderId: message.sender.userId,
+        text: input.text.trim(),
+        sentAt: nowMs(),
+      },
+      null,
+      message.sender,
+      true,
+    );
+    return;
+  }
+  if (opCode === OP_SCORE) {
+    try {
+      var record = writeScore(
+        nk,
+        state.projectId,
+        message.sender.userId,
+        message.sender.username,
+        input,
+      );
+      broadcastEnvelope(
+        dispatcher,
+        state,
+        OP_SCORE,
+        "leaderboard",
+        {
+          leaderboardId: input.leaderboardId,
+          records: [{
+            playerId: message.sender.userId,
+            score: record.score,
+            subscore: record.subscore,
+            rank: record.rank || 1,
+          }],
+        },
+        [message.sender],
+        null,
+        true,
+      );
+    } catch (error) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_SCORE,
+        message.sender,
+        "INVALID_MESSAGE",
+        String(error && error.message ? error.message : error).slice(0, 200),
+      );
+    }
+  }
+};
+
+var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
+  // A project suspension terminates active rooms on the next authoritative tick.
+  try {
+    requireActiveProject(nk, state.projectId);
+  } catch (error) {
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_SNAPSHOT,
+      "room_closed",
+      { reason: "suspended" },
+      null,
+      null,
+      true,
+    );
+    return null;
+  }
+
+  if (!Object.keys(state.members).length) {
+    state.emptyTicks += 1;
+    return state.emptyTicks >= state.tickRate * 10 ? null : { state: state };
+  }
+  state.emptyTicks = 0;
+  for (var index = 0; messages && index < messages.length; index += 1) {
+    processRealtimeMessage(logger, nk, dispatcher, state, messages[index]);
+  }
+  return { state: state };
+};
+
+var matchTerminate = function (ctx, logger, nk, dispatcher, tick, state, graceSeconds) {
+  if (Object.keys(state.members).length) {
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_SNAPSHOT,
+      "room_closed",
+      { reason: "shutdown" },
+      null,
+      null,
+      true,
+    );
+  }
+  return { state: state };
+};
+
+var matchSignal = function (ctx, logger, nk, dispatcher, tick, state, data) {
+  var signal = parsePayload(data);
+  try {
+    requireActiveProject(nk, state.projectId);
+  } catch (_) {
+    return {
+      state: state,
+      data: JSON.stringify({ ok: false, error: "project suspended" }),
+    };
+  }
+  if (signal.projectId !== state.projectId) {
+    return {
+      state: state,
+      data: JSON.stringify({ ok: false, error: "tenant mismatch" }),
+    };
+  }
+  if (signal.operation === "update") {
+    if (signal.actorId !== state.hostId) {
+      return {
+        state: state,
+        data: JSON.stringify({ ok: false, error: "host required" }),
+      };
+    }
+    if (signal.expectedVersion !== state.version) {
+      return {
+        state: state,
+        data: JSON.stringify({ ok: false, error: "stale version" }),
+      };
+    }
+    state.sharedState = signal.state;
+    state.version += 1;
+    dispatcher.broadcastMessage(
+      1,
+      JSON.stringify({
+        type: "state",
+        projectId: state.projectId,
+        roomKey: state.roomKey,
+        hostId: state.hostId,
+        version: state.version,
+        state: state.sharedState,
+      }),
+      null,
+      null,
+      true,
+    );
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_HOST_STATE,
+      "state",
+      { hostId: state.hostId, state: state.sharedState },
+      null,
+      null,
+      true,
+    );
+  }
+  return {
+    state: state,
+    data: JSON.stringify({
+      ok: true,
+      projectId: state.projectId,
+      roomKey: state.roomKey,
+      hostId: state.hostId,
+      version: state.version,
+      state: state.sharedState,
+      members: orderedMemberIds(state.members),
+    }),
+  };
+};
+
+var rpcLeaderboardSubmit = function (ctx, logger, nk, payload) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  var projectId = tenantForUser(nk, ctx.userId);
+  var record = writeScore(nk, projectId, ctx.userId, ctx.username, input);
+  return JSON.stringify({
+    ok: true,
+    code: "OK",
+    leaderboardId: input.leaderboardId,
+    record: {
+      playerId: ctx.userId,
+      score: record.score,
+      subscore: record.subscore,
+      rank: record.rank || 1,
+    },
+  });
+};
+
+var rpcLeaderboardList = function (ctx, logger, nk, payload) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  if (!validLeaderboardId(input.leaderboardId)) {
+    throw codedError("INVALID_MESSAGE", "invalid leaderboardId");
+  }
+  var limit = input.limit === undefined ? 20 : input.limit;
+  if (!integerInRange(limit, 1, 100)) {
+    throw codedError("INVALID_MESSAGE", "limit must be between 1 and 100");
+  }
+  var projectId = tenantForUser(nk, ctx.userId);
+  var result = nk.leaderboardRecordsList(
+    leaderboardName(nk, projectId, input.leaderboardId),
+    [],
+    limit,
+    input.cursor || null,
+  );
+  var records = (result.records || []).map(function (record) {
+    return {
+      playerId: record.ownerId,
+      score: record.score,
+      subscore: record.subscore,
+      rank: record.rank,
+    };
+  });
+  return JSON.stringify({
+    ok: true,
+    code: "OK",
+    leaderboardId: input.leaderboardId,
+    records: records,
+    nextCursor: result.nextCursor || undefined,
+  });
+};
+
+var InitModule = function (ctx, logger, nk, initializer) {
+  initializer.registerRpc("loki_provision_tenant", rpcProvisionTenant);
+  initializer.registerRpc("loki_tenant", rpcTenant);
+  initializer.registerRpc("loki_create_room", rpcCreateRoom);
+  initializer.registerRpc("loki_resolve_invite", rpcResolveInvite);
+  initializer.registerRpc("loki_room_snapshot", rpcRoomSnapshot);
+  initializer.registerRpc("loki_room_update", rpcRoomUpdate);
+  initializer.registerRpc("loki_leaderboard_submit", rpcLeaderboardSubmit);
+  initializer.registerRpc("loki_leaderboard_list", rpcLeaderboardList);
+  initializer.registerRtBefore("MatchmakerAdd", beforeMatchmakerAdd);
+  initializer.registerMatchmakerMatched(matchmakerMatched);
+  initializer.registerMatch(MATCH_NAME, {
+    matchInit: matchInit,
+    matchJoinAttempt: matchJoinAttempt,
+    matchJoin: matchJoin,
+    matchLeave: matchLeave,
+    matchLoop: matchLoop,
+    matchTerminate: matchTerminate,
+    matchSignal: matchSignal,
+  });
+  logger.info("Loki protocol-v1 authoritative runtime loaded");
+};

@@ -1,0 +1,12 @@
+name: lokiplay-nakama
+logger:
+  level: INFO
+  format: json
+session:
+  token_expiry_sec: 3600
+socket:
+  max_message_size_bytes: 4096
+  max_request_size_bytes: 8192
+runtime:
+  js_entrypoint: loki.js
+  path: /nakama/data/modules

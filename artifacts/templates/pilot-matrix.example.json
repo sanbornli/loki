@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-07T00:00:00.000Z",
+  "release": "vX.Y.Z",
+  "environment": "production",
+  "pilots": [
+    {
+      "category": "browser",
+      "game": "replace-with-game-and-version",
+      "platform": "replace-with-browser-and-os",
+      "startedAt": "2026-09-07T00:00:00.000Z",
+      "completedAt": "2026-09-07T00:10:00.000Z",
+      "players": 16,
+      "rooms": 1,
+      "result": "pass",
+      "tester": "replace-with-person-or-team",
+      "evidenceReferences": ["replace-with-log-or-recording-reference"],
+      "observations": "replace-with-measured behavior"
+    }
+  ],
+  "_requiredCategories": [
+    "browser",
+    "swift",
+    "android",
+    "unity-native",
+    "unity-webgl",
+    "casual-realtime",
+    "team"
+  ],
+  "_conditionalCategory": "turn-based is required only if retained in Phase 1"
+}
