@@ -906,6 +906,13 @@ export function createApiHandler(dependencies: ApiDependencies) {
       }
       if (request.method === "POST" && credentialMatch) {
         const actorId = await dependencies.authenticateCreator(request);
+        await dependencies.safety?.meter(
+          "project",
+          credentialMatch[1]!,
+          "deployment_credentials",
+          1,
+          30 * 24 * 60 * 60,
+        );
         json(
           response,
           201,

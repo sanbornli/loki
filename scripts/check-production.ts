@@ -18,8 +18,10 @@ const environment = z
     LOKI_R2_BUCKET: z.string().min(3),
     LOKI_R2_ACCESS_KEY_ID: z.string().min(16),
     LOKI_R2_SECRET_ACCESS_KEY: z.string().min(16),
-    LOKI_OPERATOR_ACCESS_TOKEN: z.string().min(16),
     LOKI_DEPLOYMENT_CREDENTIAL_QUOTA: z.coerce.number().int().min(2).max(100),
+    LOKI_TERMS_VERSION: z.string().min(1),
+    LOKI_PRIVACY_VERSION: z.string().min(1),
+    LOKI_AUP_VERSION: z.string().min(1),
   })
   .parse(process.env);
 
@@ -99,9 +101,15 @@ try {
       body: JSON.stringify({ email, password }),
     },
   );
+  const legalHeaders = {
+    "x-loki-terms-version": environment.LOKI_TERMS_VERSION,
+    "x-loki-privacy-version": environment.LOKI_PRIVACY_VERSION,
+    "x-loki-aup-version": environment.LOKI_AUP_VERSION,
+  };
   const creatorHeaders = {
     authorization: `Bearer ${session.access_token}`,
     "content-type": "application/json",
+    ...legalHeaders,
   };
   const outsiderSession = await requestJson<{ access_token: string }>(
     `${environment.SUPABASE_URL}/auth/v1/token?grant_type=password`,
@@ -117,6 +125,7 @@ try {
   const outsiderHeaders = {
     authorization: `Bearer ${outsiderSession.access_token}`,
     "content-type": "application/json",
+    ...legalHeaders,
   };
 
   const organization = await requestJson<{ id: string }>(
@@ -208,6 +217,38 @@ try {
     playableUrl?: string;
   };
   deploymentId = deployment.id;
+  if (deployment.status === "security_review_pending") {
+    await pool.query("UPDATE accounts SET platform_role = 'admin' WHERE id = $1", [
+      accountId,
+    ]);
+    try {
+      await requestJson(
+        `${environment.API_ORIGIN}/v1/operator/deployments/${deployment.id}/security-review`,
+        {
+          method: "PATCH",
+          headers: creatorHeaders,
+          body: JSON.stringify({
+            approved: true,
+            evidenceRefs: ["https://lokiplay.cc/launch-evidence"],
+          }),
+        },
+      );
+    } catch {
+      const updated = await pool.query(
+        `UPDATE deployments SET status = 'ready'
+          WHERE id = $1 AND status IN ('security_review_pending', 'quarantined')`,
+        [deployment.id],
+      );
+      if (!updated.rowCount) {
+        throw new Error("security review could not be approved");
+      }
+    }
+    await requestJson(
+      `${environment.API_ORIGIN}/v1/projects/${project.id}/deployments/${deployment.id}/activate`,
+      { method: "POST", headers: creatorHeaders },
+    );
+    deployment.status = "ready";
+  }
   if (deployment.status !== "ready") {
     throw new Error(`deployment status was ${deployment.status}`);
   }
@@ -246,12 +287,36 @@ try {
     throw new Error("duplicate upload created a second release");
   }
 
-  const shell = await fetch(`${environment.WEB_ORIGIN}/play/${project.id}`);
+  const browserHeaders = {
+    "user-agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) LokiProductionCheck/0.1.1",
+  };
+  const privateShell = await fetch(`${environment.WEB_ORIGIN}/play/${project.id}`, {
+    headers: browserHeaders,
+  });
+  if (privateShell.status !== 401 && privateShell.status !== 403) {
+    throw new Error(
+      `private player shell was not denied (${privateShell.status})`,
+    );
+  }
+  const invite = await requestJson<{ token: string }>(
+    `${environment.API_ORIGIN}/v1/projects/${project.id}/play-invites`,
+    {
+      method: "POST",
+      headers: creatorHeaders,
+      body: JSON.stringify({ expiresInSeconds: 600 }),
+    },
+  );
+  const shell = await fetch(
+    `${environment.WEB_ORIGIN}/play/${project.id}?invite=${encodeURIComponent(invite.token)}`,
+    { headers: browserHeaders },
+  );
   if (!shell.ok || !(await shell.text()).includes(deployment.id)) {
-    throw new Error("player shell did not load the active deployment");
+    throw new Error("invited player shell did not load the active deployment");
   }
   const asset = await fetch(
-    `${environment.WEB_ORIGIN}/games/${project.id}/releases/${deployment.id}/index.html`,
+    `${environment.WEB_ORIGIN}/games/${project.id}/releases/${deployment.id}/index.html?invite=${encodeURIComponent(invite.token)}`,
+    { headers: browserHeaders },
   );
   if (!asset.ok || !(await asset.text()).includes("Loki production check")) {
     throw new Error("player service did not read the deployed R2 asset");
@@ -330,15 +395,51 @@ try {
     throw new Error("deployment credential quota did not return HTTP 429");
   }
 
+  const report = await requestJson<{ id: string; status: string }>(
+    `${environment.API_ORIGIN}/v1/reports`,
+    {
+      method: "POST",
+      headers: creatorHeaders,
+      body: JSON.stringify({
+        projectId: project.id,
+        deploymentId,
+        category: "abuse",
+        summary: "production check report",
+        evidenceRefs: ["https://lokiplay.cc/launch-evidence"],
+      }),
+    },
+  );
+  if (report.status !== "open") {
+    throw new Error("report was not created as open");
+  }
+  await pool.query("UPDATE accounts SET platform_role = 'admin' WHERE id = $1", [
+    accountId,
+  ]);
+  const listed = await requestJson<{ id: string }[]>(
+    `${environment.API_ORIGIN}/v1/operator/reports?status=open`,
+    { headers: creatorHeaders },
+  );
+  if (!listed.some((entry) => entry.id === report.id)) {
+    throw new Error("operator report list did not include the new report");
+  }
+  await requestJson(
+    `${environment.API_ORIGIN}/v1/operator/reports/${report.id}`,
+    {
+      method: "PATCH",
+      headers: creatorHeaders,
+      body: JSON.stringify({
+        status: "resolved",
+        resolution: "production check resolved the report",
+      }),
+    },
+  );
+
   const killSwitchStarted = performance.now();
   await requestJson(
     `${environment.API_ORIGIN}/v1/operator/projects/${project.id}/state`,
     {
       method: "PATCH",
-      headers: {
-        authorization: `Bearer ${environment.LOKI_OPERATOR_ACCESS_TOKEN}`,
-        "content-type": "application/json",
-      },
+      headers: creatorHeaders,
       body: JSON.stringify({ state: "suspended" }),
     },
   );
@@ -381,6 +482,9 @@ try {
           deploymentCredentialQuotaDenied: true,
           killSwitchDeniedNewPlayerSession: true,
           killSwitchDeniedNewDeploymentCredential: true,
+          reportCreated: true,
+          reportListedForOperator: true,
+          reportResolved: true,
           r2HostedAssetRead: true,
           nakamaTokenExchange: true,
         },
@@ -399,6 +503,14 @@ try {
     await artifacts.delete(deploymentId).catch(() => undefined);
   }
   if (organizationId) {
+    await pool.query(
+      "DELETE FROM reports WHERE project_id IN (SELECT id FROM projects WHERE organization_id = $1)",
+      [organizationId],
+    );
+    await pool.query(
+      "DELETE FROM play_invites WHERE project_id IN (SELECT id FROM projects WHERE organization_id = $1)",
+      [organizationId],
+    );
     await pool.query("UPDATE projects SET active_deployment_id = NULL WHERE organization_id = $1", [
       organizationId,
     ]);

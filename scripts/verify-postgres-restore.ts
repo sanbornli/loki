@@ -51,12 +51,14 @@ try {
     SELECT
       (SELECT count(*)::text FROM information_schema.tables
         WHERE table_schema = 'public') AS table_count,
-      (SELECT count(*)::text FROM schema_migrations) AS migration_count
+      (SELECT count(*)::text FROM loki_internal.schema_migrations) AS migration_count
   `);
   await run("pg_dump", [
     "--format=custom",
     "--no-owner",
     "--no-privileges",
+    "--schema=public",
+    "--schema=loki_internal",
     "--file",
     dumpPath,
     sourceUrl,
@@ -77,7 +79,7 @@ try {
     SELECT
       (SELECT count(*)::text FROM information_schema.tables
         WHERE table_schema = 'public') AS table_count,
-      (SELECT count(*)::text FROM schema_migrations) AS migration_count
+      (SELECT count(*)::text FROM loki_internal.schema_migrations) AS migration_count
   `);
   if (
     JSON.stringify(sourceFingerprint.rows[0]) !==
