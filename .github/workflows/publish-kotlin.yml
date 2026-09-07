@@ -1,0 +1,69 @@
+name: Publish Kotlin
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to publish
+        required: true
+        default: v0.1.1
+
+permissions:
+  contents: read
+
+jobs:
+  publish-kotlin:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Test and publish signed Maven package
+        env:
+          MAVEN_REPOSITORY_URL: ${{ secrets.MAVEN_REPOSITORY_URL }}
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+          MAVEN_SIGNING_KEY: ${{ secrets.MAVEN_SIGNING_KEY }}
+          MAVEN_SIGNING_PASSWORD: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+        run: gradle --project-dir clients/kotlin test publish
+      - name: Upload staging repository to Central Portal
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+        run: |
+          token="$(printf '%s:%s' "$MAVEN_USERNAME" "$MAVEN_PASSWORD" | base64 | tr -d '\n')"
+          auth_header="Authorization: Bearer ${token}"
+          body="$(curl -sS -X POST \
+            -H "$auth_header" \
+            -H "Content-Type: application/json" \
+            -w '\nHTTP %{http_code}\n' \
+            "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/cc.lokiplay?publishing_type=automatic")"
+          echo "$body"
+          if echo "$body" | grep -q 'HTTP 20'; then
+            exit 0
+          fi
+          repos="$(curl -sS -H "$auth_header" \
+            'https://ossrh-staging-api.central.sonatype.com/manual/search/repositories?ip=any&profile_id=cc.lokiplay')"
+          echo "$repos"
+          key="$(printf '%s' "$repos" | node -e '
+            let raw = "";
+            process.stdin.on("data", (chunk) => { raw += chunk; });
+            process.stdin.on("end", () => {
+              const data = JSON.parse(raw);
+              const repo = (data.repositories || []).find((item) => item.state === "open" || item.state === "closed");
+              if (!repo) process.exit(2);
+              process.stdout.write(repo.key);
+            });
+          ')"
+          curl -fsS -X POST \
+            -H "$auth_header" \
+            -H "Content-Type: application/json" \
+            "https://ossrh-staging-api.central.sonatype.com/manual/upload/repository/${key}?publishing_type=automatic"
