@@ -44,13 +44,13 @@ namespace Loki.Play.SDK.Tests
         }
 
         [Test]
-        public async Task RequestsAndReplaysEnvelope()
+        public void RequestsAndReplaysEnvelope()
         {
             var transport = new RecordingTransport();
             var client = new LokiClient(transport);
-            var session = await client.AuthenticateAsync("guest");
+            var session = client.AuthenticateAsync("guest").GetAwaiter().GetResult();
             Assert.AreEqual("p1", session.PlayerId);
-            await client.JoinRoomAsync("room-1");
+            client.JoinRoomAsync("room-1").GetAwaiter().GetResult();
 
             long? snapshotSequence = null;
             string migratedHost = null;

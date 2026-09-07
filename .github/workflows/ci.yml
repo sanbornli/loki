@@ -111,6 +111,9 @@ jobs:
   unity-editmode:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: game-ci/unity-test-runner@v4
