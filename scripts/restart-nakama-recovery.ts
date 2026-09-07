@@ -14,11 +14,24 @@ createServer((request, response) => {
     response.writeHead(401).end();
     return;
   }
-  const child = spawn("railway", ["restart", "--service", "nakama", "--yes"], {
-    stdio: "inherit",
-  });
-  child.once("exit", (code) => {
+  const child = spawn(
+    "railway",
+    ["restart", "--service", "nakama", "--yes", "--json"],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let settled = false;
+  const finish = (code: number | null) => {
+    if (settled) return;
+    settled = true;
     response.writeHead(code === 0 ? 200 : 500).end(code === 0 ? "ok" : "failed");
+  };
+  const timer = setTimeout(() => {
+    child.kill("SIGTERM");
+    finish(1);
+  }, 60_000);
+  child.once("exit", (code) => {
+    clearTimeout(timer);
+    finish(code);
   });
 }).listen(port, "127.0.0.1", () => {
   console.log(`http://127.0.0.1:${port}/restart-nakama`);
