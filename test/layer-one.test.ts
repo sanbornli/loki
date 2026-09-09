@@ -274,10 +274,11 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.1\.2"/);
+  assert.match(creator, /"0\.2\.0"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
+  assert.match(creator, /createSynchronizedRoom\(\)/);
   assert.match(creator, /Package installation and creator authentication are separate/);
   assert.match(creator, /Needs an operator; approval will activate it automatically/);
   assert.match(creator, /Passed and publicly playable/);

@@ -24,6 +24,14 @@ interface TestUser {
   session: Session;
   socket: Socket;
   projectId: string;
+  inbound: string[];
+  waiters: Array<{
+    matchId: string;
+    opCode: number;
+    predicate: (message: ProtocolEnvelope) => boolean;
+    resolve: (message: ProtocolEnvelope) => void;
+    seen: string[];
+  }>;
 }
 
 const payload = <T>(response: { payload?: object }): T => response.payload as T;
@@ -96,8 +104,16 @@ async function createUser(
     concurrentRoomQuota: 20,
   });
   const socket = client.createSocket(SSL, false);
+  const user: TestUser = {
+    session,
+    socket,
+    projectId,
+    waiters: [],
+    inbound: [],
+  };
   await socket.connect(session, true);
-  return { session, socket, projectId };
+  attachMatchHandler(user);
+  return user;
 }
 
 async function rpc<T>(
@@ -126,6 +142,38 @@ interface ProtocolEnvelope {
   [key: string]: unknown;
 }
 
+function sameMatch(left: string, right: string): boolean {
+  return (
+    left === right || left.startsWith(`${right}.`) || right.startsWith(`${left}.`)
+  );
+}
+
+function attachMatchHandler(user: TestUser): void {
+  user.socket.onmatchdata = (message) => {
+    try {
+      const decoded = JSON.parse(
+        new TextDecoder().decode(message.data),
+      ) as ProtocolEnvelope;
+      const note = `${message.match_id}/${message.op_code}/${decoded.type}/${String(decoded.actionId ?? "")}/${String(decoded.senderId ?? "")}/${String(decoded.code ?? "")}/${String(decoded.message ?? "")}`;
+      user.inbound.push(note);
+      for (const waiter of [...user.waiters]) {
+        waiter.seen.push(note);
+        if (
+          !sameMatch(message.match_id, waiter.matchId) ||
+          message.op_code !== waiter.opCode
+        ) {
+          continue;
+        }
+        if (!waiter.predicate(decoded)) continue;
+        user.waiters.splice(user.waiters.indexOf(waiter), 1);
+        waiter.resolve(decoded);
+      }
+    } catch (error) {
+      user.inbound.push(`decode-error:${message.op_code}:${String(error)}`);
+    }
+  };
+}
+
 function nextMatchData(
   user: TestUser,
   matchId: string,
@@ -133,28 +181,26 @@ function nextMatchData(
   predicate: (message: ProtocolEnvelope) => boolean = () => true,
 ): Promise<ProtocolEnvelope> {
   return new Promise((resolve, reject) => {
-    const seen: string[] = [];
+    const waiter = {
+      matchId,
+      opCode,
+      predicate,
+      resolve: (message: ProtocolEnvelope) => {
+        clearTimeout(timer);
+        resolve(message);
+      },
+      seen: [] as string[],
+    };
     const timer = setTimeout(
       () =>
         reject(
           new Error(
-            `match data opcode ${opCode} timed out; saw ${seen.join(", ") || "nothing"}`,
+            `match data opcode ${opCode} timed out; waiter saw ${waiter.seen.join(", ") || "nothing"}; inbound ${user.inbound.slice(-12).join(" | ") || "nothing"}`,
           ),
         ),
-      5_000,
+      8_000,
     );
-    user.socket.onmatchdata = (message) => {
-      const decoded = JSON.parse(
-        new TextDecoder().decode(message.data),
-      ) as ProtocolEnvelope;
-      seen.push(
-        `${message.match_id}/${message.op_code}/${decoded.type}/${String(decoded.code ?? "")}/${String(decoded.message ?? "")}`,
-      );
-      if (message.match_id !== matchId || message.op_code !== opCode) return;
-      if (!predicate(decoded)) return;
-      clearTimeout(timer);
-      resolve(decoded);
-    };
+    user.waiters.push(waiter);
   });
 }
 
@@ -343,39 +389,40 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   assert.equal(initial.version, 0);
   assert.equal(initial.members.length, 8);
 
-  const broadcastPromise = new Promise<{ type: string; version: number }>(
-    (resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("state broadcast timed out")), 5_000);
-      a2.socket.onmatchdata = (message) => {
-        if (message.match_id === roomA.matchId && message.op_code === 1) {
-          clearTimeout(timer);
-          resolve(
-            JSON.parse(new TextDecoder().decode(message.data)) as {
-              type: string;
-              version: number;
-            },
-          );
-        }
-      };
-    },
+  const broadcastPromise = nextMatchData(
+    a2,
+    roomA.matchId,
+    1,
+    (message) => message.type === "state",
   );
-  const updated = await rpc<{ ok: boolean; version: number; state: unknown }>(
+  const updated = await rpc<{
+    ok: boolean;
+    projectId: string;
+    roomKey: string;
+    hostId: string;
+    version: number;
+    stateVersion: number;
+    state: unknown;
+    members: string[];
+    capabilities?: { synchronized_rooms?: boolean; limits?: { maxMessageBytes?: number } };
+  }>(
     a1,
     "loki_room_update",
     { matchId: roomA.matchId, expectedVersion: 0, state: { tick: 1 } },
   );
-  assert.deepEqual(updated, {
-    ok: true,
-    projectId: "game-a",
-    roomKey: roomA.roomKey,
-    hostId: a1.session.user_id,
-    version: 1,
-    state: { tick: 1 },
-    members: initial.members,
-  });
+  assert.equal(updated.ok, true);
+  assert.equal(updated.projectId, "game-a");
+  assert.equal(updated.roomKey, roomA.roomKey);
+  assert.equal(updated.hostId, a1.session.user_id);
+  assert.equal(updated.version, 1);
+  assert.equal(updated.stateVersion, 1);
+  assert.deepEqual(updated.state, { tick: 1 });
+  assert.deepEqual(updated.members, initial.members);
+  assert.equal(updated.capabilities?.synchronized_rooms, true);
+  assert.equal(updated.capabilities?.limits?.maxMessageBytes, 16384);
   const broadcast = await broadcastPromise;
   assert.equal(broadcast.type, "state");
-  assert.equal(broadcast.version, 1);
+  assert.equal(broadcast.version ?? broadcast.stateVersion, 1);
 
   const stale = await rpc<{ ok: boolean; error: string }>(
     a1,
@@ -590,6 +637,7 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   a3.socket.disconnect(false);
   a3.socket = client.createSocket(SSL, false);
   await a3.socket.connect(a3.session, true);
+  attachMatchHandler(a3);
   const reconnectMessage = nextMatchData(
     a3,
     roomA.matchId,
@@ -734,4 +782,335 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
       2,
     )}\n`,
   );
+});
+
+test("synchronized room fields keep state version independent of presence", async (t) => {
+  await waitForNakama();
+  const runId = crypto.randomUUID();
+  const projectId = `sync-${runId.slice(0, 8)}`;
+  const host = await createUser("sync-host", projectId, runId);
+  const member = await createUser("sync-member", projectId, runId);
+  t.after(async () => {
+    await host.socket.disconnect(false);
+    await member.socket.disconnect(false);
+  });
+  const created = await rpc<{ matchId: string; inviteCode: string }>(
+    host,
+    "loki_create_room",
+    { projectId },
+  );
+  await host.socket.joinMatch(created.matchId);
+  const joined = await rpc<{ matchId: string }>(member, "loki_join_room", {
+    inviteCode: created.inviteCode,
+  });
+  await member.socket.joinMatch(joined.matchId);
+
+  const committed = nextMatchData(
+    member,
+    created.matchId,
+    12,
+    (message) =>
+      message.type === "state" && message.actionId === "syncaction01",
+  );
+  await sendEnvelope(host, created.matchId, 12, 1, {
+    type: "host_state",
+    expectedVersion: 0,
+    expectedStateVersion: 0,
+    actionId: "syncaction01",
+    senderId: host.session.user_id,
+    state: { n: 1 },
+  });
+  const state = await committed;
+  assert.equal(state.stateVersion, 1);
+  assert.deepEqual(state.state, { n: 1 });
+
+  const snapshot = await rpc<{ version: number; stateVersion?: number }>(
+    host,
+    "loki_room_snapshot",
+    { matchId: created.matchId },
+  );
+  assert.equal(snapshot.stateVersion ?? snapshot.version, 1);
+
+  const duplicate = nextMatchData(
+    host,
+    created.matchId,
+    12,
+    (message) =>
+      message.type === "state" &&
+      message.actionId === "syncaction01" &&
+      message.senderId === host.session.user_id,
+  );
+  await sendEnvelope(host, created.matchId, 12, 2, {
+    type: "host_state",
+    expectedVersion: 1,
+    expectedStateVersion: 1,
+    actionId: "syncaction01",
+    senderId: host.session.user_id,
+    state: { n: 1 },
+  });
+  const acknowledged = await duplicate;
+  assert.equal(acknowledged.stateVersion, 1);
+  assert.deepEqual(acknowledged.state, { n: 1 });
+  assert.equal(acknowledged.senderId, host.session.user_id);
+
+  const conflict = nextMatchData(
+    host,
+    created.matchId,
+    12,
+    (message) => message.type === "error" && message.actionId === "syncaction02",
+  );
+  await sendEnvelope(host, created.matchId, 12, 3, {
+    type: "host_state",
+    expectedVersion: 0,
+    expectedStateVersion: 0,
+    actionId: "syncaction02",
+    senderId: host.session.user_id,
+    state: { n: 9 },
+  });
+  assert.equal((await conflict).code, "STALE_VERSION");
+
+  const delivered = nextMatchData(
+    host,
+    created.matchId,
+    10,
+    (message) => message.type === "action" && message.actionId === "syncaction03",
+  );
+  await sendEnvelope(member, created.matchId, 10, 2, {
+    type: "action",
+    actionId: "syncaction03",
+    payload: { n: -1 },
+  });
+  assert.equal((await delivered).senderId, member.session.user_id);
+
+  const rejected = nextMatchData(
+    member,
+    created.matchId,
+    10,
+    (message) => message.type === "error" && message.actionId === "syncaction03",
+  );
+  await sendEnvelope(host, created.matchId, 16, 4, {
+    type: "action_reject",
+    actionId: "syncaction03",
+    senderId: member.session.user_id,
+    outcome: "rejected",
+    message: "action rejected",
+  });
+  const rejection = await rejected;
+  assert.equal(rejection.actionOutcome, "rejected");
+  assert.equal(rejection.message, "action rejected");
+
+  const malformed = nextMatchData(
+    host,
+    created.matchId,
+    16,
+    (message) => message.type === "error" && message.code === "INVALID_MESSAGE",
+  );
+  await sendEnvelope(host, created.matchId, 16, 5, {
+    type: "action_reject",
+    actionId: "bad",
+    outcome: "nope",
+    message: "",
+  });
+  const invalid = await malformed;
+  assert.equal(invalid.code, "INVALID_MESSAGE");
+  ServerEnvelopeSchema.parse(invalid);
+});
+
+test("sender-scoped actions isolate collisions and require host identity", async (t) => {
+  await waitForNakama();
+  const runId = crypto.randomUUID();
+  const projectId = `scope-${runId.slice(0, 8)}`;
+  const host = await createUser("scope-host", projectId, runId);
+  const left = await createUser("scope-left", projectId, runId);
+  const right = await createUser("scope-right", projectId, runId);
+  t.after(async () => {
+    await host.socket.disconnect(false);
+    await left.socket.disconnect(false);
+    await right.socket.disconnect(false);
+  });
+  const created = await rpc<{ matchId: string; inviteCode: string }>(
+    host,
+    "loki_create_room",
+    { projectId },
+  );
+  const hostJoined = nextMatchData(
+    host,
+    created.matchId,
+    13,
+    (message) => message.type === "snapshot",
+  );
+  await host.socket.joinMatch(created.matchId);
+  await hostJoined;
+  await rpc(left, "loki_join_room", { inviteCode: created.inviteCode });
+  const leftJoined = nextMatchData(
+    left,
+    created.matchId,
+    13,
+    (message) => message.type === "snapshot",
+  );
+  await left.socket.joinMatch(created.matchId);
+  await leftJoined;
+  await rpc(right, "loki_join_room", { inviteCode: created.inviteCode });
+  const rightJoined = nextMatchData(
+    right,
+    created.matchId,
+    13,
+    (message) => message.type === "snapshot",
+  );
+  await right.socket.joinMatch(created.matchId);
+  await rightJoined;
+  const liveMembers = await rpc<{ hostId: string; members: string[] }>(
+    host,
+    "loki_room_snapshot",
+    { matchId: created.matchId },
+  );
+  assert.equal(liveMembers.hostId, host.session.user_id);
+  assert.equal(liveMembers.members.length, 3);
+
+  const leftDelivered = nextMatchData(
+    host,
+    created.matchId,
+    10,
+    (message) =>
+      message.type === "action" &&
+      message.actionId === "sharedact01" &&
+      message.senderId === left.session.user_id,
+  );
+  await sendEnvelope(left, created.matchId, 10, 1, {
+    type: "action",
+    actionId: "sharedact01",
+    payload: { n: 1 },
+  });
+  assert.equal((await leftDelivered).senderId, left.session.user_id);
+  const rightDelivered = nextMatchData(
+    host,
+    created.matchId,
+    10,
+    (message) =>
+      message.type === "action" &&
+      message.actionId === "sharedact01" &&
+      message.senderId === right.session.user_id,
+  );
+  await sendEnvelope(right, created.matchId, 10, 1, {
+    type: "action",
+    actionId: "sharedact01",
+    payload: { n: 2 },
+  });
+  assert.equal((await rightDelivered).senderId, right.session.user_id);
+
+  const leftRetry = nextMatchData(
+    left,
+    created.matchId,
+    10,
+    (message) => message.type === "error" && message.message === "duplicate action",
+  );
+  await sendEnvelope(left, created.matchId, 10, 2, {
+    type: "action",
+    actionId: "sharedact01",
+    payload: { n: 1 },
+  });
+  assert.equal((await leftRetry).message, "duplicate action");
+
+  const ambiguous = nextMatchData(
+    host,
+    created.matchId,
+    12,
+    (message) =>
+      message.type === "error" &&
+      message.code === "INVALID_MESSAGE" &&
+      String(message.message).includes("ambiguous"),
+  );
+  await sendEnvelope(host, created.matchId, 12, 2, {
+    type: "host_state",
+    expectedVersion: 0,
+    expectedStateVersion: 0,
+    actionId: "sharedact01",
+    state: { n: 9 },
+  });
+  assert.equal((await ambiguous).code, "INVALID_MESSAGE");
+
+  const committed = nextMatchData(
+    left,
+    created.matchId,
+    12,
+    (message) =>
+      message.type === "state" &&
+      message.actionId === "sharedact01" &&
+      message.senderId === left.session.user_id,
+  );
+  await sendEnvelope(host, created.matchId, 12, 3, {
+    type: "host_state",
+    expectedVersion: 0,
+    expectedStateVersion: 0,
+    actionId: "sharedact01",
+    senderId: left.session.user_id,
+    state: { n: 1 },
+  });
+  const state = await committed;
+  assert.equal(state.stateVersion, 1);
+  assert.equal(state.senderId, left.session.user_id);
+
+  const sameSender = nextMatchData(
+    left,
+    created.matchId,
+    12,
+    (message) =>
+      message.type === "state" &&
+      message.actionId === "sharedact01" &&
+      message.senderId === left.session.user_id &&
+      message.stateVersion === 1,
+  );
+  await sendEnvelope(left, created.matchId, 10, 3, {
+    type: "action",
+    actionId: "sharedact01",
+    payload: { n: 1 },
+  });
+  assert.equal((await sameSender).stateVersion, 1);
+
+  const snapshot = await rpc<{
+    ok: boolean;
+    capabilities?: { synchronized_rooms?: boolean; limits?: { maxMessageBytes?: number } };
+  }>(host, "loki_room_snapshot", { matchId: created.matchId });
+  assert.equal(snapshot.ok, true);
+  assert.equal(snapshot.capabilities?.synchronized_rooms, true);
+  assert.equal(snapshot.capabilities?.limits?.maxMessageBytes, 16384);
+
+  const inboundBeforeOversize = host.inbound.length;
+  await left.socket.sendMatchState(
+    created.matchId,
+    10,
+    JSON.stringify({
+      protocolVersion: 1,
+      roomId: created.matchId,
+      sequence: 4,
+      type: "action",
+      actionId: "oversize1",
+      payload: { blob: "x".repeat(20_000) },
+    }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  assert.equal(
+    host.inbound
+      .slice(inboundBeforeOversize)
+      .some((line) => line.includes("/10/action/oversize1")),
+    false,
+    "16 KiB socket limit must drop oversized actions before host delivery",
+  );
+
+  const capabilitySnapshot = nextMatchData(
+    right,
+    created.matchId,
+    13,
+    (message) => message.type === "snapshot",
+  );
+  await sendEnvelope(right, created.matchId, 13, 2, {
+    type: "snapshot_request",
+  });
+  const liveSnapshot = await capabilitySnapshot;
+  assert.equal(
+    (liveSnapshot.capabilities as { synchronized_rooms?: boolean } | undefined)
+      ?.synchronized_rooms,
+    true,
+  );
+  ServerEnvelopeSchema.parse(liveSnapshot);
 });

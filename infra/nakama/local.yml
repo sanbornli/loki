@@ -3,8 +3,8 @@ logger:
 session:
   token_expiry_sec: 3600
 socket:
-  max_message_size_bytes: 4096
-  max_request_size_bytes: 8192
+  max_message_size_bytes: 16384
+  max_request_size_bytes: 16384
   ping_period_ms: 5000
   pong_timeout_ms: 10000
 runtime:

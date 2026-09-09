@@ -54,6 +54,20 @@ test("protocol rejects malformed and unsupported client messages", () => {
     }).type,
     "action",
   );
+  assert.equal(
+    ClientEnvelopeSchema.parse({
+      protocolVersion: 1,
+      roomId,
+      sequence: 2,
+      type: "host_state",
+      expectedVersion: 0,
+      expectedStateVersion: 0,
+      actionId: "action001",
+      payload: { n: 1 },
+      state: { n: 1 },
+    }).type,
+    "host_state",
+  );
   assert.throws(() =>
     ClientEnvelopeSchema.parse({
       protocolVersion: 2,

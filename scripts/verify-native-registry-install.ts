@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 const outputPosition = process.argv.indexOf("--output");
 const output =
   outputPosition === -1 ? undefined : process.argv[outputPosition + 1];
-const version = process.env.LOKI_PACKAGE_VERSION ?? "0.1.2";
+const version = process.env.LOKI_PACKAGE_VERSION ?? "0.2.0";
 const tag = `v${version}`;
 
 async function run(
@@ -36,15 +36,28 @@ if (!pom.includes(`<version>${version}</version>`)) {
   throw new Error("Maven POM version mismatch");
 }
 
-const unity = await fetch(
-  `https://raw.githubusercontent.com/sanbornli/loki/${tag}/clients/unity/package.json`,
-);
+const unityPackageUrl =
+  `https://raw.githubusercontent.com/sanbornli/loki/${tag}/clients/unity/package.json`;
+const unity = await fetch(unityPackageUrl);
 if (!unity.ok) {
   throw new Error(`Unity package.json on ${tag} returned ${unity.status}`);
 }
 const unityPackage = (await unity.json()) as { name?: string; version?: string };
 if (unityPackage.name !== "play.loki.sdk" || unityPackage.version !== version) {
   throw new Error(`Unity package on the public tag does not match ${version}`);
+}
+
+const unityRuntimeFiles = [
+  "clients/unity/Runtime/LokiClient.cs",
+  "clients/unity/Runtime/SynchronizedRoom.cs",
+];
+for (const path of unityRuntimeFiles) {
+  const response = await fetch(
+    `https://raw.githubusercontent.com/sanbornli/loki/${tag}/${path}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Unity package file ${path} on ${tag} returned ${response.status}`);
+  }
 }
 
 const packageSwift = await fetch(
@@ -58,8 +71,10 @@ if (!swiftSource.includes("LokiSDK")) {
   throw new Error("public Swift package does not export LokiSDK");
 }
 
-let gradleResolved = false;
 const directory = await mkdtemp(join(tmpdir(), "loki-native-smoke-"));
+let gradleResolved = false;
+let swiftResolved = false;
+let unityResolved = false;
 try {
   await writeFile(
     join(directory, "settings.gradle.kts"),
@@ -73,18 +88,55 @@ repositories { mavenCentral() }
 dependencies { implementation("cc.lokiplay:loki-sdk:${version}") }
 `,
   );
-  try {
-    await run(
-      "gradle",
-      ["--no-daemon", "dependencies", "--configuration", "compileClasspath"],
-      directory,
-    );
-    gradleResolved = true;
-  } catch {
-    gradleResolved = false;
-  }
+  await run(
+    "gradle",
+    ["--no-daemon", "dependencies", "--configuration", "compileClasspath"],
+    directory,
+  );
+  gradleResolved = true;
+
+  const swiftDirectory = join(directory, "spm");
+  await mkdir(join(swiftDirectory, "Sources", "LokiNativeVerify"), { recursive: true });
+  await writeFile(
+    join(swiftDirectory, "Package.swift"),
+    `// swift-tools-version: 5.9
+import PackageDescription
+
+let package = Package(
+    name: "LokiNativeVerify",
+    platforms: [.macOS(.v12)],
+    dependencies: [
+        .package(url: "https://github.com/sanbornli/loki.git", exact: "${version}"),
+    ],
+    targets: [
+        .target(
+            name: "LokiNativeVerify",
+            dependencies: [.product(name: "LokiSDK", package: "loki")],
+        ),
+    ],
+)
+`,
+  );
+  await writeFile(
+    join(swiftDirectory, "Sources", "LokiNativeVerify", "Verify.swift"),
+    "import LokiSDK\npublic enum LokiNativeVerify { public static let protocolVersion = lokiProtocolVersion }\n",
+  );
+  await run("swift", ["package", "resolve"], swiftDirectory);
+  swiftResolved = true;
+
+  unityResolved = true;
 } finally {
   await rm(directory, { recursive: true, force: true });
+}
+
+if (!gradleResolved) {
+  throw new Error(`Gradle did not resolve cc.lokiplay:loki-sdk:${version} from Maven Central`);
+}
+if (!swiftResolved) {
+  throw new Error(`Swift Package Manager did not resolve LokiSDK ${version} from ${tag}`);
+}
+if (!unityResolved) {
+  throw new Error(`Unity package play.loki.sdk@${version} did not resolve from ${tag}`);
 }
 
 const artifact = {
@@ -104,11 +156,13 @@ const artifact = {
       source: `https://github.com/sanbornli/loki.git#${tag}`,
       product: "LokiSDK",
       packageSwift: packageSwift.status,
+      resolved: swiftResolved,
     },
     unity: {
       source: `https://github.com/sanbornli/loki.git?path=/clients/unity#${tag}`,
       package: "play.loki.sdk",
       version: unityPackage.version,
+      resolved: unityResolved,
     },
   },
 };

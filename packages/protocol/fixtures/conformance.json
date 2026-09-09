@@ -19,7 +19,7 @@
   "hello": {
     "protocolVersion": 1,
     "minimumProtocolVersion": 1,
-    "capabilities": ["rooms", "invites", "matchmaking", "host_migration", "reconnect", "presence", "chat", "private_leaderboards"],
+    "capabilities": ["rooms", "invites", "matchmaking", "host_migration", "reconnect", "presence", "chat", "private_leaderboards", "synchronized_rooms"],
     "limits": {
       "maxPlayersPerRoom": 16,
       "maxMessageBytes": 16384,
@@ -40,6 +40,7 @@
       "roomId": "00000000-0000-4000-8000-000000000001",
       "sequence": 1,
       "type": "action",
+      "actionId": "fixture_action_1",
       "payload": { "move": 1 }
     },
     {
@@ -48,6 +49,9 @@
       "sequence": 2,
       "type": "host_state",
       "expectedVersion": 0,
+      "expectedStateVersion": 0,
+      "actionId": "fixture_action_1",
+      "senderId": "00000000-0000-4000-8000-000000000003",
       "state": { "tick": 1 }
     },
     {
@@ -57,6 +61,16 @@
       "type": "chat",
       "channel": "match",
       "text": "ready"
+    },
+    {
+      "protocolVersion": 1,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 4,
+      "type": "action_reject",
+      "actionId": "fixture_action_2",
+      "senderId": "00000000-0000-4000-8000-000000000003",
+      "outcome": "rejected",
+      "message": "action rejected"
     }
   ],
   "serverReplay": [
@@ -66,7 +80,18 @@
       "sequence": 0,
       "type": "snapshot",
       "hostId": "00000000-0000-4000-8000-000000000002",
-      "state": { "tick": 0 }
+      "state": { "tick": 0 },
+      "stateVersion": 0,
+      "capabilities": {
+        "synchronized_rooms": true,
+        "minimumProtocolVersion": 1,
+        "limits": {
+          "maxPlayersPerRoom": 16,
+          "maxMessageBytes": 16384,
+          "maxChatBytes": 500,
+          "messagesPerSecond": 10
+        }
+      }
     },
     {
       "protocolVersion": 1,

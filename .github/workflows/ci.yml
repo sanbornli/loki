@@ -22,6 +22,11 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
+      - name: Enforce native conformance fixture equality
+        run: |
+          cmp packages/protocol/fixtures/conformance.json clients/swift/Tests/LokiSDKTests/Fixtures/conformance.json
+          cmp packages/protocol/fixtures/conformance.json clients/kotlin/src/test/resources/conformance.json
+          cmp packages/protocol/fixtures/conformance.json clients/unity/Tests/Fixtures/conformance.json
       - run: npm run check
 
   package-install-smoke:
@@ -72,6 +77,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: swift test --package-path clients/swift
       - run: swift test
 
   kotlin-client:
@@ -97,7 +103,7 @@ jobs:
       - name: Compile Unity C# client
         run: |
           mkdir -p "$RUNNER_TEMP/loki-unity"
-          cp clients/unity/Runtime/LokiClient.cs "$RUNNER_TEMP/loki-unity/"
+          cp clients/unity/Runtime/*.cs "$RUNNER_TEMP/loki-unity/"
           cat > "$RUNNER_TEMP/loki-unity/Loki.Unity.csproj" <<'EOF'
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup>

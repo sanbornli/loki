@@ -1,6 +1,6 @@
 {
   "name": "@lokiplay/mcp",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Loki resources and tool definitions for MCP integrations.",
   "license": "MIT",
   "repository": {
@@ -36,6 +36,6 @@
     "access": "public"
   },
   "dependencies": {
-    "@lokiplay/protocol": "0.1.2"
+    "@lokiplay/protocol": "0.2.0"
   }
 }

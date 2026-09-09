@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MASTER_TEST_ACCOUNT_EMAIL } from "../apps/api/src/master-account.js";
 
 export const CostMeasurementSchema = z.object({
   schemaVersion: z.literal(1),
@@ -29,7 +30,7 @@ export const pilotCategories = [
   "team",
 ] as const;
 
-export const MASTER_OPERATOR_EMAIL = "sanborn.li.hk@gmail.com";
+export const MASTER_OPERATOR_EMAIL = MASTER_TEST_ACCOUNT_EMAIL;
 
 export const OperatorSecurityReviewSchema = z
   .object({

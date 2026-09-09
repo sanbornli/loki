@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Loki.Play.SDK
@@ -127,11 +128,36 @@ namespace Loki.Play.SDK
         public Action<string, string, long> OnHostMigrated = delegate { };
     }
 
+    public sealed class JoinedRoom
+    {
+        public readonly string RoomId;
+        public readonly string InviteCode;
+        public readonly ServerEnvelope Snapshot;
+        public JoinedRoom(string roomId, string inviteCode, ServerEnvelope snapshot)
+        {
+            RoomId = roomId; InviteCode = inviteCode; Snapshot = snapshot;
+        }
+    }
+
     public sealed class LokiClient
     {
         private readonly ILokiTransport transport;
+        private readonly object gate = new object();
+        private readonly SemaphoreSlim lifecycle = new SemaphoreSlim(1, 1);
         private AuthSession session;
+        private string currentRoomId;
+        private string currentInviteCode = "";
+        private long sendSequence;
+        private int lifecycleGeneration;
+        private bool leaveFailed;
+        private bool reconnecting;
+        private int nextListenerId = 1;
+        private readonly Dictionary<int, Action<ServerEnvelope>> messageListeners = new Dictionary<int, Action<ServerEnvelope>>();
+        private readonly Dictionary<int, Action<string>> connectionListeners = new Dictionary<int, Action<string>>();
         public LokiCallbacks Callbacks { get; set; } = new LokiCallbacks();
+        public string PlayerId { get { return session == null ? null : session.PlayerId; } }
+        public string CurrentRoomId { get { return currentRoomId; } }
+        public string CurrentInviteCode { get { return currentInviteCode; } }
 
         public LokiClient(ILokiTransport transport)
         {
@@ -215,9 +241,11 @@ namespace Loki.Play.SDK
             Callbacks.OnReconnected();
         }
 
-        public Task<JsonValue> SendActionAsync(string roomId, long sequence, JsonValue payload)
+        public Task<JsonValue> SendActionAsync(string roomId, long sequence, JsonValue payload, string actionId = null)
         {
-            return SendEnvelope(roomId, sequence, "action", Fields("payload", payload));
+            var fields = Fields("payload", payload);
+            if (!string.IsNullOrEmpty(actionId)) fields["actionId"] = JsonValue.From(actionId);
+            return SendEnvelope(roomId, sequence, "action", fields);
         }
 
         public Task<JsonValue> SendEventAsync(string roomId, long sequence, JsonValue payload, bool reliable = true)
@@ -226,10 +254,26 @@ namespace Loki.Play.SDK
                 "payload", payload, "reliable", JsonValue.From(reliable)));
         }
 
-        public Task<JsonValue> PublishHostStateAsync(string roomId, long sequence, long expectedVersion, JsonValue state)
+        public Task<JsonValue> PublishHostStateAsync(
+            string roomId, long sequence, long expectedVersion, JsonValue state,
+            long? expectedStateVersion = null, string actionId = null, string senderId = null)
         {
-            return SendEnvelope(roomId, sequence, "host_state", Fields(
-                "expectedVersion", JsonValue.From(expectedVersion), "state", state));
+            var fields = Fields("expectedVersion", JsonValue.From(expectedVersion), "state", state);
+            if (expectedStateVersion.HasValue) fields["expectedStateVersion"] = JsonValue.From(expectedStateVersion.Value);
+            if (!string.IsNullOrEmpty(actionId)) fields["actionId"] = JsonValue.From(actionId);
+            if (!string.IsNullOrEmpty(senderId)) fields["senderId"] = JsonValue.From(senderId);
+            return SendEnvelope(roomId, sequence, "host_state", fields);
+        }
+
+        public Task<JsonValue> SendActionRejectAsync(
+            string roomId, long sequence, string actionId, string outcome, string message, string senderId = null)
+        {
+            var fields = Fields(
+                "actionId", JsonValue.From(actionId),
+                "outcome", JsonValue.From(outcome),
+                "message", JsonValue.From(message));
+            if (!string.IsNullOrEmpty(senderId)) fields["senderId"] = JsonValue.From(senderId);
+            return SendEnvelope(roomId, sequence, "action_reject", fields);
         }
 
         public Task<JsonValue> RequestSnapshotAsync(string roomId, long sequence)
@@ -280,6 +324,13 @@ namespace Loki.Play.SDK
                     return;
                 }
                 Callbacks.OnEnvelope(envelope);
+                List<Action<ServerEnvelope>> listeners;
+                lock (gate) { listeners = new List<Action<ServerEnvelope>>(messageListeners.Values); }
+                for (var i = 0; i < listeners.Count; i++)
+                {
+                    try { listeners[i](envelope); }
+                    catch { }
+                }
                 switch (envelope.Type)
                 {
                     case "action": Callbacks.OnAction(envelope); break;
@@ -298,6 +349,150 @@ namespace Loki.Play.SDK
                 }
             }
             catch (Exception error) { Callbacks.OnDisconnected(error); }
+        }
+
+        public int OnMessage(Action<ServerEnvelope> listener)
+        {
+            lock (gate)
+            {
+                var id = nextListenerId++;
+                messageListeners[id] = listener;
+                return id;
+            }
+        }
+
+        public void RemoveMessageListener(int id) { lock (gate) { messageListeners.Remove(id); } }
+
+        public int OnConnection(Action<string> listener)
+        {
+            lock (gate)
+            {
+                var id = nextListenerId++;
+                connectionListeners[id] = listener;
+                return id;
+            }
+        }
+
+        public void RemoveConnectionListener(int id) { lock (gate) { connectionListeners.Remove(id); } }
+
+        public void NotifyConnection(string eventName)
+        {
+            List<Action<string>> listeners;
+            lock (gate) { listeners = new List<Action<string>>(connectionListeners.Values); }
+            for (var i = 0; i < listeners.Count; i++)
+            {
+                try { listeners[i](eventName); }
+                catch { }
+            }
+        }
+
+        public Task<JoinedRoom> CreateSessionRoomAsync() { return EnterRoom("rooms.create", new Dictionary<string, JsonValue>()); }
+
+        public Task<JoinedRoom> JoinSessionRoomAsync(string inviteCode)
+        {
+            return EnterRoom("rooms.join", Fields("inviteCode", JsonValue.From(inviteCode)));
+        }
+
+        public async Task LeaveCurrentRoomAsync(string explicitRoomId = null)
+        {
+            lifecycleGeneration += 1;
+            var target = explicitRoomId ?? currentRoomId;
+            if (target == null) return;
+            try
+            {
+                await Call("rooms.leave", Fields("roomId", JsonValue.From(target)));
+                if (currentRoomId == target)
+                {
+                    currentRoomId = null;
+                    currentInviteCode = "";
+                    sendSequence = 0;
+                    leaveFailed = false;
+                }
+            }
+            catch
+            {
+                if (currentRoomId == target || currentRoomId == null)
+                {
+                    currentRoomId = target;
+                    leaveFailed = true;
+                }
+                throw;
+            }
+        }
+
+        public async Task ReconnectCurrentRoomAsync()
+        {
+            if (reconnecting) return;
+            reconnecting = true;
+            try
+            {
+                if (leaveFailed) throw new InvalidOperationException("resolve the failed leave before reconnecting");
+                if (currentRoomId == null) throw new InvalidOperationException("join a room before reconnecting");
+                await Call("rooms.reconnect", Fields("roomId", JsonValue.From(currentRoomId)));
+                await RequestSessionSnapshotAsync();
+            }
+            finally { reconnecting = false; }
+        }
+
+        public Task<JsonValue> SendSessionActionAsync(JsonValue payload, string actionId = null)
+        {
+            if (currentRoomId == null) throw new InvalidOperationException("join a room before sending actions");
+            return SendActionAsync(currentRoomId, ++sendSequence, payload, actionId);
+        }
+
+        public Task<JsonValue> PublishSessionHostStateAsync(
+            long expectedVersion, JsonValue state, long? expectedStateVersion = null, string actionId = null, string senderId = null)
+        {
+            if (currentRoomId == null) throw new InvalidOperationException("join a room before sending state");
+            return PublishHostStateAsync(currentRoomId, ++sendSequence, expectedVersion, state, expectedStateVersion, actionId, senderId);
+        }
+
+        public Task<JsonValue> SendSessionActionRejectAsync(string actionId, string outcome, string message, string senderId = null)
+        {
+            if (currentRoomId == null) throw new InvalidOperationException("join a room before rejecting actions");
+            return SendActionRejectAsync(currentRoomId, ++sendSequence, actionId, outcome, message, senderId);
+        }
+
+        public Task<JsonValue> RequestSessionSnapshotAsync()
+        {
+            if (currentRoomId == null) throw new InvalidOperationException("join a room before sending messages");
+            return RequestSnapshotAsync(currentRoomId, ++sendSequence);
+        }
+
+        public SynchronizedRoom CreateSynchronizedRoom(JsonValue initialState, Func<JsonValue, JsonValue, ActionContext, JsonValue> reduce)
+        {
+            return new SynchronizedRoom(this, initialState, reduce);
+        }
+
+        private async Task<JoinedRoom> EnterRoom(string operation, IDictionary<string, JsonValue> payload)
+        {
+            await lifecycle.WaitAsync();
+            try
+            {
+                if (leaveFailed) throw new InvalidOperationException("resolve the failed leave before joining another room");
+                var generation = ++lifecycleGeneration;
+                var fields = (await Call(operation, payload)).AsObject();
+                var roomId = fields.String("roomId");
+                var inviteCode = fields.OptionalString("inviteCode") ?? "";
+                var snapshotValue = fields.ContainsKey("snapshot") ? fields["snapshot"] as JsonValue.ObjectValue : null;
+                if (snapshotValue == null) throw new InvalidOperationException("invalid join snapshot");
+                var snapshot = new ServerEnvelope(snapshotValue);
+                if (snapshot.RoomId != roomId || snapshot.Type != "snapshot")
+                {
+                    try { await Call("rooms.leave", Fields("roomId", JsonValue.From(roomId))); } catch { }
+                    throw new InvalidOperationException("invalid join snapshot");
+                }
+                if (generation != lifecycleGeneration)
+                {
+                    try { await Call("rooms.leave", Fields("roomId", JsonValue.From(roomId))); } catch { }
+                    throw new InvalidOperationException("stale room join abandoned");
+                }
+                currentRoomId = roomId;
+                currentInviteCode = inviteCode;
+                sendSequence = 0;
+                return new JoinedRoom(roomId, inviteCode, snapshot);
+            }
+            finally { lifecycle.Release(); }
         }
 
         private Task<JsonValue> SendEnvelope(string roomId, long sequence, string type, IDictionary<string, JsonValue> fields)
@@ -498,5 +693,15 @@ namespace Loki.Play.SDK
                 throw new InvalidOperationException("Expected integer '" + key + "'");
             return ((JsonValue.NumberValue)value).Value;
         }
+
+        public static long? OptionalLong(this IReadOnlyDictionary<string, JsonValue> fields, string key)
+        {
+            JsonValue value;
+            if (!fields.TryGetValue(key, out value) || value is JsonValue.NullValue) return null;
+            var number = value as JsonValue.NumberValue;
+            if (number == null) throw new InvalidOperationException("Expected optional integer '" + key + "'");
+            return number.Value;
+        }
+
     }
 }

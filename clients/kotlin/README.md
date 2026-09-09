@@ -19,7 +19,14 @@ gradle build
 To generate a wrapper for consumers, run `gradle wrapper`. The tests parse a
 copy of the shared conformance fixture and replay a protocol-v1 envelope.
 
-Consumers use `cc.lokiplay:loki-sdk:0.1.2`.
+Consumers use the exact Maven coordinate `cc.lokiplay:loki-sdk:0.2.0`.
+
+Prefer `createSynchronizedRoom(initialState, reduce)` for shared state. The
+wrapper matches the JavaScript API: `create()`, `join(inviteCode)`,
+`dispatch(action)`, `leave()`, `reconnect()`, and `close()`. Supply opaque JSON
+state and actions plus a synchronous deterministic reducer. Action identity is
+`(senderId, actionId)`. A failed `leave()` stays in `LeaveFailed` until retry
+or `close()`.
 
 ## Publish
 

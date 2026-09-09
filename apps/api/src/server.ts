@@ -915,6 +915,7 @@ export function createApiHandler(dependencies: ApiDependencies) {
           "deployment_credentials",
           1,
           30 * 24 * 60 * 60,
+          actorId,
         );
         json(
           response,

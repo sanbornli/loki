@@ -117,6 +117,9 @@ public struct ServerEnvelope: Codable, Equatable, Sendable {
     public let code: String?
     public let message: String?
     public let retryAfterMs: Int64?
+    public let actionId: String?
+    public let actionOutcome: String?
+    public let capabilities: JSONValue?
 }
 
 public struct LokiCallbacks: Sendable {
@@ -131,7 +134,14 @@ public struct LokiCallbacks: Sendable {
     public var onSessionRefreshed: @Sendable (AuthSession) -> Void = { _ in }
     public var onReconnected: @Sendable () -> Void = {}
     public var onHostMigrated: @Sendable (String?, String, Int64) -> Void = { _, _, _ in }
+    public var onConnection: @Sendable (String) -> Void = { _ in }
     public init() {}
+}
+
+public struct JoinedRoom: Codable, Sendable {
+    public let roomId: String
+    public let inviteCode: String
+    public let snapshot: ServerEnvelope
 }
 
 public actor LokiClient {
@@ -139,6 +149,20 @@ public actor LokiClient {
     private let decoder = JSONDecoder()
     private var callbacks = LokiCallbacks()
     private var session: AuthSession?
+    private var roomId: String?
+    private var inviteCode = ""
+    private var sendSequence: Int64 = 0
+    private var messageListeners: [Int: @Sendable (ServerEnvelope) -> Void] = [:]
+    private var connectionListeners: [Int: @Sendable (String) -> Void] = [:]
+    private var nextListenerId = 1
+    private var lifecycleGeneration = 0
+    private var reconnectTask: Task<Void, Error>?
+    private var leaveFailed = false
+    private var operationTail: Task<Void, Never> = Task {}
+
+    public var playerId: String? { session?.playerId }
+    public var currentRoomId: String? { roomId }
+    public var currentInviteCode: String { inviteCode }
 
     public init(transport: LokiTransport) { self.transport = transport }
 
@@ -153,6 +177,12 @@ public actor LokiClient {
     public func disconnect() async {
         await transport.disconnect()
         callbacks.onDisconnected(nil)
+        notifyConnection("disconnected")
+    }
+
+    public func notifyConnection(_ event: String) {
+        callbacks.onConnection(event)
+        for listener in connectionListeners.values { listener(event) }
     }
 
     @discardableResult
@@ -199,14 +229,44 @@ public actor LokiClient {
         callbacks.onReconnected()
     }
 
-    public func sendAction(roomId: String, sequence: Int64, payload: JSONValue) async throws {
-        try await sendEnvelope(roomId, sequence, "action", ["payload": payload])
+    public func sendAction(roomId: String, sequence: Int64, payload: JSONValue, actionId: String? = nil) async throws {
+        var fields: [String: JSONValue] = ["payload": payload]
+        if let actionId { fields["actionId"] = .string(actionId) }
+        try await sendEnvelope(roomId, sequence, "action", fields)
     }
     public func sendEvent(roomId: String, sequence: Int64, payload: JSONValue, reliable: Bool = true) async throws {
         try await sendEnvelope(roomId, sequence, "event", ["payload": payload, "reliable": .bool(reliable)])
     }
-    public func publishHostState(roomId: String, sequence: Int64, expectedVersion: Int64, state: JSONValue) async throws {
-        try await sendEnvelope(roomId, sequence, "host_state", ["expectedVersion": .number(expectedVersion), "state": state])
+    public func publishHostState(
+        roomId: String,
+        sequence: Int64,
+        expectedVersion: Int64,
+        state: JSONValue,
+        expectedStateVersion: Int64? = nil,
+        actionId: String? = nil,
+        senderId: String? = nil
+    ) async throws {
+        var fields: [String: JSONValue] = ["expectedVersion": .number(expectedVersion), "state": state]
+        if let expectedStateVersion { fields["expectedStateVersion"] = .number(expectedStateVersion) }
+        if let actionId { fields["actionId"] = .string(actionId) }
+        if let senderId { fields["senderId"] = .string(senderId) }
+        try await sendEnvelope(roomId, sequence, "host_state", fields)
+    }
+    public func sendActionReject(
+        roomId: String,
+        sequence: Int64,
+        actionId: String,
+        outcome: String,
+        message: String,
+        senderId: String? = nil
+    ) async throws {
+        var fields: [String: JSONValue] = [
+            "actionId": .string(actionId),
+            "outcome": .string(outcome),
+            "message": .string(message),
+        ]
+        if let senderId { fields["senderId"] = .string(senderId) }
+        try await sendEnvelope(roomId, sequence, "action_reject", fields)
     }
     public func requestSnapshot(roomId: String, sequence: Int64) async throws { try await sendEnvelope(roomId, sequence, "snapshot_request") }
     public func sendChat(roomId: String, sequence: Int64, channel: String, text: String) async throws {
@@ -223,6 +283,138 @@ public actor LokiClient {
         ])
     }
 
+    public func onMessage(_ listener: @escaping @Sendable (ServerEnvelope) -> Void) -> Int {
+        let id = nextListenerId
+        nextListenerId += 1
+        messageListeners[id] = listener
+        return id
+    }
+
+    public func removeMessageListener(_ id: Int) {
+        messageListeners.removeValue(forKey: id)
+    }
+
+    public func onConnection(_ listener: @escaping @Sendable (String) -> Void) -> Int {
+        let id = nextListenerId
+        nextListenerId += 1
+        connectionListeners[id] = listener
+        return id
+    }
+
+    public func removeConnectionListener(_ id: Int) {
+        connectionListeners.removeValue(forKey: id)
+    }
+
+    public func createSessionRoom() async throws -> JoinedRoom {
+        try await serialize { try await self.enterRoom(operation: "rooms.create", payload: [:]) }
+    }
+
+    public func joinSessionRoom(inviteCode: String) async throws -> JoinedRoom {
+        try await serialize {
+            try await self.enterRoom(operation: "rooms.join", payload: ["inviteCode": .string(inviteCode)])
+        }
+    }
+
+    public func leaveCurrentRoom(_ explicitRoomId: String? = nil) async throws {
+        lifecycleGeneration += 1
+        try await serialize {
+            let target = explicitRoomId ?? self.roomId
+            guard let target else { return }
+            do {
+                try await self.callVoid("rooms.leave", ["roomId": .string(target)])
+                if self.roomId == target {
+                    self.roomId = nil
+                    self.inviteCode = ""
+                    self.sendSequence = 0
+                    self.leaveFailed = false
+                }
+            } catch {
+                if self.roomId == target || self.roomId == nil {
+                    self.roomId = target
+                    self.leaveFailed = true
+                }
+                throw error
+            }
+        }
+    }
+
+    public func reconnectCurrentRoom() async throws {
+        if let reconnectTask { return try await reconnectTask.value }
+        let task = Task {
+            try await self.serialize {
+                if self.leaveFailed { throw LokiClientError.leaveFailed }
+                guard let roomId = self.roomId else { throw LokiClientError.missingRoom }
+                try await self.callVoid("rooms.reconnect", ["roomId": .string(roomId)])
+                self.sendSequence += 1
+                try await self.requestSnapshot(roomId: roomId, sequence: self.sendSequence)
+            }
+        }
+        reconnectTask = task
+        defer { reconnectTask = nil }
+        try await task.value
+    }
+
+    public func sendSessionAction(payload: JSONValue, actionId: String? = nil) async throws {
+        guard let roomId else { throw LokiClientError.missingRoom }
+        sendSequence += 1
+        try await sendAction(roomId: roomId, sequence: sendSequence, payload: payload, actionId: actionId)
+    }
+
+    public func publishSessionHostState(
+        expectedVersion: Int64,
+        state: JSONValue,
+        expectedStateVersion: Int64? = nil,
+        actionId: String? = nil,
+        senderId: String? = nil
+    ) async throws {
+        guard let roomId else { throw LokiClientError.missingRoom }
+        sendSequence += 1
+        try await publishHostState(
+            roomId: roomId,
+            sequence: sendSequence,
+            expectedVersion: expectedVersion,
+            state: state,
+            expectedStateVersion: expectedStateVersion,
+            actionId: actionId,
+            senderId: senderId
+        )
+    }
+
+    public func sendSessionActionReject(
+        actionId: String,
+        outcome: String,
+        message: String,
+        senderId: String? = nil
+    ) async throws {
+        guard let roomId else { throw LokiClientError.missingRoom }
+        sendSequence += 1
+        try await sendActionReject(
+            roomId: roomId,
+            sequence: sendSequence,
+            actionId: actionId,
+            outcome: outcome,
+            message: message,
+            senderId: senderId
+        )
+    }
+
+    public func requestSessionSnapshot() async throws {
+        guard let roomId else { throw LokiClientError.missingRoom }
+        sendSequence += 1
+        try await requestSnapshot(roomId: roomId, sequence: sendSequence)
+    }
+
+    public func createSynchronizedRoom(
+        initialState: JSONValue,
+        reduce: @escaping @Sendable (JSONValue, JSONValue, ActionContext) throws -> JSONValue
+    ) -> SynchronizedRoom {
+        SynchronizedRoom(
+            host: self,
+            initialState: initialState,
+            reduce: reduce
+        )
+    }
+
     public func receive(_ data: Data) {
         do {
             let envelope = try decoder.decode(ServerEnvelope.self, from: data)
@@ -231,6 +423,9 @@ public actor LokiClient {
                 return
             }
             callbacks.onEnvelope(envelope)
+            for listener in messageListeners.values {
+                listener(envelope)
+            }
             switch envelope.type {
             case "action": callbacks.onAction(envelope)
             case "event": callbacks.onEvent(envelope)
@@ -245,6 +440,33 @@ public actor LokiClient {
         } catch {
             callbacks.onDisconnected(error)
         }
+    }
+
+    private func serialize<T: Sendable>(_ operation: () async throws -> T) async throws -> T {
+        let previous = operationTail
+        let current = Task<Void, Never> { await previous.value }
+        operationTail = current
+        await previous.value
+        return try await operation()
+    }
+
+    private func enterRoom(operation: String, payload: [String: JSONValue]) async throws -> JoinedRoom {
+        if leaveFailed { throw LokiClientError.leaveFailed }
+        let generation = lifecycleGeneration + 1
+        lifecycleGeneration = generation
+        let joined: JoinedRoom = try await call(operation, payload)
+        guard joined.snapshot.roomId == joined.roomId, joined.snapshot.type == "snapshot" else {
+            try? await callVoid("rooms.leave", ["roomId": .string(joined.roomId)])
+            throw LokiClientError.invalidSnapshot
+        }
+        if generation != lifecycleGeneration {
+            try? await callVoid("rooms.leave", ["roomId": .string(joined.roomId)])
+            throw LokiClientError.staleJoin
+        }
+        roomId = joined.roomId
+        inviteCode = joined.inviteCode
+        sendSequence = 0
+        return joined
     }
 
     private func sendEnvelope(_ roomId: String, _ sequence: Int64, _ type: String, _ fields: [String: JSONValue] = [:]) async throws {
@@ -269,4 +491,8 @@ public actor LokiClient {
 public enum LokiClientError: Error, Equatable {
     case missingRefreshToken
     case unsupportedProtocol(Int)
+    case missingRoom
+    case leaveFailed
+    case invalidSnapshot
+    case staleJoin
 }

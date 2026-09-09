@@ -53,8 +53,36 @@
         "reconnect",
         "presence",
         "chat",
-        "private_leaderboards"
+        "private_leaderboards",
+        "synchronized_rooms"
       ]
+    },
+    "actionId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,128}$"
+    },
+    "actionSenderId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "runtimeCapabilities": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "synchronized_rooms": { "type": "boolean" },
+        "minimumProtocolVersion": { "type": "integer", "minimum": 1 },
+        "limits": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "maxPlayersPerRoom": { "type": "integer", "minimum": 1, "maximum": 16 },
+            "maxMessageBytes": { "type": "integer", "minimum": 1 },
+            "maxChatBytes": { "type": "integer", "minimum": 1 },
+            "messagesPerSecond": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
     }
   },
   "type": "object",

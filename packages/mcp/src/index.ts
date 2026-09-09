@@ -8,6 +8,7 @@ export const lokiResources = [
     text: [
       "# Loki integration",
       "Use @lokiplay/sdk and a host-authoritative room.",
+      "Prefer createSynchronizedRoom for shared state.",
       "Production multiplayer requires a Loki-hosted build.",
       "Never include backend source, secrets, localhost URLs, or creator ad scripts.",
     ].join("\n\n"),
@@ -102,11 +103,14 @@ export async function callLokiTool(
   }
   if (name === "integration_requirements") {
     return {
-      packages: ["@lokiplay/sdk@0.1.2", "@lokiplay/ui-web@0.1.2"],
-      command: "npm install @lokiplay/sdk@0.1.2 @lokiplay/ui-web@0.1.2",
+      packages: ["@lokiplay/sdk@0.2.0", "@lokiplay/ui-web@0.2.0"],
+      command: "npm install @lokiplay/sdk@0.2.0 @lokiplay/ui-web@0.2.0",
       apiOrigin: "https://api.lokiplay.cc",
       authority: "host",
       rankedIntegrity: false,
+      synchronizedRooms: true,
+      guidance:
+        "Prefer createSynchronizedRoom for shared state. Low-level sendAction and sendHostState remain supported.",
     };
   }
   if (name === "diagnose_multiplayer") {
@@ -136,7 +140,17 @@ export async function callLokiTool(
     if (!/@lokiplay\/sdk|FirstPartyTransport|LokiClient/.test(joined)) {
       findings.push({
         code: "SDK_NOT_DETECTED",
-        message: "Install and initialize @lokiplay/sdk@0.1.2.",
+        message: "Install and initialize @lokiplay/sdk@0.2.0.",
+      });
+    }
+    if (
+      /sendHostState|sendAction/.test(joined) &&
+      !/createSynchronizedRoom/.test(joined)
+    ) {
+      findings.push({
+        code: "MANUAL_SYNCHRONIZATION",
+        message:
+          "Prefer createSynchronizedRoom so Loki owns versions, retries, and membership.",
       });
     }
     return { ok: findings.length === 0, findings };

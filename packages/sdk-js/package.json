@@ -1,6 +1,6 @@
 {
   "name": "@lokiplay/sdk",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "JavaScript client SDK for Loki multiplayer games.",
   "license": "MIT",
   "repository": {
@@ -37,6 +37,6 @@
   },
   "dependencies": {
     "@heroiclabs/nakama-js": "^2.8.0",
-    "@lokiplay/protocol": "0.1.2"
+    "@lokiplay/protocol": "0.2.0"
   }
 }

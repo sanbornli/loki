@@ -71,9 +71,25 @@ class LokiCallbacks {
     var onHostMigrated: (previousHostId: String?, hostId: String, stateVersion: Long) -> Unit = { _, _, _ -> }
 }
 
+data class JoinedRoom(val roomId: String, val inviteCode: String, val snapshot: ServerEnvelope)
+
 class LokiClient(private val transport: LokiTransport) {
     var callbacks: LokiCallbacks = LokiCallbacks()
     private var session: AuthSession? = null
+    var currentRoomId: String? = null
+        private set
+    var currentInviteCode: String = ""
+        private set
+    private var sendSequence = 0L
+    private var lifecycleGeneration = 0
+    private var leaveFailed = false
+    private var reconnecting = false
+    private val messageListeners = mutableMapOf<Int, (ServerEnvelope) -> Unit>()
+    private val connectionListeners = mutableMapOf<Int, (String) -> Unit>()
+    private var nextListenerId = 1
+    private val lock = Any()
+
+    val playerId: String? get() = session?.playerId
 
     suspend fun connect() = transport.connect(::receive)
 
@@ -160,8 +176,20 @@ class LokiClient(private val transport: LokiTransport) {
         callbacks.onReconnected()
     }
 
-    suspend fun sendAction(roomId: String, sequence: Long, payload: JsonValue) =
-        sendEnvelope(roomId, sequence, "action", mapOf("payload" to payload))
+    suspend fun sendAction(
+        roomId: String,
+        sequence: Long,
+        payload: JsonValue,
+        actionId: String? = null,
+    ) = sendEnvelope(
+        roomId,
+        sequence,
+        "action",
+        buildMap {
+            put("payload", payload)
+            if (actionId != null) put("actionId", actionId.jsonString())
+        },
+    )
 
     suspend fun sendEvent(roomId: String, sequence: Long, payload: JsonValue, reliable: Boolean = true) =
         sendEnvelope(
@@ -176,11 +204,39 @@ class LokiClient(private val transport: LokiTransport) {
         sequence: Long,
         expectedVersion: Long,
         state: JsonValue,
+        expectedStateVersion: Long? = null,
+        actionId: String? = null,
+        senderId: String? = null,
     ) = sendEnvelope(
         roomId,
         sequence,
         "host_state",
-        mapOf("expectedVersion" to expectedVersion.jsonNumber(), "state" to state),
+        buildMap {
+            put("expectedVersion", expectedVersion.jsonNumber())
+            put("state", state)
+            if (expectedStateVersion != null) put("expectedStateVersion", expectedStateVersion.jsonNumber())
+            if (actionId != null) put("actionId", actionId.jsonString())
+            if (senderId != null) put("senderId", senderId.jsonString())
+        },
+    )
+
+    suspend fun sendActionReject(
+        roomId: String,
+        sequence: Long,
+        actionId: String,
+        outcome: String,
+        message: String,
+        senderId: String? = null,
+    ) = sendEnvelope(
+        roomId,
+        sequence,
+        "action_reject",
+        buildMap {
+            put("actionId", actionId.jsonString())
+            put("outcome", outcome.jsonString())
+            put("message", message.jsonString())
+            if (senderId != null) put("senderId", senderId.jsonString())
+        },
     )
 
     suspend fun requestSnapshot(roomId: String, sequence: Long) =
@@ -243,6 +299,9 @@ class LokiClient(private val transport: LokiTransport) {
                 return
             }
             callbacks.onEnvelope(envelope)
+            synchronized(lock) { messageListeners.values.toList() }.forEach { listener ->
+                runCatching { listener(envelope) }
+            }
             when (envelope.type) {
                 "action" -> callbacks.onAction(envelope)
                 "event" -> callbacks.onEvent(envelope)
@@ -259,6 +318,125 @@ class LokiClient(private val transport: LokiTransport) {
         } catch (error: Throwable) {
             callbacks.onDisconnected(error)
         }
+    }
+
+    fun onMessage(listener: (ServerEnvelope) -> Unit): Int = synchronized(lock) {
+        val id = nextListenerId++
+        messageListeners[id] = listener
+        id
+    }
+
+    fun removeMessageListener(id: Int) { synchronized(lock) { messageListeners.remove(id) } }
+
+    fun onConnection(listener: (String) -> Unit): Int = synchronized(lock) {
+        val id = nextListenerId++
+        connectionListeners[id] = listener
+        id
+    }
+
+    fun removeConnectionListener(id: Int) { synchronized(lock) { connectionListeners.remove(id) } }
+
+    fun notifyConnection(event: String) {
+        synchronized(lock) { connectionListeners.values.toList() }.forEach { listener ->
+            runCatching { listener(event) }
+        }
+    }
+
+    suspend fun createSessionRoom(): JoinedRoom = enterRoom("rooms.create", emptyMap())
+
+    suspend fun joinSessionRoom(inviteCode: String): JoinedRoom =
+        enterRoom("rooms.join", mapOf("inviteCode" to inviteCode.jsonString()))
+
+    suspend fun leaveCurrentRoom(explicitRoomId: String? = null) {
+        lifecycleGeneration += 1
+        val target = explicitRoomId ?: currentRoomId ?: return
+        try {
+            call("rooms.leave", mapOf("roomId" to target.jsonString()))
+            if (currentRoomId == target) {
+                currentRoomId = null
+                currentInviteCode = ""
+                sendSequence = 0
+                leaveFailed = false
+            }
+        } catch (error: Throwable) {
+            if (currentRoomId == target || currentRoomId == null) {
+                currentRoomId = target
+                leaveFailed = true
+            }
+            throw error
+        }
+    }
+
+    suspend fun reconnectCurrentRoom() {
+        if (reconnecting) return
+        reconnecting = true
+        try {
+            if (leaveFailed) error("resolve the failed leave before reconnecting")
+            val roomId = currentRoomId ?: error("join a room before reconnecting")
+            call("rooms.reconnect", mapOf("roomId" to roomId.jsonString()))
+            requestSessionSnapshot()
+        } finally {
+            reconnecting = false
+        }
+    }
+
+    suspend fun sendSessionAction(payload: JsonValue, actionId: String? = null) {
+        val roomId = currentRoomId ?: error("join a room before sending actions")
+        sendAction(roomId, ++sendSequence, payload, actionId)
+    }
+
+    suspend fun publishSessionHostState(
+        expectedVersion: Long,
+        state: JsonValue,
+        expectedStateVersion: Long? = null,
+        actionId: String? = null,
+        senderId: String? = null,
+    ) {
+        val roomId = currentRoomId ?: error("join a room before sending state")
+        publishHostState(roomId, ++sendSequence, expectedVersion, state, expectedStateVersion, actionId, senderId)
+    }
+
+    suspend fun sendSessionActionReject(
+        actionId: String,
+        outcome: String,
+        message: String,
+        senderId: String? = null,
+    ) {
+        val roomId = currentRoomId ?: error("join a room before rejecting actions")
+        sendActionReject(roomId, ++sendSequence, actionId, outcome, message, senderId)
+    }
+
+    suspend fun requestSessionSnapshot() {
+        val roomId = currentRoomId ?: error("join a room before sending messages")
+        requestSnapshot(roomId, ++sendSequence)
+    }
+
+    fun createSynchronizedRoom(
+        initialState: JsonValue,
+        reduce: (JsonValue, JsonValue, ActionContext) -> JsonValue,
+    ) = SynchronizedRoom(this, initialState, reduce)
+
+    private suspend fun enterRoom(operation: String, payload: Map<String, JsonValue>): JoinedRoom {
+        if (leaveFailed) error("resolve the failed leave before joining another room")
+        val generation = ++lifecycleGeneration
+        val fields = call(operation, payload).objectMap()
+        val roomId = fields.string("roomId")
+        val inviteCode = fields.optionalString("inviteCode") ?: ""
+        val snapshot = ServerEnvelope.fromJson(
+            fields["snapshot"] as? JsonValue.ObjectValue ?: error("invalid join snapshot"),
+        )
+        if (snapshot.roomId != roomId || snapshot.type != "snapshot") {
+            runCatching { call("rooms.leave", mapOf("roomId" to roomId.jsonString())) }
+            error("invalid join snapshot")
+        }
+        if (generation != lifecycleGeneration) {
+            runCatching { call("rooms.leave", mapOf("roomId" to roomId.jsonString())) }
+            error("stale room join abandoned")
+        }
+        currentRoomId = roomId
+        currentInviteCode = inviteCode
+        sendSequence = 0
+        return JoinedRoom(roomId, inviteCode, snapshot)
     }
 
     private suspend fun sendEnvelope(

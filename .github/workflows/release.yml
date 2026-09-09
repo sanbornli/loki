@@ -1,5 +1,12 @@
 name: Release
 
+# Runtime-first 0.2.0 rollout (do not skip or reorder):
+# 1. Deploy Nakama config/runtime (infra/nakama) to the live environment.
+# 2. Pass live integration and recovery (nakama-live below).
+# 3. Publish and tag 0.2.0 packages (publish-npm, publish-kotlin).
+# 4. Wait for Maven Central, then verify public Maven/SPM/Unity installs.
+# 5. Only then create the GitHub release and final release evidence.
+
 on:
   push:
     tags:
@@ -10,7 +17,27 @@ permissions:
   id-token: write
 
 jobs:
+  nakama-live:
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require live runtime before package publish
+        run: |
+          echo "Deploy infra/nakama config and modules before tagging 0.2.0."
+          npm run nakama:up
+          npm run test:nakama
+      - if: always()
+        run: npm run nakama:down
+
   publish-npm:
+    needs: [nakama-live]
     runs-on: ubuntu-latest
     environment: release
     steps:
@@ -52,11 +79,9 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           export LOKI_REGISTRY_PACKAGE_SPECS="[\"@lokiplay/protocol@$version\",\"@lokiplay/sdk@$version\",\"@lokiplay/ui-web@$version\",\"@lokiplay/mcp@$version\",\"lokiplay@$version\"]"
           npx tsx scripts/package-install-smoke.ts --registry
-      - env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
 
   publish-kotlin:
+    needs: [nakama-live]
     runs-on: ubuntu-latest
     environment: release
     steps:
@@ -116,3 +141,47 @@ jobs:
             -H "$auth_header" \
             -H "Content-Type: application/json" \
             "https://ossrh-staging-api.central.sonatype.com/manual/upload/repository/${key}?publishing_type=automatic"
+
+  verify-native-installs:
+    needs: [publish-npm, publish-kotlin]
+    runs-on: macos-latest
+    environment: release
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Wait for Maven Central and verify public native installs
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          export LOKI_PACKAGE_VERSION="$version"
+          for attempt in $(seq 1 40); do
+            if curl -fsS "https://repo1.maven.org/maven2/cc/lokiplay/loki-sdk/${version}/loki-sdk-${version}.pom" >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 40 ]; then
+              echo "Maven Central did not publish loki-sdk ${version} in time"
+              exit 1
+            fi
+            sleep 90
+          done
+          npx tsx scripts/verify-native-registry-install.ts
+
+  github-release:
+    needs: [verify-native-installs]
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag

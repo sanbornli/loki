@@ -1,6 +1,6 @@
 {
   "name": "@lokiplay/ui-web",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Web component overlay for Loki multiplayer rooms.",
   "license": "MIT",
   "repository": {
@@ -33,6 +33,6 @@
     "access": "public"
   },
   "dependencies": {
-    "@lokiplay/sdk": "0.1.2"
+    "@lokiplay/sdk": "0.2.0"
   }
 }

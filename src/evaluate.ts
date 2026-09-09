@@ -129,6 +129,9 @@ async function main(): Promise<void> {
   for (const [client, path] of Object.entries(fixtureCopies)) {
     contractResults[client] = (await readFile(path, "utf8")) === sharedFixture;
   }
+  if (!Object.values(contractResults).every(Boolean)) {
+    throw new Error("native conformance fixtures are not byte-identical to packages/protocol/fixtures/conformance.json");
+  }
   findings.push({
     prototype: "4-cross-language-clients",
     status: Object.values(contractResults).every(Boolean) ? "pass" : "fail",

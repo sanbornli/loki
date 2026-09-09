@@ -6,6 +6,32 @@ import {
   type ServerEnvelope,
 } from "../../protocol/src/index.js";
 import { Client, Session, type Socket } from "@heroiclabs/nakama-js";
+import {
+  SynchronizedRoom,
+  type ConnectionEvent,
+  type SynchronizedRoomOptions,
+} from "./synchronized-room.js";
+
+export {
+  SYNCHRONIZED_ROOM_ACTION_TTL_MS,
+  SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
+  SYNCHRONIZED_ROOM_MAX_MESSAGE_BYTES,
+  SYNCHRONIZED_ROOM_MAX_PENDING,
+  SYNCHRONIZED_ROOM_MAX_RECENT_ACTIONS,
+  SYNCHRONIZED_ROOM_MAX_REDUCER_MS,
+  SynchronizedRoom,
+  SynchronizedRoomError,
+} from "./synchronized-room.js";
+export type {
+  ActionContext,
+  CommittedTransition,
+  ConnectionEvent,
+  ConnectionState,
+  RoomMember,
+  Schema,
+  SynchronizedRoomOutcome,
+  SynchronizedRoomSnapshot,
+} from "./synchronized-room.js";
 
 export const LOKI_API_ORIGIN = "https://api.lokiplay.cc";
 
@@ -57,6 +83,24 @@ export async function lokiErrorFromUnknown(error: unknown): Promise<Error> {
   return new Error("Loki request failed");
 }
 
+const notifyListeners = <T>(
+  listeners: Iterable<(value: T) => void>,
+  value: T,
+): void => {
+  for (const listener of listeners) {
+    try {
+      listener(value);
+    } catch {
+      // Listener exceptions must not prevent remaining subscribers from running.
+    }
+  }
+};
+
+const protocolRejectionMessage = (message: string): string => {
+  const text = message.trim() || "action rejected";
+  return text.length > 200 ? text.slice(0, 200) : text;
+};
+
 const wrapLokiCall = async <T>(operation: () => Promise<T>): Promise<T> => {
   try {
     return await operation();
@@ -90,6 +134,7 @@ export interface LokiTransport {
   reconnect?(): Promise<void>;
   refresh?(): Promise<void>;
   close(): Promise<void>;
+  subscribeConnection?(listener: (event: ConnectionEvent) => void): () => void;
 }
 
 export interface LokiClientOptions {
@@ -108,6 +153,13 @@ export class LokiClient {
   #joinBuffer: ServerEnvelope[] = [];
   #sendSequence = 0;
   #receiveSequence = 0;
+  #inviteCode = "";
+  #connectionListeners = new Set<(event: ConnectionEvent) => void>();
+  #unsubscribeConnection?: () => void;
+  #lifecycle = Promise.resolve();
+  #lifecycleGeneration = 0;
+  #reconnectPromise?: Promise<void>;
+  #leaveFailed = false;
 
   constructor(options: LokiClientOptions) {
     if (!/^[0-9a-f-]{36}$/i.test(options.projectId)) {
@@ -115,6 +167,18 @@ export class LokiClient {
     }
     this.#projectId = options.projectId;
     this.#transport = options.transport;
+  }
+
+  get playerId(): string | undefined {
+    return this.#playerId;
+  }
+
+  get roomId(): string | undefined {
+    return this.#roomId;
+  }
+
+  get inviteCode(): string {
+    return this.#inviteCode;
   }
 
   initialize(): void {
@@ -127,6 +191,38 @@ export class LokiClient {
       }
       this.#dispatch(message);
     });
+    this.#unsubscribeConnection = this.#transport.subscribeConnection?.((event) => {
+      notifyListeners(this.#connectionListeners, event);
+    });
+  }
+
+  createSynchronizedRoom<State, Action>(
+    options: SynchronizedRoomOptions<State, Action>,
+  ): SynchronizedRoom<State, Action> {
+    if (!this.#unsubscribe) this.initialize();
+    return new SynchronizedRoom(
+      {
+        playerId: () => this.#playerId,
+        sendAction: (payload, extras) => this.sendAction(payload, extras),
+        sendHostState: (expectedVersion, state, extras) =>
+          this.sendHostState(expectedVersion, state, extras),
+        sendActionRejection: (actionId, outcome, message, extras) =>
+          this.sendActionRejection(actionId, outcome, message, extras),
+        requestSnapshot: () => this.requestSnapshot(),
+        createRoom: () => this.createRoom(),
+        joinRoom: (input) => this.joinRoom(input),
+        leaveRoom: (roomId) => this.leaveRoom(roomId),
+        reconnect: () => this.reconnect(),
+        onMessage: (listener) => this.onMessage(listener),
+        onConnection: (listener) => this.onConnection(listener),
+      },
+      options,
+    );
+  }
+
+  onConnection(listener: (event: ConnectionEvent) => void): () => void {
+    this.#connectionListeners.add(listener);
+    return () => this.#connectionListeners.delete(listener);
   }
 
   async authenticate(token: string): Promise<{ playerId: string }> {
@@ -138,31 +234,55 @@ export class LokiClient {
 
   async createRoom(): Promise<JoinedRoom> {
     if (!this.#playerId) throw new Error("authenticate before creating a room");
-    return this.#enterRoom(() =>
-      this.#transport.createRoom({ projectId: this.#projectId }),
+    return this.#serialize(() =>
+      this.#enterRoom(() =>
+        this.#transport.createRoom({ projectId: this.#projectId }),
+      ),
     );
   }
 
   async joinRoom(input: { inviteCode: string }): Promise<JoinedRoom> {
     if (!this.#playerId) throw new Error("authenticate before joining a room");
-    return this.#enterRoom(() =>
-      this.#transport.joinRoom({
-        projectId: this.#projectId,
-        inviteCode: requireInviteCode(input.inviteCode),
-      }),
+    return this.#serialize(() =>
+      this.#enterRoom(() =>
+        this.#transport.joinRoom({
+          projectId: this.#projectId,
+          inviteCode: requireInviteCode(input.inviteCode),
+        }),
+      ),
     );
   }
 
+  async #serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.#lifecycle.then(operation, operation);
+    this.#lifecycle = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   async #enterRoom(join: () => Promise<JoinedRoom>): Promise<JoinedRoom> {
+    if (this.#leaveFailed) {
+      throw new Error("resolve the failed leave before joining another room");
+    }
+    const generation = ++this.#lifecycleGeneration;
     this.#joining = true;
     this.#joinBuffer = [];
+    let joinedRoomId = "";
     try {
       const joined = await join();
+      joinedRoomId = joined.roomId;
       const snapshot = ServerEnvelopeSchema.parse(joined.snapshot);
       if (snapshot.roomId !== joined.roomId || snapshot.type !== "snapshot") {
         throw new Error("invalid join snapshot");
       }
+      if (generation !== this.#lifecycleGeneration) {
+        await this.#transport.leaveRoom?.(joined.roomId).catch(() => undefined);
+        throw new Error("stale room join abandoned");
+      }
       this.#roomId = joined.roomId;
+      this.#inviteCode = joined.inviteCode;
       this.#sendSequence = 0;
       this.#receiveSequence = snapshot.sequence;
       const buffered = this.#joinBuffer;
@@ -174,6 +294,15 @@ export class LokiClient {
         inviteCode: joined.inviteCode,
         snapshot,
       };
+    } catch (error) {
+      if (joinedRoomId) {
+        await this.#transport.leaveRoom?.(joinedRoomId).catch(() => undefined);
+        if (this.#roomId === joinedRoomId) {
+          this.#roomId = undefined;
+          this.#inviteCode = "";
+        }
+      }
+      throw error;
     } finally {
       this.#joining = false;
       this.#joinBuffer = [];
@@ -186,10 +315,13 @@ export class LokiClient {
       message.sequence < this.#receiveSequence
     ) return;
     this.#receiveSequence = message.sequence;
-    for (const listener of this.#listeners) listener(message);
+    notifyListeners(this.#listeners, message);
   }
 
-  async sendAction(payload: unknown): Promise<void> {
+  async sendAction(
+    payload: unknown,
+    options?: { actionId?: string },
+  ): Promise<void> {
     if (!this.#roomId) throw new Error("join a room before sending actions");
     const message = ClientEnvelopeSchema.parse({
       protocolVersion: 1,
@@ -197,6 +329,7 @@ export class LokiClient {
       sequence: ++this.#sendSequence,
       type: "action",
       payload,
+      actionId: options?.actionId,
     });
     await this.#transport.send(message);
   }
@@ -214,7 +347,11 @@ export class LokiClient {
     await this.#transport.send(message);
   }
 
-  async sendHostState(expectedVersion: number, state: unknown): Promise<void> {
+  async sendHostState(
+    expectedVersion: number,
+    state: unknown,
+    options?: { actionId?: string; expectedStateVersion?: number; senderId?: string },
+  ): Promise<void> {
     if (!this.#roomId) throw new Error("join a room before sending state");
     const message = ClientEnvelopeSchema.parse({
       protocolVersion: 1,
@@ -222,9 +359,32 @@ export class LokiClient {
       sequence: ++this.#sendSequence,
       type: "host_state",
       expectedVersion,
+      expectedStateVersion: options?.expectedStateVersion,
+      actionId: options?.actionId,
+      senderId: options?.senderId,
       state,
     });
     await this.#transport.send(message);
+  }
+
+  async sendActionRejection(
+    actionId: string,
+    outcome: "rejected" | "invalid",
+    message: string,
+    options?: { senderId?: string },
+  ): Promise<void> {
+    if (!this.#roomId) throw new Error("join a room before rejecting actions");
+    const envelope = ClientEnvelopeSchema.parse({
+      protocolVersion: PROTOCOL_VERSION,
+      roomId: this.#roomId,
+      sequence: ++this.#sendSequence,
+      type: "action_reject",
+      actionId,
+      senderId: options?.senderId,
+      outcome,
+      message: protocolRejectionMessage(message),
+    });
+    await this.#transport.send(envelope);
   }
 
   async requestSnapshot(): Promise<void> {
@@ -260,21 +420,45 @@ export class LokiClient {
   }): Promise<JoinedRoom> {
     if (!this.#playerId) throw new Error("authenticate before matchmaking");
     if (!this.#transport.matchmake) throw new Error("matchmaking is unsupported");
-    return this.#enterRoom(() => this.#transport.matchmake!(input));
+    return this.#serialize(() => this.#enterRoom(() => this.#transport.matchmake!(input)));
   }
 
-  async leaveRoom(): Promise<void> {
-    if (!this.#roomId) return;
-    await this.#transport.leaveRoom?.(this.#roomId);
-    this.#roomId = undefined;
-    this.#sendSequence = 0;
-    this.#receiveSequence = 0;
+  async leaveRoom(roomId?: string): Promise<void> {
+    this.#lifecycleGeneration += 1;
+    return this.#serialize(async () => {
+      const target = roomId || this.#roomId;
+      if (!target) return;
+      try {
+        await this.#transport.leaveRoom?.(target);
+        if (this.#roomId === target) {
+          this.#roomId = undefined;
+          this.#inviteCode = "";
+          this.#sendSequence = 0;
+          this.#receiveSequence = 0;
+          this.#leaveFailed = false;
+        }
+      } catch (error) {
+        if (this.#roomId === target || !this.#roomId) {
+          this.#roomId = target;
+          this.#leaveFailed = true;
+        }
+        throw error;
+      }
+    });
   }
 
   async reconnect(): Promise<void> {
-    if (!this.#transport.reconnect) throw new Error("reconnect is unsupported");
-    await this.#transport.reconnect();
-    await this.requestSnapshot();
+    if (this.#reconnectPromise) return this.#reconnectPromise;
+    this.#reconnectPromise = this.#serialize(async () => {
+      if (!this.#transport.reconnect) throw new Error("reconnect is unsupported");
+      if (this.#leaveFailed) throw new Error("resolve the failed leave before reconnecting");
+      if (!this.#roomId) throw new Error("join a room before reconnecting");
+      await this.#transport.reconnect();
+      await this.requestSnapshot();
+    }).finally(() => {
+      this.#reconnectPromise = undefined;
+    });
+    return this.#reconnectPromise;
   }
 
   async refresh(): Promise<void> {
@@ -309,9 +493,16 @@ export class LokiClient {
   }
 
   async close(): Promise<void> {
+    this.#lifecycleGeneration += 1;
+    this.#leaveFailed = false;
+    this.#roomId = undefined;
+    this.#inviteCode = "";
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
+    this.#unsubscribeConnection?.();
+    this.#unsubscribeConnection = undefined;
     this.#listeners.clear();
+    this.#connectionListeners.clear();
     await this.#transport.close();
   }
 }
@@ -343,6 +534,9 @@ export class FirstPartyTransport implements LokiTransport {
   #roomId?: string;
   #roomKey?: string;
   #closed = false;
+  #connectionListeners = new Set<(event: ConnectionEvent) => void>();
+  #ignoreDisconnect = false;
+  #reconnectPromise?: Promise<void>;
 
   constructor(options: FirstPartyTransportOptions = {}) {
     this.#apiOrigin = (options.apiOrigin ?? LOKI_API_ORIGIN).replace(/\/+$/, "");
@@ -402,13 +596,23 @@ export class FirstPartyTransport implements LokiTransport {
       throw new Error("Loki did not return a room invite");
     }
     await socket.joinMatch(created.matchId);
-    this.#roomId = created.matchId;
-    this.#roomKey = created.roomKey;
-    return {
-      roomId: created.matchId,
-      inviteCode: created.inviteCode,
-      snapshot: await this.#snapshot(created.matchId),
-    };
+    try {
+      const snapshot = await this.#snapshot(created.matchId);
+      this.#roomId = created.matchId;
+      this.#roomKey = created.roomKey;
+      return {
+        roomId: created.matchId,
+        inviteCode: created.inviteCode,
+        snapshot,
+      };
+    } catch (error) {
+      await socket.leaveMatch(created.matchId).catch(() => undefined);
+      if (this.#roomId === created.matchId) {
+        this.#roomId = undefined;
+        this.#roomKey = undefined;
+      }
+      throw error;
+    }
   }
 
   async joinRoom(input: {
@@ -428,12 +632,19 @@ export class FirstPartyTransport implements LokiTransport {
     );
     if (!joined.matchId) throw new Error("Loki did not return a room");
     await socket.joinMatch(joined.matchId);
-    this.#roomId = joined.matchId;
-    return {
-      roomId: joined.matchId,
-      inviteCode: joined.inviteCode ?? inviteCode,
-      snapshot: await this.#snapshot(joined.matchId),
-    };
+    try {
+      const snapshot = await this.#snapshot(joined.matchId);
+      this.#roomId = joined.matchId;
+      return {
+        roomId: joined.matchId,
+        inviteCode: joined.inviteCode ?? inviteCode,
+        snapshot,
+      };
+    } catch (error) {
+      await socket.leaveMatch(joined.matchId).catch(() => undefined);
+      if (this.#roomId === joined.matchId) this.#roomId = undefined;
+      throw error;
+    }
   }
 
   async resolveInvite(inviteCode: string): Promise<{ roomId: string; inviteCode: string }> {
@@ -470,13 +681,23 @@ export class FirstPartyTransport implements LokiTransport {
     });
     const result = await matched;
     const joined = await socket.joinMatch(result.match_id, result.token);
-    this.#roomId = joined.match_id;
-    this.#roomKey = `match-${joined.match_id.slice(0, 12).toLowerCase()}`;
-    return {
-      roomId: joined.match_id,
-      inviteCode: "",
-      snapshot: await this.#snapshot(joined.match_id),
-    };
+    try {
+      const snapshot = await this.#snapshot(joined.match_id);
+      this.#roomId = joined.match_id;
+      this.#roomKey = `match-${joined.match_id.slice(0, 12).toLowerCase()}`;
+      return {
+        roomId: joined.match_id,
+        inviteCode: "",
+        snapshot,
+      };
+    } catch (error) {
+      await socket.leaveMatch(joined.match_id).catch(() => undefined);
+      if (this.#roomId === joined.match_id) {
+        this.#roomId = undefined;
+        this.#roomKey = undefined;
+      }
+      throw error;
+    }
   }
 
   async send(message: ClientEnvelope): Promise<void> {
@@ -488,6 +709,8 @@ export class FirstPartyTransport implements LokiTransport {
           ? 11
           : message.type === "host_state"
             ? 12
+            : message.type === "action_reject"
+              ? 16
             : message.type === "snapshot_request"
               ? 13
               : message.type === "chat"
@@ -501,11 +724,19 @@ export class FirstPartyTransport implements LokiTransport {
     return () => this.#listeners.delete(listener);
   }
 
+  subscribeConnection(listener: (event: ConnectionEvent) => void): () => void {
+    this.#connectionListeners.add(listener);
+    return () => this.#connectionListeners.delete(listener);
+  }
+
   async leaveRoom(roomId: string): Promise<void> {
-    await this.#socket?.leaveMatch(roomId);
-    if (this.#roomId === roomId) {
-      this.#roomId = undefined;
-      this.#roomKey = undefined;
+    try {
+      await this.#socket?.leaveMatch(roomId);
+    } finally {
+      if (this.#roomId === roomId) {
+        this.#roomId = undefined;
+        this.#roomKey = undefined;
+      }
     }
   }
 
@@ -515,11 +746,29 @@ export class FirstPartyTransport implements LokiTransport {
 
   async reconnect(): Promise<void> {
     if (this.#closed) throw new Error("transport is closed");
-    this.#socket?.disconnect(false);
+    if (this.#reconnectPromise) return this.#reconnectPromise;
+    this.#reconnectPromise = this.#reconnectOnce()
+      .then(() => {
+        notifyListeners(this.#connectionListeners, "connected");
+      })
+      .finally(() => {
+        this.#reconnectPromise = undefined;
+      });
+    return this.#reconnectPromise;
+  }
+
+  async #reconnectOnce(): Promise<void> {
+    this.#ignoreDisconnect = true;
+    const previous = this.#socket;
     this.#socket = undefined;
-    if (this.#session?.isexpired(Math.floor(Date.now() / 1_000))) await this.refresh();
-    const socket = await this.#connectSocket();
-    if (this.#roomId) await socket.joinMatch(this.#roomId);
+    try {
+      previous?.disconnect(false);
+      if (this.#session?.isexpired(Math.floor(Date.now() / 1_000))) await this.refresh();
+      const socket = await this.#connectSocket();
+      if (this.#roomId) await socket.joinMatch(this.#roomId);
+    } finally {
+      this.#ignoreDisconnect = false;
+    }
   }
 
   async close(): Promise<void> {
@@ -527,6 +776,7 @@ export class FirstPartyTransport implements LokiTransport {
     this.#socket?.disconnect(false);
     this.#socket = undefined;
     this.#listeners.clear();
+    this.#connectionListeners.clear();
   }
 
   async #connectSocket(): Promise<Socket> {
@@ -537,13 +787,20 @@ export class FirstPartyTransport implements LokiTransport {
       if (message.match_id !== this.#roomId) return;
       try {
         const decoded = JSON.parse(textDecoder.decode(message.data)) as unknown;
-        for (const listener of this.#listeners) listener(decoded);
+        notifyListeners(this.#listeners, decoded);
       } catch {
         // Invalid server data is ignored and cannot reach game listeners.
       }
     };
     socket.ondisconnect = () => {
-      if (!this.#closed) void this.reconnect().catch(() => undefined);
+      if (this.#socket !== socket) return;
+      this.#socket = undefined;
+      if (this.#ignoreDisconnect) return;
+      notifyListeners(this.#connectionListeners, "disconnected");
+      if (this.#closed || this.#reconnectPromise) return;
+      void this.reconnect().catch(() => {
+        notifyListeners(this.#connectionListeners, "reconnect_failed");
+      });
     };
     await socket.connect(this.#requireSession(), true);
     this.#socket = socket;
@@ -555,7 +812,9 @@ export class FirstPartyTransport implements LokiTransport {
       ok: boolean;
       hostId: string;
       version: number;
+      stateVersion?: number;
       state: unknown;
+      capabilities?: unknown;
     }>(
       await wrapLokiCall(() =>
         this.#client.rpc(this.#requireSession(), "loki_room_snapshot", {
@@ -571,6 +830,8 @@ export class FirstPartyTransport implements LokiTransport {
       type: "snapshot",
       hostId: state.hostId,
       state: state.state,
+      stateVersion: state.stateVersion ?? state.version,
+      capabilities: state.capabilities,
     });
   }
 

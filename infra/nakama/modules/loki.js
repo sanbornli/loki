@@ -17,6 +17,8 @@ var MESSAGE_RATE_LIMIT = 20;
 var CHAT_RATE_LIMIT = 5;
 var CHAT_RATE_WINDOW_MS = 10000;
 var EMPTY_ROOM_GRACE_SECONDS = 30;
+var MAX_RECENT_ACTIONS = 64;
+var RECENT_ACTION_TTL_MS = 600000;
 
 var OP_ACTION = 10;
 var OP_EVENT = 11;
@@ -24,6 +26,7 @@ var OP_HOST_STATE = 12;
 var OP_SNAPSHOT = 13;
 var OP_CHAT = 14;
 var OP_SCORE = 15;
+var OP_ACTION_REJECT = 16;
 
 var nowMs = function () {
   return Date.now();
@@ -66,6 +69,162 @@ var normalizeInviteCode = function (value) {
 
 var validInviteCode = function (value) {
   return /^[A-F0-9]{16}$/.test(value);
+};
+
+var validActionId = function (value) {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(value);
+};
+
+var validActionReject = function (input) {
+  return (
+    validActionId(input.actionId) &&
+    (input.senderId === undefined ||
+      (typeof input.senderId === "string" &&
+        input.senderId.length >= 1 &&
+        input.senderId.length <= 128)) &&
+    (input.outcome === "rejected" || input.outcome === "invalid") &&
+    typeof input.message === "string" &&
+    input.message.length >= 1 &&
+    input.message.length <= 200
+  );
+};
+
+var ACTION_KEY_SEP = "\x1f";
+
+var actionIdentityKey = function (senderId, actionId) {
+  return senderId + ACTION_KEY_SEP + actionId;
+};
+
+var parseActionIdentityKey = function (key) {
+  var index = key.indexOf(ACTION_KEY_SEP);
+  if (index === -1) return { senderId: "", actionId: key, legacy: true };
+  return {
+    senderId: key.slice(0, index),
+    actionId: key.slice(index + 1),
+    legacy: false,
+  };
+};
+
+var pruneExpiredActions = function (state) {
+  Object.keys(state.recentActions || {}).forEach(function (key) {
+    var entry = state.recentActions[key];
+    if (!entry || nowMs() - entry.at > RECENT_ACTION_TTL_MS) {
+      delete state.recentActions[key];
+    }
+  });
+};
+
+var findRecentActionMatches = function (state, actionId) {
+  pruneExpiredActions(state);
+  return Object.keys(state.recentActions || {}).filter(function (key) {
+    var parsed = parseActionIdentityKey(key);
+    var entry = state.recentActions[key];
+    return (
+      parsed.actionId === actionId ||
+      (entry && entry.actionId === actionId)
+    );
+  });
+};
+
+var resolveRecentAction = function (state, senderId, actionId) {
+  if (!validActionId(actionId) || !state.recentActions) {
+    return { status: "", entry: null, key: "", ambiguous: false };
+  }
+  pruneExpiredActions(state);
+  if (senderId) {
+    var keyed = actionIdentityKey(senderId, actionId);
+    if (state.recentActions[keyed]) {
+      return {
+        status: state.recentActions[keyed].status || "",
+        entry: state.recentActions[keyed],
+        key: keyed,
+        ambiguous: false,
+      };
+    }
+    var legacy = state.recentActions[actionId];
+    if (
+      legacy &&
+      (!legacy.senderId || legacy.senderId === senderId)
+    ) {
+      return {
+        status: legacy.status || "",
+        entry: legacy,
+        key: actionId,
+        ambiguous: false,
+      };
+    }
+    return { status: "", entry: null, key: "", ambiguous: false };
+  }
+  var matches = findRecentActionMatches(state, actionId);
+  if (matches.length > 1) {
+    return { status: "", entry: null, key: "", ambiguous: true };
+  }
+  if (matches.length === 1) {
+    var key = matches[0];
+    return {
+      status: state.recentActions[key].status || "",
+      entry: state.recentActions[key],
+      key: key,
+      ambiguous: false,
+    };
+  }
+  return { status: "", entry: null, key: "", ambiguous: false };
+};
+
+var rememberAction = function (state, senderId, actionId, status, details) {
+  if (!validActionId(actionId) || !senderId) return;
+  if (!state.recentActions) state.recentActions = {};
+  details = details || {};
+  var resolved = resolveRecentAction(state, senderId, actionId);
+  var key = resolved.key || actionIdentityKey(senderId, actionId);
+  if (resolved.key && resolved.key !== actionIdentityKey(senderId, actionId)) {
+    delete state.recentActions[resolved.key];
+    key = actionIdentityKey(senderId, actionId);
+  }
+  var previous = resolved.entry || {};
+  state.recentActions[key] = {
+    status: status,
+    at: nowMs(),
+    hostId: state.hostId,
+    senderId: senderId || details.senderId || previous.senderId,
+    actionId: actionId,
+    outcome: details.outcome || previous.outcome,
+    message: details.message || previous.message,
+  };
+  var ids = Object.keys(state.recentActions);
+  if (ids.length <= MAX_RECENT_ACTIONS) return;
+  var terminalIds = ids.filter(function (id) {
+    return state.recentActions[id].status !== "delivered";
+  });
+  if (terminalIds.length) ids = terminalIds;
+  ids.sort(function (left, right) {
+    return state.recentActions[left].at - state.recentActions[right].at;
+  });
+  delete state.recentActions[ids[0]];
+};
+
+var recentActionStatus = function (state, senderId, actionId) {
+  return resolveRecentAction(state, senderId, actionId).status;
+};
+
+var deliveredActionCount = function (state) {
+  pruneExpiredActions(state);
+  return Object.keys(state.recentActions || {}).filter(function (key) {
+    return state.recentActions[key] && state.recentActions[key].status === "delivered";
+  }).length;
+};
+
+var runtimeCapabilities = function (state) {
+  return {
+    synchronized_rooms: true,
+    minimumProtocolVersion: PROTOCOL_VERSION,
+    limits: {
+      maxPlayersPerRoom: state && state.maxPlayers ? state.maxPlayers : DEFAULT_MAX_PLAYERS,
+      maxMessageBytes: MAX_MESSAGE_BYTES,
+      maxChatBytes: MAX_CHAT_BYTES,
+      messagesPerSecond: MESSAGE_RATE_LIMIT,
+    },
+  };
 };
 
 var validLeaderboardId = function (value) {
@@ -573,6 +732,40 @@ var presenceList = function (members, hostId) {
   });
 };
 
+var memberTarget = function (userId, member) {
+  return {
+    userId: userId,
+    sessionId: member.sessionId,
+    username: member.username,
+    node: member.node,
+  };
+};
+
+var hostPresences = function (state) {
+  var member = state.members[state.hostId];
+  if (!member) return null;
+  return [memberTarget(state.hostId, member)];
+};
+
+var acknowledgeState = function (dispatcher, state, opCode, actionId, senderId, presences) {
+  broadcastEnvelope(
+    dispatcher,
+    state,
+    opCode,
+    "state",
+    {
+      hostId: state.hostId,
+      state: state.sharedState,
+      stateVersion: state.version,
+      actionId: validActionId(actionId) ? actionId : undefined,
+      senderId: senderId || undefined,
+    },
+    presences || null,
+    null,
+    true,
+  );
+};
+
 var nextServerSequence = function (state) {
   var sequence = state.sequence;
   state.sequence += 1;
@@ -611,10 +804,15 @@ var broadcastEnvelope = function (
   );
 };
 
-var snapshotFields = function (state) {
+var snapshotFields = function (state, actionId, senderId) {
   return {
     hostId: state.hostId,
     state: state.sharedState,
+    stateVersion: state.version,
+    actionId: validActionId(actionId) ? actionId : undefined,
+    senderId: senderId || undefined,
+    members: presenceList(state.members, state.hostId),
+    capabilities: runtimeCapabilities(state),
   };
 };
 
@@ -629,7 +827,13 @@ var hasSharedState = function (state) {
 // Host-authority clients often send the last snapshot sequence they saw,
 // which can drift ahead of the stored version after presence envelopes.
 // Accept that newer token, but still reject a true rollback.
-var applyHostState = function (state, expectedVersion, nextState) {
+var applyHostState = function (state, expectedVersion, nextState, expectedStateVersion) {
+  if (integerInRange(expectedStateVersion, 0, 9007199254740991)) {
+    if (expectedStateVersion !== state.version) return false;
+    state.sharedState = nextState;
+    state.version += 1;
+    return true;
+  }
   if (!integerInRange(expectedVersion, 0, 9007199254740991)) return false;
   if (expectedVersion < state.version) return false;
   state.sharedState = nextState;
@@ -694,6 +898,7 @@ var matchInit = function (ctx, logger, nk, params) {
       members: {},
       rateLimits: {},
       joinSyncs: [],
+      recentActions: {},
       emptyTicks: 0,
       lastStatusCheckTick: -1,
     },
@@ -744,10 +949,14 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
         joinedAt: nowMs(),
         team: state.teamSize ? Math.floor(ordinal / state.teamSize) : undefined,
         lastSequence: -1,
+        username: presence.username,
+        node: presence.node || presence.nodeId,
       };
       state.members[presence.userId] = member;
     } else {
       member.sessionId = presence.sessionId;
+      member.username = presence.username;
+      member.node = presence.node || presence.nodeId;
     }
     if (!state.hostId || !state.members[state.hostId]) {
       state.hostId = presence.userId;
@@ -902,7 +1111,10 @@ var sendProtocolError = function (
   presence,
   code,
   message,
-  retryAfterMs
+  retryAfterMs,
+  actionId,
+  actionOutcome,
+  senderId
 ) {
   broadcastEnvelope(
     dispatcher,
@@ -911,8 +1123,17 @@ var sendProtocolError = function (
     "error",
     {
       code: code,
-      message: message,
+      message:
+        typeof message === "string" && message.length > 200
+          ? message.slice(0, 200)
+          : message,
       retryAfterMs: retryAfterMs,
+      actionId: validActionId(actionId) ? actionId : undefined,
+      senderId: senderId || undefined,
+      actionOutcome:
+        actionOutcome === "rejected" || actionOutcome === "invalid"
+          ? actionOutcome
+          : undefined,
     },
     [presence],
     null,
@@ -975,6 +1196,7 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
   expectedTypes[OP_SNAPSHOT] = "snapshot_request";
   expectedTypes[OP_CHAT] = "chat";
   expectedTypes[OP_SCORE] = "score_submit";
+  expectedTypes[OP_ACTION_REJECT] = "action_reject";
   var expectedType = expectedTypes[opCode];
   if (!expectedType || !message.sender) return;
 
@@ -1070,7 +1292,10 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
   }
   member.lastSequence = input.sequence;
 
-  var retryAfterMs = rateLimit(state, message.sender.userId, "message", nowMs());
+  var retryAfterMs =
+    opCode === OP_ACTION_REJECT
+      ? 0
+      : rateLimit(state, message.sender.userId, "message", nowMs());
   if (retryAfterMs) {
     sendProtocolError(
       dispatcher,
@@ -1080,18 +1305,109 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
       "RATE_LIMITED",
       "message rate exceeded",
       retryAfterMs,
+      input.actionId,
     );
     return;
   }
 
   if (opCode === OP_ACTION) {
+    var actionSenderId = message.sender.userId;
+    var actionLookup = resolveRecentAction(state, actionSenderId, input.actionId);
+    var actionStatus = actionLookup.status;
+    if (validActionId(input.actionId) && actionStatus === "committed") {
+      acknowledgeState(
+        dispatcher,
+        state,
+        OP_HOST_STATE,
+        input.actionId,
+        actionSenderId,
+        [message.sender],
+      );
+      return;
+    }
+    if (validActionId(input.actionId) && actionStatus === "rejected") {
+      var rejected = actionLookup.entry || {};
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_ACTION,
+        message.sender,
+        "INVALID_MESSAGE",
+        rejected.message || "action rejected",
+        undefined,
+        input.actionId,
+        rejected.outcome === "invalid" ? "invalid" : "rejected",
+        actionSenderId,
+      );
+      return;
+    }
+    if (validActionId(input.actionId) && actionStatus === "delivered") {
+      var delivered = actionLookup.entry;
+      if (delivered && delivered.hostId === state.hostId) {
+        sendProtocolError(
+          dispatcher,
+          state,
+          OP_ACTION,
+          message.sender,
+          "INVALID_MESSAGE",
+          "duplicate action",
+          undefined,
+          input.actionId,
+          undefined,
+          actionSenderId,
+        );
+        return;
+      }
+    }
+    if (
+      validActionId(input.actionId) &&
+      !actionStatus &&
+      deliveredActionCount(state) >= MAX_RECENT_ACTIONS
+    ) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_ACTION,
+        message.sender,
+        "RATE_LIMITED",
+        "host action queue is full",
+        1,
+        input.actionId,
+        undefined,
+        actionSenderId,
+      );
+      return;
+    }
+    if (validActionId(input.actionId)) {
+      rememberAction(state, actionSenderId, input.actionId, "delivered");
+    }
+    var targets = hostPresences(state);
+    if (!targets) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_ACTION,
+        message.sender,
+        "HOST_REQUIRED",
+        "host required",
+        undefined,
+        input.actionId,
+        undefined,
+        actionSenderId,
+      );
+      return;
+    }
     broadcastEnvelope(
       dispatcher,
       state,
       OP_ACTION,
       "action",
-      { senderId: message.sender.userId, payload: input.payload },
-      null,
+      {
+        senderId: actionSenderId,
+        payload: input.payload,
+        actionId: validActionId(input.actionId) ? input.actionId : undefined,
+      },
+      targets,
       null,
       true,
     );
@@ -1115,6 +1431,31 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
     return;
   }
   if (opCode === OP_HOST_STATE) {
+    var hostActionSender =
+      typeof input.senderId === "string" && input.senderId.length
+        ? input.senderId
+        : "";
+    var hostActionLookup = validActionId(input.actionId)
+      ? resolveRecentAction(state, hostActionSender, input.actionId)
+      : { status: "", entry: null, key: "", ambiguous: false };
+    if (validActionId(input.actionId) && !hostActionSender) {
+      if (hostActionLookup.ambiguous) {
+        sendProtocolError(
+          dispatcher,
+          state,
+          OP_HOST_STATE,
+          message.sender,
+          "INVALID_MESSAGE",
+          "ambiguous action identity",
+          undefined,
+          input.actionId,
+        );
+        return;
+      }
+      hostActionSender =
+        (hostActionLookup.entry && hostActionLookup.entry.senderId) ||
+        message.sender.userId;
+    }
     if (message.sender.userId !== state.hostId) {
       sendProtocolError(
         dispatcher,
@@ -1123,10 +1464,47 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
         message.sender,
         "HOST_REQUIRED",
         "host required",
+        undefined,
+        input.actionId,
+        undefined,
+        hostActionSender,
       );
       return;
     }
-    if (!applyHostState(state, input.expectedVersion, input.state)) {
+    if (validActionId(input.actionId) && hostActionLookup.status === "committed") {
+      acknowledgeState(
+        dispatcher,
+        state,
+        OP_HOST_STATE,
+        input.actionId,
+        hostActionSender,
+        [message.sender],
+      );
+      return;
+    }
+    if (validActionId(input.actionId) && hostActionLookup.status === "rejected") {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_HOST_STATE,
+        message.sender,
+        "INVALID_MESSAGE",
+        "action already rejected",
+        undefined,
+        input.actionId,
+        "rejected",
+        hostActionSender,
+      );
+      return;
+    }
+    if (
+      !applyHostState(
+        state,
+        input.expectedVersion,
+        input.state,
+        input.expectedStateVersion,
+      )
+    ) {
       sendProtocolError(
         dispatcher,
         state,
@@ -1134,19 +1512,116 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
         message.sender,
         "STALE_VERSION",
         "stale version",
+        undefined,
+        input.actionId,
+        undefined,
+        hostActionSender,
       );
       return;
+    }
+    if (validActionId(input.actionId) && hostActionSender) {
+      rememberAction(state, hostActionSender, input.actionId, "committed");
     }
     broadcastEnvelope(
       dispatcher,
       state,
       OP_HOST_STATE,
       "state",
-      { hostId: state.hostId, state: state.sharedState },
+      {
+        hostId: state.hostId,
+        state: state.sharedState,
+        stateVersion: state.version,
+        actionId: validActionId(input.actionId) ? input.actionId : undefined,
+        senderId: hostActionSender || undefined,
+      },
       null,
       null,
       true,
     );
+    return;
+  }
+  if (opCode === OP_ACTION_REJECT) {
+    if (!validActionReject(input)) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_ACTION_REJECT,
+        message.sender,
+        "INVALID_MESSAGE",
+        "invalid action rejection",
+      );
+      return;
+    }
+    if (message.sender.userId !== state.hostId) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_ACTION_REJECT,
+        message.sender,
+        "HOST_REQUIRED",
+        "host required",
+        undefined,
+        input.actionId,
+        undefined,
+        input.senderId,
+      );
+      return;
+    }
+    var rejectSenderId =
+      typeof input.senderId === "string" && input.senderId.length
+        ? input.senderId
+        : "";
+    var rejectLookup = resolveRecentAction(state, rejectSenderId, input.actionId);
+    if (rejectLookup.ambiguous) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_ACTION_REJECT,
+        message.sender,
+        "INVALID_MESSAGE",
+        "ambiguous action identity",
+        undefined,
+        input.actionId,
+      );
+      return;
+    }
+    var rejectedAction = rejectLookup.entry;
+    if (!rejectedAction || rejectedAction.status !== "delivered") {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_ACTION_REJECT,
+        message.sender,
+        "INVALID_MESSAGE",
+        "action is not pending",
+        undefined,
+        input.actionId,
+        undefined,
+        rejectSenderId || undefined,
+      );
+      return;
+    }
+    rejectSenderId = rejectedAction.senderId || rejectSenderId;
+    rememberAction(state, rejectSenderId, input.actionId, "rejected", {
+      senderId: rejectSenderId,
+      outcome: input.outcome,
+      message: input.message,
+    });
+    var rejectedMember = state.members[rejectSenderId];
+    if (rejectedMember) {
+      sendProtocolError(
+        dispatcher,
+        state,
+        OP_ACTION,
+        memberTarget(rejectSenderId, rejectedMember),
+        "INVALID_MESSAGE",
+        input.message,
+        undefined,
+        input.actionId,
+        input.outcome,
+        rejectSenderId,
+      );
+    }
     return;
   }
   if (opCode === OP_SNAPSHOT) {
@@ -1306,7 +1781,11 @@ var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
         state,
         OP_HOST_STATE,
         "state",
-        { hostId: state.hostId, state: state.sharedState },
+        {
+          hostId: state.hostId,
+          state: state.sharedState,
+          stateVersion: state.version,
+        },
         [sync.presence],
         null,
         true,
@@ -1405,7 +1884,11 @@ var matchSignal = function (ctx, logger, nk, dispatcher, tick, state, data) {
       state,
       OP_HOST_STATE,
       "state",
-      { hostId: state.hostId, state: state.sharedState },
+      {
+        hostId: state.hostId,
+        state: state.sharedState,
+        stateVersion: state.version,
+      },
       null,
       null,
       true,
@@ -1419,8 +1902,10 @@ var matchSignal = function (ctx, logger, nk, dispatcher, tick, state, data) {
       roomKey: state.roomKey,
       hostId: state.hostId,
       version: state.version,
+      stateVersion: state.version,
       state: state.sharedState,
       members: orderedMemberIds(state.members),
+      capabilities: runtimeCapabilities(state),
     }),
   };
 };

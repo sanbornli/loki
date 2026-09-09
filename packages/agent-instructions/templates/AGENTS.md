@@ -11,8 +11,16 @@
 - Never trust or override the `projectId`, player identity, room membership, or
   sequence returned by Loki.
 - Create rooms with `createRoom()` and join with `joinRoom({ inviteCode })`.
-  Games must not invent Loki room keys.
-- Keep game state JSON-compatible and use finite safe integers.
-- Handle reconnect snapshots, host changes, stale-update errors, and focus
-  release when the Loki overlay opens.
+  Do not invent Loki room keys.
+- Prefer `createSynchronizedRoom()` for shared state. Define project-owned
+  state and actions, then provide a reducer. Do not implement a parallel
+  authority, version, or membership protocol.
+- Keep shared state JSON-compatible and use finite safe integers. Reducers must
+  return quickly. Loki clones inputs and catches thrown errors; it cannot stop a
+  synchronous infinite loop without changing the reducer API.
+- Subscribe to synchronized snapshots for state, members, authority, and
+  connection status. Handle rejected actions, reconnects, and focus release
+  when the Loki overlay opens.
+- Handle rejected actions from `dispatch()` without inventing a parallel
+  protocol. Build and deploy from this repository.
 - Run `npx lokiplay validate` before `npx lokiplay deploy`.

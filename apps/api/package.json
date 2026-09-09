@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",
-    "@lokiplay/protocol": "0.1.2",
+    "@lokiplay/protocol": "0.2.0",
     "@sentry/node": "^10.72.0",
     "fflate": "^0.8.3",
     "jose": "^6.2.10",

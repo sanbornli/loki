@@ -1120,12 +1120,12 @@ const creatorScript = String.raw`
           productConfig.lokiplayVersion ||
           productConfig.packageVersion
         ),
-        "0.1.2"
+        "0.2.0"
       );
     }
 
     function configuredCliVersion() {
-      return text(productConfig && productConfig.cliVersion, "0.1.2");
+      return text(productConfig && productConfig.cliVersion, "0.2.0");
     }
 
     function agentPrompt(project) {
@@ -1183,9 +1183,10 @@ const creatorScript = String.raw`
         "- Loki owns identity, project and tenant boundaries, room membership, matchmaking, event sequencing, snapshots, and host migration.",
         "- Never trust, replace, or override the projectId, player identity, membership, host assignment, sequence, or snapshots returned by Loki.",
         "- Create rooms with createRoom() and join with joinRoom({ inviteCode }). Do not invent Loki room keys or pass player-typed codes to createRoom.",
-        "- Clients submit intents; the current host validates and applies authoritative state changes. Do not create a parallel authoritative backend or direct Nakama integration.",
+        "- Prefer createSynchronizedRoom() for shared state. Define this repository's state and actions, then provide a reducer. Loki owns authority checks, state versions, snapshots, retries, and membership.",
+        "- Clients dispatch actions through the synchronized room. Do not create a parallel authoritative backend or direct Nakama integration.",
         "- Keep replicated state JSON-compatible and use finite safe integers.",
-        "- Handle reconnect snapshots, host changes, stale-update errors, disconnects, and focus release when the Loki overlay opens.",
+        "- Subscribe to synchronized snapshots for state, members, connection status, and rejected actions. Handle disconnects and focus release when the Loki overlay opens.",
         "- Production multiplayer must run from a Loki-hosted finished browser build.",
         "",
         "Security and approval",

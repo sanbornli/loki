@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { isMasterTestAccount } from "./master-account.js";
 
 export class ServiceError extends Error {
   constructor(
@@ -29,6 +30,7 @@ export interface SafetyOperations {
     metric: string,
     amount: number,
     periodSeconds: number,
+    actorId?: string,
   ): Promise<number>;
   createReport(input: ReportInput): Promise<{ id: string; status: string }>;
   listReports(actorId: string, status?: string): Promise<unknown[]>;
@@ -180,9 +182,13 @@ export class PostgresSafetyService implements SafetyOperations {
     metric: string,
     amount: number,
     periodSeconds: number,
+    actorId?: string,
   ): Promise<number> {
     if (!Number.isSafeInteger(amount) || amount < 0) {
       throw new ServiceError("INVALID_METER_AMOUNT", "meter amount must be a positive integer");
+    }
+    if (actorId && (await this.actorIsMasterTestAccount(actorId))) {
+      return 0;
     }
     const result = await this.pool.query<{ quantity: string; hard_limit: string | null }>(
       `WITH quota AS (
@@ -226,6 +232,14 @@ export class PostgresSafetyService implements SafetyOperations {
       throw new ServiceError("QUOTA_EXCEEDED", `${metric} quota exceeded`, 429);
     }
     return quantity;
+  }
+
+  private async actorIsMasterTestAccount(actorId: string): Promise<boolean> {
+    const result = await this.pool.query<{ email: string }>(
+      "SELECT email FROM accounts WHERE id = $1",
+      [actorId],
+    );
+    return isMasterTestAccount(result.rows[0]?.email);
   }
 
   async createReport(input: ReportInput): Promise<{ id: string; status: string }> {

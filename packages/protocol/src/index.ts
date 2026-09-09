@@ -72,21 +72,42 @@ export const CapabilitySchema = z.enum([
   "presence",
   "chat",
   "private_leaderboards",
+  "synchronized_rooms",
 ]);
+
+export const ActionIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{8,128}$/);
+
+export const ActionRejectionOutcomeSchema = z.enum(["rejected", "invalid"]);
+
+export const ProtocolLimitsSchema = z
+  .object({
+    maxPlayersPerRoom: z.number().int().min(1).max(16),
+    maxMessageBytes: z.number().int().positive(),
+    maxChatBytes: z.number().int().positive(),
+    messagesPerSecond: z.number().int().positive(),
+  })
+  .passthrough();
+
+export const RuntimeCapabilityBlockSchema = z
+  .object({
+    synchronized_rooms: z.boolean().optional(),
+    limits: ProtocolLimitsSchema.optional(),
+    minimumProtocolVersion: z.number().int().positive().optional(),
+  })
+  .passthrough();
 
 export const ProtocolHelloSchema = z
   .object({
     protocolVersion: z.literal(PROTOCOL_VERSION),
     minimumProtocolVersion: z.literal(PROTOCOL_VERSION),
-    capabilities: z.array(CapabilitySchema),
-    limits: z.object({
-      maxPlayersPerRoom: z.number().int().min(1).max(16),
-      maxMessageBytes: z.number().int().positive(),
-      maxChatBytes: z.number().int().positive(),
-      messagesPerSecond: z.number().int().positive(),
-    }),
+    capabilities: z.array(z.string().min(1)),
+    limits: ProtocolLimitsSchema,
   })
-  .strict();
+  .passthrough();
+
+export const ActionSenderIdSchema = z.string().min(1).max(128);
 
 export const PresenceSchema = z
   .object({
@@ -109,6 +130,7 @@ export const ClientEnvelopeSchema = z.discriminatedUnion("type", [
     ...EnvelopeBase,
     type: z.literal("action"),
     payload: z.unknown(),
+    actionId: ActionIdSchema.optional(),
   }),
   z.object({
     ...EnvelopeBase,
@@ -120,7 +142,18 @@ export const ClientEnvelopeSchema = z.discriminatedUnion("type", [
     ...EnvelopeBase,
     type: z.literal("host_state"),
     expectedVersion: z.number().int().nonnegative(),
+    expectedStateVersion: z.number().int().nonnegative().optional(),
+    actionId: ActionIdSchema.optional(),
+    senderId: ActionSenderIdSchema.optional(),
     state: z.unknown(),
+  }),
+  z.object({
+    ...EnvelopeBase,
+    type: z.literal("action_reject"),
+    actionId: ActionIdSchema,
+    senderId: ActionSenderIdSchema.optional(),
+    outcome: ActionRejectionOutcomeSchema,
+    message: z.string().min(1).max(200),
   }),
   z.object({
     ...EnvelopeBase,
@@ -147,18 +180,27 @@ export const ServerEnvelopeSchema = z.discriminatedUnion("type", [
     type: z.literal("snapshot"),
     hostId: z.string().uuid(),
     state: z.unknown(),
+    stateVersion: z.number().int().nonnegative().optional(),
+    actionId: ActionIdSchema.optional(),
+    senderId: ActionSenderIdSchema.optional(),
+    members: z.array(PresenceSchema).optional(),
+    capabilities: RuntimeCapabilityBlockSchema.optional(),
   }),
   z.object({
     ...EnvelopeBase,
     type: z.literal("state"),
     hostId: z.string().uuid(),
     state: z.unknown(),
+    stateVersion: z.number().int().nonnegative().optional(),
+    actionId: ActionIdSchema.optional(),
+    senderId: ActionSenderIdSchema.optional(),
   }),
   z.object({
     ...EnvelopeBase,
     type: z.literal("action"),
     senderId: z.string().min(1).max(128),
     payload: z.unknown(),
+    actionId: ActionIdSchema.optional(),
   }),
   z.object({
     ...EnvelopeBase,
@@ -214,6 +256,9 @@ export const ServerEnvelopeSchema = z.discriminatedUnion("type", [
     code: ErrorCodeSchema,
     message: z.string().max(200),
     retryAfterMs: z.number().int().positive().optional(),
+    actionId: ActionIdSchema.optional(),
+    senderId: ActionSenderIdSchema.optional(),
+    actionOutcome: ActionRejectionOutcomeSchema.optional(),
   }),
 ]);
 
@@ -236,11 +281,30 @@ export type GameManifest = z.infer<typeof GameManifestSchema>;
 export type RoomConfig = z.infer<typeof RoomConfigSchema>;
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 export type Capability = z.infer<typeof CapabilitySchema>;
+export type ActionId = z.infer<typeof ActionIdSchema>;
+export type ActionRejectionOutcome = z.infer<typeof ActionRejectionOutcomeSchema>;
+export type ProtocolLimits = z.infer<typeof ProtocolLimitsSchema>;
+export type RuntimeCapabilityBlock = z.infer<typeof RuntimeCapabilityBlockSchema>;
 export type ProtocolHello = z.infer<typeof ProtocolHelloSchema>;
 export type Presence = z.infer<typeof PresenceSchema>;
 export type ClientEnvelope = z.infer<typeof ClientEnvelopeSchema>;
 export type ServerEnvelope = z.infer<typeof ServerEnvelopeSchema>;
 export type PlayerSessionClaims = z.infer<typeof PlayerSessionClaimsSchema>;
+
+export function actionIdentityKey(senderId: string, actionId: string): string {
+  return `${senderId}\u001f${actionId}`;
+}
+
+export const DEFAULT_RUNTIME_CAPABILITIES = {
+  synchronized_rooms: true,
+  minimumProtocolVersion: PROTOCOL_VERSION,
+  limits: {
+    maxPlayersPerRoom: 16,
+    maxMessageBytes: 16_384,
+    maxChatBytes: 500,
+    messagesPerSecond: 20,
+  },
+} as const;
 
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
