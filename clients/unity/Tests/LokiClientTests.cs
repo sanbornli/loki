@@ -89,6 +89,20 @@ namespace Loki.Play.SDK.Tests
             Assert.AreEqual("fixture_action_2", encoded[2].String("actionId"));
         }
 
+        private static T AwaitResult<T>(Task<T> task)
+        {
+            if (!task.Wait(TimeSpan.FromSeconds(8)))
+                throw new TimeoutException("synchronized room test timed out");
+            return task.Result;
+        }
+
+        private static void AwaitResult(Task task)
+        {
+            if (!task.Wait(TimeSpan.FromSeconds(8)))
+                throw new TimeoutException("synchronized room test timed out");
+            task.GetAwaiter().GetResult();
+        }
+
         [Test]
         public void SynchronizedRoomsConvergeAndRetainFailedLeave()
         {
@@ -97,15 +111,15 @@ namespace Loki.Play.SDK.Tests
             var memberTransport = new MemoryRoomTransport(world);
             var host = new LokiClient(hostTransport);
             var member = new LokiClient(memberTransport);
-            host.AuthenticateAsync("host").GetAwaiter().GetResult();
-            host.ConnectAsync().GetAwaiter().GetResult();
-            member.AuthenticateAsync("member").GetAwaiter().GetResult();
-            member.ConnectAsync().GetAwaiter().GetResult();
+            AwaitResult(host.AuthenticateAsync("host"));
+            AwaitResult(host.ConnectAsync());
+            AwaitResult(member.AuthenticateAsync("member"));
+            AwaitResult(member.ConnectAsync());
             var hostRoom = host.CreateSynchronizedRoom(CounterState(), ReduceCounter);
             var memberRoom = member.CreateSynchronizedRoom(CounterState(), ReduceCounter);
-            var created = hostRoom.CreateAsync().GetAwaiter().GetResult();
-            memberRoom.JoinAsync(created.InviteCode).GetAwaiter().GetResult();
-            memberRoom.DispatchAsync(Delta(3)).GetAwaiter().GetResult();
+            var created = AwaitResult(hostRoom.CreateAsync());
+            AwaitResult(memberRoom.JoinAsync(created.InviteCode));
+            AwaitResult(memberRoom.DispatchAsync(Delta(3)));
             Assert.AreEqual(3, CounterValue(hostRoom.GetSnapshot().State));
             Assert.AreEqual(3, CounterValue(memberRoom.GetSnapshot().State));
             Assert.IsTrue(hostRoom.IsHost);
@@ -114,7 +128,7 @@ namespace Loki.Play.SDK.Tests
             hostTransport.FailNextLeave();
             try
             {
-                hostRoom.LeaveAsync().GetAwaiter().GetResult();
+                AwaitResult(hostRoom.LeaveAsync());
                 Assert.Fail("leave should fail");
             }
             catch
@@ -122,7 +136,7 @@ namespace Loki.Play.SDK.Tests
                 Assert.AreEqual(ConnectionState.LeaveFailed, hostRoom.GetSnapshot().Connection);
             }
             Assert.IsNotNull(host.CurrentRoomId);
-            hostRoom.LeaveAsync().GetAwaiter().GetResult();
+            AwaitResult(hostRoom.LeaveAsync());
             Assert.AreEqual(ConnectionState.Closed, hostRoom.GetSnapshot().Connection);
         }
 
@@ -132,37 +146,37 @@ namespace Loki.Play.SDK.Tests
             var world = new MemoryWorld();
             var transport = new MemoryRoomTransport(world);
             var client = new LokiClient(transport);
-            client.AuthenticateAsync("host").GetAwaiter().GetResult();
-            client.ConnectAsync().GetAwaiter().GetResult();
+            AwaitResult(client.AuthenticateAsync("host"));
+            AwaitResult(client.ConnectAsync());
             var room = client.CreateSynchronizedRoom(CounterState(), ReduceCounter);
-            room.CreateAsync().GetAwaiter().GetResult();
-            room.DispatchAsync(Delta(4)).GetAwaiter().GetResult();
+            AwaitResult(room.CreateAsync());
+            AwaitResult(room.DispatchAsync(Delta(4)));
             transport.InjectStaleSnapshot();
             Assert.AreEqual(4, CounterValue(room.GetSnapshot().State));
             Assert.AreEqual(2, room.GetSnapshot().StateVersion);
 
             var memberTransport = new MemoryRoomTransport(world);
             var member = new LokiClient(memberTransport);
-            member.AuthenticateAsync("member").GetAwaiter().GetResult();
-            member.ConnectAsync().GetAwaiter().GetResult();
+            AwaitResult(member.AuthenticateAsync("member"));
+            AwaitResult(member.ConnectAsync());
             var memberRoom = member.CreateSynchronizedRoom(CounterState(), ReduceCounter);
             memberTransport.EmitUnseenDuplicateOnce();
-            memberRoom.JoinAsync(room.GetSnapshot().InviteCode).GetAwaiter().GetResult();
-            memberRoom.DispatchAsync(Delta(1)).GetAwaiter().GetResult();
+            AwaitResult(memberRoom.JoinAsync(room.GetSnapshot().InviteCode));
+            AwaitResult(memberRoom.DispatchAsync(Delta(1)));
             Assert.AreEqual(5, CounterValue(memberRoom.GetSnapshot().State));
 
             var holdTransport = new MemoryRoomTransport(world);
             holdTransport.HoldNextEnter();
             var second = new LokiClient(holdTransport);
-            second.AuthenticateAsync("late").GetAwaiter().GetResult();
-            second.ConnectAsync().GetAwaiter().GetResult();
+            AwaitResult(second.AuthenticateAsync("late"));
+            AwaitResult(second.ConnectAsync());
             var lateRoom = second.CreateSynchronizedRoom(CounterState(), (state, action, context) => state);
             var joining = lateRoom.JoinAsync(room.GetSnapshot().InviteCode);
             holdTransport.WaitUntilHeld();
             var leaving = lateRoom.LeaveAsync();
             holdTransport.ReleaseEnter();
-            try { joining.GetAwaiter().GetResult(); } catch { }
-            try { leaving.GetAwaiter().GetResult(); } catch { }
+            try { AwaitResult(joining); } catch { }
+            try { AwaitResult(leaving); } catch { }
             var connection = lateRoom.GetSnapshot().Connection;
             Assert.IsTrue(
                 connection == ConnectionState.Closed ||
@@ -178,28 +192,28 @@ namespace Loki.Play.SDK.Tests
             var memberTransport = new MemoryRoomTransport(world);
             var host = new LokiClient(hostTransport);
             var member = new LokiClient(memberTransport);
-            host.AuthenticateAsync("host").GetAwaiter().GetResult();
-            host.ConnectAsync().GetAwaiter().GetResult();
-            member.AuthenticateAsync("member").GetAwaiter().GetResult();
-            member.ConnectAsync().GetAwaiter().GetResult();
+            AwaitResult(host.AuthenticateAsync("host"));
+            AwaitResult(host.ConnectAsync());
+            AwaitResult(member.AuthenticateAsync("member"));
+            AwaitResult(member.ConnectAsync());
             host.OnMessage(_ => { throw new InvalidOperationException("isolated listener"); });
             var hostRoom = host.CreateSynchronizedRoom(CounterState(), ReduceCounter);
             var memberRoom = member.CreateSynchronizedRoom(CounterState(), ReduceCounter);
-            var created = hostRoom.CreateAsync().GetAwaiter().GetResult();
-            memberRoom.JoinAsync(created.InviteCode).GetAwaiter().GetResult();
-            hostRoom.DispatchAsync(Delta(5)).GetAwaiter().GetResult();
-            hostRoom.LeaveAsync().GetAwaiter().GetResult();
-            memberRoom.DispatchAsync(Delta(1)).GetAwaiter().GetResult();
+            var created = AwaitResult(hostRoom.CreateAsync());
+            AwaitResult(memberRoom.JoinAsync(created.InviteCode));
+            AwaitResult(hostRoom.DispatchAsync(Delta(5)));
+            AwaitResult(hostRoom.LeaveAsync());
+            AwaitResult(memberRoom.DispatchAsync(Delta(1)));
             Assert.AreEqual(6, CounterValue(memberRoom.GetSnapshot().State));
             Assert.IsTrue(memberRoom.IsHost);
 
             var isolated = new LokiClient(new MemoryRoomTransport(world));
-            isolated.AuthenticateAsync("iso").GetAwaiter().GetResult();
-            isolated.ConnectAsync().GetAwaiter().GetResult();
+            AwaitResult(isolated.AuthenticateAsync("iso"));
+            AwaitResult(isolated.ConnectAsync());
             isolated.OnMessage(_ => { throw new InvalidOperationException("isolated"); });
             var isolatedRoom = isolated.CreateSynchronizedRoom(CounterState(), ReduceCounter);
-            isolatedRoom.CreateAsync().GetAwaiter().GetResult();
-            isolatedRoom.DispatchAsync(Delta(1)).GetAwaiter().GetResult();
+            AwaitResult(isolatedRoom.CreateAsync());
+            AwaitResult(isolatedRoom.DispatchAsync(Delta(1)));
             isolated.NotifyConnection("reconnect_failed");
             Assert.AreEqual(ConnectionState.Failed, isolatedRoom.GetSnapshot().Connection);
         }
