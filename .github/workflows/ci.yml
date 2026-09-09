@@ -134,6 +134,9 @@ jobs:
           artifactsPath: artifacts/unity
           githubToken: ${{ secrets.GITHUB_TOKEN }}
           checkName: Unity EditMode tests
+          cliVersion: v0.1.56
+          coverageEnabled: false
+          customImage: unityci/editor:ubuntu-2021.3.45f1-base-3
       - uses: actions/upload-artifact@v4
         if: always()
         with:
