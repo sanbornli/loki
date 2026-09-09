@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-08T07:00:00.000Z",
+  "environment": "production",
+  "railway": {
+    "project": "lokiplay-production",
+    "workspace": "Lokiplay",
+    "plan": "hobby",
+    "usageLimitCli": {
+      "attempted": "railway usage limit set --target workspace --soft 15 --hard 20",
+      "result": "created",
+      "softLimitDollars": 15,
+      "hardLimitDollars": 20,
+      "isOverLimit": false,
+      "currentUsageDollars": 0.00543706240734568
+    },
+    "workspaceUsage": {
+      "billingPeriodStart": "2026-09-08T05:21:17+00:00",
+      "billingPeriodEnd": "2026-10-08T05:21:17+00:00",
+      "currentUsageDollars": 0.00543706240734568,
+      "estimatedBillDollars": 0.6136189979252846,
+      "usageLimit": {
+        "softLimit": 15,
+        "hardLimit": 20
+      }
+    },
+    "webhook": {
+      "configured": true,
+      "events": [
+        "VolumeAlert Triggered",
+        "Monitor Triggered",
+        "Deployment Crashed",
+        "Deployment Oom Killed"
+      ],
+      "destination": "webhook.site inbox created for this drill",
+      "receiptsObserved": 5,
+      "destinationAcceptsPost": true
+    },
+    "metricsExercised": {
+      "apiLastSixHours": {
+        "http2xx": 0,
+        "http4xx": 3,
+        "http5xx": 0,
+        "errorRate": 0
+      },
+      "nakamaLastSixHours": {
+        "note": "Railway HTTP summary omitted 2xx/5xx fields for this window"
+      }
+    },
+    "missingMonitors": [
+      "API error-rate threshold monitor",
+      "failed-deployment monitor",
+      "Nakama disconnect monitor",
+      "room-creation-failure monitor",
+      "PostgreSQL saturation monitor",
+      "R2 failure monitor",
+      "restart-loop monitor",
+      "missing-heartbeat monitor"
+    ],
+    "monitorCreate": {
+      "publicGraphql": false,
+      "notificationRuleUpdate": "not authorized",
+      "note": "Hobby unlocks usage limits. Metric threshold monitors still have no create mutation on the Railway public GraphQL API."
+    }
+  },
+  "cloudflare": {
+    "accountNotifications": [
+      {
+        "name": "lokiplay-universal-ssl",
+        "event": "Universal SSL Alert",
+        "method": "Email",
+        "tested": true
+      }
+    ],
+    "missingNotifications": [
+      "origin HTTP error rate",
+      "R2 operation failures",
+      "Workers/Pages availability"
+    ]
+  },
+  "observations": "Hobby is active. Workspace usage limits are soft $15 / hard $20 against the $25 monthly free-tier budget. Existing crash/OOM/volume webhooks remain. Threshold monitors and extra Cloudflare notifications were not created because the Railway API rejected notification-rule updates and has no monitor-create mutation, and Wrangler is not logged in on this machine."
+}

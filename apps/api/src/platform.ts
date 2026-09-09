@@ -310,6 +310,7 @@ export class PlatformService {
     const project = this.#requireProject(projectId);
     this.#requireMember(actorId, project.organizationId);
     project.activeDeploymentId = deploymentId;
+    if (project.state === "draft") project.state = "unlisted";
     project.updatedAt = new Date().toISOString();
     this.#record(actorId, project.organizationId, project.id, "deployment.activated", {
       deploymentId,

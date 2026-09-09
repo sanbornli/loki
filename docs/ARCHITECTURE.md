@@ -40,9 +40,10 @@
 
 - One Supabase project for Auth and platform PostgreSQL data
 - A second Supabase project for isolated Nakama PostgreSQL data
-- Railway for API, web, workers, Nakama compute, infrastructure logs, metrics,
-  deployment events, and alerts
-- Cloudflare R2, CDN, DNS, wildcard game origins, and Turnstile
+- Railway for API, creator/player web, workers, Nakama compute, infrastructure
+  logs, metrics, deployment events, and alerts
+- Cloudflare Pages for the marketing homepage, plus R2, CDN, DNS, wildcard game
+  edge proxying, and Turnstile
 - Sentry for frontend/API errors, application traces and logs, uptime, and
   release correlation
 
@@ -50,10 +51,10 @@ Neon and Grafana Cloud are deferred. A separate database supplier is not needed
 while Supabase can provide a second isolated project, and Railway plus Sentry
 cover the MVP observability requirements without a third monitoring system.
 
-The production root domain is `lokiplay.cc`. Railway serves
-`api.lokiplay.cc`, `play.lokiplay.cc`, and isolated per-project origins under
-`*.lokiplay.cc`; Cloudflare owns DNS and edge proxying. Provider values are
-stored only as Railway secrets.
+Cloudflare Pages serves the production root domain, `lokiplay.cc`. Railway
+serves `api.lokiplay.cc`, `play.lokiplay.cc`, and isolated per-project origins
+under `*.lokiplay.cc`; Cloudflare owns DNS and edge proxying. Provider values
+are stored only as Railway secrets.
 
 ## Release history and source control
 

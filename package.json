@@ -18,7 +18,9 @@
     "lokiplay": "tsx packages/cli/src/index.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "providers:check": "tsx scripts/check-providers.ts",
-    "production:check": "tsx scripts/check-production.ts"
+    "production:check": "tsx scripts/check-production.ts",
+    "marketing:build": "tsx scripts/build-marketing.ts",
+    "marketing:deploy": "npm run marketing:build && npx wrangler@3.114.17 pages deploy dist/marketing --project-name lokiplay"
   },
   "devDependencies": {
     "@heroiclabs/nakama-js": "^2.8.0",

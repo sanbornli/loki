@@ -42,6 +42,7 @@ export interface SafetyOperations {
   setAccountSuspension(actorId: string, accountId: string, suspended: boolean, reason: string): Promise<void>;
   setGlobalPlayDisabled(actorId: string, disabled: boolean, reason: string): Promise<void>;
   enqueueSecurityReview(deploymentId: string): Promise<void>;
+  listSecurityReviews(actorId: string, state?: string): Promise<unknown[]>;
   resolveSecurityReview(
     actorId: string,
     deploymentId: string,
@@ -62,6 +63,93 @@ const requireAdmin = async (client: Pool | PoolClient, actorId: string): Promise
 
 const periodStart = (nowSeconds: number, periodSeconds: number): Date =>
   new Date(Math.floor(nowSeconds / periodSeconds) * periodSeconds * 1000);
+
+type SecurityReviewCompletion = {
+  organizationId: string;
+  projectId: string;
+  activated: boolean;
+};
+
+async function finalizeSecurityReview(
+  client: PoolClient,
+  deploymentId: string,
+  approved: boolean,
+  evidenceRefs: string[],
+): Promise<SecurityReviewCompletion> {
+  const deploymentResult = await client.query<{
+    organization_id: string;
+    project_id: string;
+    created_at: Date | string;
+  }>(
+    `SELECT projects.organization_id, projects.id AS project_id,
+            deployment.created_at
+       FROM deployments AS deployment
+       JOIN projects ON projects.id = deployment.project_id
+      WHERE deployment.id = $1
+        AND deployment.status IN ('security_review_pending', 'quarantined', 'ready')
+      FOR UPDATE OF deployment, projects`,
+    [deploymentId],
+  );
+  const deployment = deploymentResult.rows[0];
+  if (!deployment) {
+    throw new ServiceError("DEPLOYMENT_NOT_FOUND", "deployment review not found", 404);
+  }
+
+  await client.query(
+    `UPDATE deployments
+        SET status = CASE WHEN $2 THEN 'ready' ELSE 'quarantined' END
+      WHERE id = $1`,
+    [deploymentId, approved],
+  );
+  await client.query(
+    `UPDATE security_review_jobs
+        SET state = $2, finding_refs = $3::jsonb, completed_at = now(),
+            last_error = NULL
+      WHERE deployment_id = $1`,
+    [
+      deploymentId,
+      approved ? "approved" : "quarantined",
+      JSON.stringify(evidenceRefs),
+    ],
+  );
+
+  let activated = false;
+  if (approved) {
+    const activation = await client.query(
+      `UPDATE projects
+          SET active_deployment_id = $2,
+              state = CASE
+                WHEN state = 'draft' THEN 'unlisted'::project_state
+                ELSE state
+              END,
+              updated_at = now()
+        WHERE id = $1
+          AND NOT EXISTS (
+            SELECT 1
+              FROM deployments AS newer
+             WHERE newer.project_id = $1
+               AND newer.status IN ('ready', 'ready_with_warnings')
+               AND (newer.created_at, newer.id) >
+                   ($3::timestamptz, $2::uuid)
+          )`,
+      [deployment.project_id, deploymentId, deployment.created_at],
+    );
+    activated = Boolean(activation.rowCount);
+  } else {
+    await client.query(
+      `UPDATE projects
+          SET active_deployment_id = NULL, updated_at = now()
+        WHERE id = $1 AND active_deployment_id = $2`,
+      [deployment.project_id, deploymentId],
+    );
+  }
+
+  return {
+    organizationId: deployment.organization_id,
+    projectId: deployment.project_id,
+    activated,
+  };
+}
 
 export class PostgresSafetyService implements SafetyOperations {
   constructor(readonly pool: Pool) {}
@@ -288,6 +376,36 @@ export class PostgresSafetyService implements SafetyOperations {
     );
   }
 
+  async listSecurityReviews(
+    actorId: string,
+    state = "needs_operator",
+  ): Promise<unknown[]> {
+    await requireAdmin(this.pool, actorId);
+    if (
+      ![
+        "pending",
+        "running",
+        "approved",
+        "quarantined",
+        "failed",
+        "needs_operator",
+      ].includes(state)
+    ) {
+      throw new ServiceError("INVALID_REVIEW_STATE", "invalid review state");
+    }
+    const result = await this.pool.query(
+      `SELECT job.id, job.deployment_id, job.state, job.finding_refs,
+              job.attempts, job.created_at, job.completed_at,
+              deployment.project_id, deployment.status AS deployment_status
+         FROM security_review_jobs AS job
+         JOIN deployments AS deployment ON deployment.id = job.deployment_id
+        WHERE job.state = $1
+        ORDER BY job.created_at DESC LIMIT 100`,
+      [state],
+    );
+    return result.rows;
+  }
+
   async resolveSecurityReview(
     actorId: string,
     deploymentId: string,
@@ -295,31 +413,39 @@ export class PostgresSafetyService implements SafetyOperations {
     evidenceRefs: string[],
   ): Promise<void> {
     await requireAdmin(this.pool, actorId);
-    const result = await this.pool.query<{ organization_id: string; project_id: string }>(
-      `UPDATE deployments AS deployment
-          SET status = CASE WHEN $2 THEN 'ready' ELSE 'quarantined' END
-         FROM projects
-        WHERE deployment.id = $1
-          AND projects.id = deployment.project_id
-          AND deployment.status IN ('security_review_pending', 'quarantined')
-        RETURNING projects.organization_id, projects.id AS project_id`,
-      [deploymentId, approved],
-    );
-    const row = result.rows[0];
-    if (!row) throw new ServiceError("DEPLOYMENT_NOT_FOUND", "deployment review not found", 404);
-    await this.pool.query(
-      `UPDATE security_review_jobs
-          SET state = $2, finding_refs = $3::jsonb, completed_at = now()
-        WHERE deployment_id = $1`,
-      [deploymentId, approved ? "approved" : "quarantined", JSON.stringify(evidenceRefs)],
-    );
-    await this.audit(
-      actorId,
-      row.organization_id,
-      row.project_id,
-      "deployment.security_review_resolved",
-      { deploymentId, approved, evidenceRefs },
-    );
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await finalizeSecurityReview(
+        client,
+        deploymentId,
+        approved,
+        evidenceRefs,
+      );
+      await client.query(
+        `INSERT INTO audit_records
+         (actor_id, organization_id, project_id, action, detail)
+         VALUES ($1, $2, $3, $4, $5::jsonb)`,
+        [
+          actorId,
+          result.organizationId,
+          result.projectId,
+          "deployment.security_review_resolved",
+          JSON.stringify({
+            deploymentId,
+            approved,
+            activated: result.activated,
+            evidenceRefs,
+          }),
+        ],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async audit(
@@ -343,7 +469,7 @@ export class SecurityReviewWorker {
   constructor(
     readonly pool: Pool,
     readonly review: (deploymentId: string) => Promise<{
-      decision: "approved" | "quarantined";
+      decision: "approved" | "quarantined" | "needs_operator";
       evidenceRefs?: string[];
     }>,
   ) {}
@@ -374,18 +500,32 @@ export class SecurityReviewWorker {
     }
     try {
       const result = await this.review(job.deployment_id);
-      await this.pool.query(
-        `UPDATE security_review_jobs SET state = $2, finding_refs = $3::jsonb,
-                 completed_at = now() WHERE id = $1`,
-        [job.id, result.decision, JSON.stringify(result.evidenceRefs ?? [])],
-      );
-      await this.pool.query(
-        `UPDATE deployments SET status = $2 WHERE id = $1`,
-        [
-          job.deployment_id,
-          result.decision === "approved" ? "ready" : "quarantined",
-        ],
-      );
+      if (result.decision === "needs_operator") {
+        await this.pool.query(
+          `UPDATE security_review_jobs
+              SET state = 'needs_operator', finding_refs = $2::jsonb,
+                  completed_at = NULL, last_error = NULL
+            WHERE id = $1`,
+          [job.id, JSON.stringify(result.evidenceRefs ?? [])],
+        );
+      } else {
+        const completion = await this.pool.connect();
+        try {
+          await completion.query("BEGIN");
+          await finalizeSecurityReview(
+            completion,
+            job.deployment_id,
+            result.decision === "approved",
+            result.evidenceRefs ?? [],
+          );
+          await completion.query("COMMIT");
+        } catch (error) {
+          await completion.query("ROLLBACK");
+          throw error;
+        } finally {
+          completion.release();
+        }
+      }
       return true;
     } catch (error) {
       await this.pool.query(

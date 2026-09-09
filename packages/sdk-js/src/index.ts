@@ -13,16 +13,79 @@ const textDecoder = new TextDecoder();
 
 const payload = <T>(response: { payload?: object }): T => response.payload as T;
 
+export type JoinedRoom = {
+  roomId: string;
+  inviteCode: string;
+  snapshot: ServerEnvelope;
+};
+
+export async function lokiErrorFromUnknown(error: unknown): Promise<Error> {
+  if (typeof Response !== "undefined" && error instanceof Response) {
+    const status = error.status;
+    let detail = "";
+    try {
+      const text = await error.clone().text();
+      if (text) {
+        try {
+          const parsed = JSON.parse(text) as { message?: string; error?: string };
+          detail = parsed.message || parsed.error || text;
+        } catch {
+          detail = text;
+        }
+      }
+    } catch {
+      // The body may already have been consumed by the transport.
+    }
+    return new Error(
+      detail
+        ? `Loki request failed (${status}): ${detail}`
+        : `Loki request failed (${status})`,
+    );
+  }
+  if (error instanceof Error) {
+    if (error.message === "[object Response]") {
+      return new Error("Loki request failed");
+    }
+    return error;
+  }
+  if (error && typeof error === "object" && "status" in error) {
+    const status = Number((error as { status: unknown }).status);
+    return new Error(
+      Number.isFinite(status) ? `Loki request failed (${status})` : "Loki request failed",
+    );
+  }
+  return new Error("Loki request failed");
+}
+
+const wrapLokiCall = async <T>(operation: () => Promise<T>): Promise<T> => {
+  try {
+    return await operation();
+  } catch (error) {
+    throw await lokiErrorFromUnknown(error);
+  }
+};
+
+const normalizeInviteCode = (value: string): string => value.trim().toUpperCase();
+
+const requireInviteCode = (value: string): string => {
+  const inviteCode = normalizeInviteCode(value);
+  if (!/^[A-F0-9]{16}$/.test(inviteCode)) {
+    throw new Error("INVITE_INVALID: invite codes are 16 letters or digits issued by Loki");
+  }
+  return inviteCode;
+};
+
 export interface LokiTransport {
   authenticate(token: string): Promise<{ playerId: string }>;
+  createRoom(input: { projectId: string }): Promise<JoinedRoom>;
   joinRoom(input: {
     projectId: string;
-    roomKey: string;
-  }): Promise<{ roomId: string; snapshot: ServerEnvelope }>;
+    inviteCode: string;
+  }): Promise<JoinedRoom>;
   send(message: ClientEnvelope): Promise<void>;
   subscribe(listener: (message: unknown) => void): () => void;
-  resolveInvite?(inviteCode: string): Promise<{ roomId: string }>;
-  matchmake?(input: { minPlayers: number; maxPlayers: number; teamSize?: number }): Promise<{ roomId: string; snapshot: ServerEnvelope }>;
+  resolveInvite?(inviteCode: string): Promise<{ roomId: string; inviteCode: string }>;
+  matchmake?(input: { minPlayers: number; maxPlayers: number; teamSize?: number }): Promise<JoinedRoom>;
   leaveRoom?(roomId: string): Promise<void>;
   reconnect?(): Promise<void>;
   refresh?(): Promise<void>;
@@ -41,6 +104,8 @@ export class LokiClient {
   #unsubscribe?: () => void;
   #playerId?: string;
   #roomId?: string;
+  #joining = false;
+  #joinBuffer: ServerEnvelope[] = [];
   #sendSequence = 0;
   #receiveSequence = 0;
 
@@ -56,12 +121,11 @@ export class LokiClient {
     if (this.#unsubscribe) return;
     this.#unsubscribe = this.#transport.subscribe((raw) => {
       const message = ServerEnvelopeSchema.parse(raw);
-      if (
-        message.roomId !== this.#roomId ||
-        message.sequence < this.#receiveSequence
-      ) return;
-      this.#receiveSequence = message.sequence;
-      for (const listener of this.#listeners) listener(message);
+      if (this.#joining) {
+        this.#joinBuffer.push(message);
+        return;
+      }
+      this.#dispatch(message);
     });
   }
 
@@ -72,20 +136,57 @@ export class LokiClient {
     return session;
   }
 
-  async joinRoom(roomKey: string): Promise<ServerEnvelope> {
+  async createRoom(): Promise<JoinedRoom> {
+    if (!this.#playerId) throw new Error("authenticate before creating a room");
+    return this.#enterRoom(() =>
+      this.#transport.createRoom({ projectId: this.#projectId }),
+    );
+  }
+
+  async joinRoom(input: { inviteCode: string }): Promise<JoinedRoom> {
     if (!this.#playerId) throw new Error("authenticate before joining a room");
-    const joined = await this.#transport.joinRoom({
-      projectId: this.#projectId,
-      roomKey,
-    });
-    const snapshot = ServerEnvelopeSchema.parse(joined.snapshot);
-    if (snapshot.roomId !== joined.roomId || snapshot.type !== "snapshot") {
-      throw new Error("invalid join snapshot");
+    return this.#enterRoom(() =>
+      this.#transport.joinRoom({
+        projectId: this.#projectId,
+        inviteCode: requireInviteCode(input.inviteCode),
+      }),
+    );
+  }
+
+  async #enterRoom(join: () => Promise<JoinedRoom>): Promise<JoinedRoom> {
+    this.#joining = true;
+    this.#joinBuffer = [];
+    try {
+      const joined = await join();
+      const snapshot = ServerEnvelopeSchema.parse(joined.snapshot);
+      if (snapshot.roomId !== joined.roomId || snapshot.type !== "snapshot") {
+        throw new Error("invalid join snapshot");
+      }
+      this.#roomId = joined.roomId;
+      this.#sendSequence = 0;
+      this.#receiveSequence = snapshot.sequence;
+      const buffered = this.#joinBuffer;
+      this.#joinBuffer = [];
+      this.#joining = false;
+      for (const message of buffered) this.#dispatch(message);
+      return {
+        roomId: joined.roomId,
+        inviteCode: joined.inviteCode,
+        snapshot,
+      };
+    } finally {
+      this.#joining = false;
+      this.#joinBuffer = [];
     }
-    this.#roomId = joined.roomId;
-    this.#sendSequence = 0;
-    this.#receiveSequence = snapshot.sequence;
-    return snapshot;
+  }
+
+  #dispatch(message: ServerEnvelope): void {
+    if (
+      message.roomId !== this.#roomId ||
+      message.sequence < this.#receiveSequence
+    ) return;
+    this.#receiveSequence = message.sequence;
+    for (const listener of this.#listeners) listener(message);
   }
 
   async sendAction(payload: unknown): Promise<void> {
@@ -147,24 +248,19 @@ export class LokiClient {
     });
   }
 
-  async resolveInvite(inviteCode: string): Promise<{ roomId: string }> {
+  async resolveInvite(inviteCode: string): Promise<{ roomId: string; inviteCode: string }> {
     if (!this.#transport.resolveInvite) throw new Error("invites are unsupported");
-    return this.#transport.resolveInvite(inviteCode);
+    return this.#transport.resolveInvite(requireInviteCode(inviteCode));
   }
 
   async matchmake(input: {
     minPlayers: number;
     maxPlayers: number;
     teamSize?: number;
-  }): Promise<ServerEnvelope> {
+  }): Promise<JoinedRoom> {
     if (!this.#playerId) throw new Error("authenticate before matchmaking");
     if (!this.#transport.matchmake) throw new Error("matchmaking is unsupported");
-    const joined = await this.#transport.matchmake(input);
-    const snapshot = ServerEnvelopeSchema.parse(joined.snapshot);
-    this.#roomId = joined.roomId;
-    this.#sendSequence = 0;
-    this.#receiveSequence = snapshot.sequence;
-    return snapshot;
+    return this.#enterRoom(() => this.#transport.matchmake!(input));
   }
 
   async leaveRoom(): Promise<void> {
@@ -266,20 +362,20 @@ export class FirstPartyTransport implements LokiTransport {
   async authenticate(token: string): Promise<{ playerId: string }> {
     const value = this.#sessionProvider
       ? await this.#sessionProvider(token)
-      : await (async () => {
+      : await wrapLokiCall(async () => {
           const response = await this.#fetch(`${this.#apiOrigin}/v1/nakama-session`, {
             method: "POST",
             headers: { authorization: `Bearer ${token}` },
           });
           if (!response.ok) {
-            throw new Error(`Loki authentication failed (${response.status})`);
+            throw await lokiErrorFromUnknown(response);
           }
           return (await response.json()) as {
             token: string;
             refreshToken?: string;
             playerId: string;
           };
-        })();
+        });
     const checked = value as {
       token?: string;
       refreshToken?: string;
@@ -292,43 +388,75 @@ export class FirstPartyTransport implements LokiTransport {
     return { playerId: checked.playerId };
   }
 
-  async joinRoom(input: {
-    projectId: string;
-    roomKey: string;
-  }): Promise<{ roomId: string; snapshot: ServerEnvelope }> {
+  async createRoom(_input: { projectId: string }): Promise<JoinedRoom> {
     const session = this.#requireSession();
     const socket = await this.#connectSocket();
     const created = payload<{
       matchId: string;
       inviteCode: string;
+      roomKey: string;
     }>(
-      await this.#client.rpc(session, "loki_create_room", {
-        roomKey: input.roomKey,
-      }),
+      await wrapLokiCall(() => this.#client.rpc(session, "loki_create_room", {})),
     );
+    if (!created.matchId || !created.inviteCode) {
+      throw new Error("Loki did not return a room invite");
+    }
     await socket.joinMatch(created.matchId);
     this.#roomId = created.matchId;
-    this.#roomKey = input.roomKey;
+    this.#roomKey = created.roomKey;
     return {
       roomId: created.matchId,
+      inviteCode: created.inviteCode,
       snapshot: await this.#snapshot(created.matchId),
     };
   }
 
-  async resolveInvite(inviteCode: string): Promise<{ roomId: string }> {
-    const resolved = payload<{ matchId: string }>(
-      await this.#client.rpc(this.#requireSession(), "loki_resolve_invite", {
-        inviteCode,
-      }),
+  async joinRoom(input: {
+    projectId: string;
+    inviteCode: string;
+  }): Promise<JoinedRoom> {
+    const session = this.#requireSession();
+    const socket = await this.#connectSocket();
+    const inviteCode = requireInviteCode(input.inviteCode);
+    const joined = payload<{
+      matchId: string;
+      inviteCode?: string;
+    }>(
+      await wrapLokiCall(() =>
+        this.#client.rpc(session, "loki_join_room", { inviteCode }),
+      ),
     );
-    return { roomId: resolved.matchId };
+    if (!joined.matchId) throw new Error("Loki did not return a room");
+    await socket.joinMatch(joined.matchId);
+    this.#roomId = joined.matchId;
+    return {
+      roomId: joined.matchId,
+      inviteCode: joined.inviteCode ?? inviteCode,
+      snapshot: await this.#snapshot(joined.matchId),
+    };
+  }
+
+  async resolveInvite(inviteCode: string): Promise<{ roomId: string; inviteCode: string }> {
+    const normalized = requireInviteCode(inviteCode);
+    const resolved = payload<{ matchId: string; inviteCode?: string }>(
+      await wrapLokiCall(() =>
+        this.#client.rpc(this.#requireSession(), "loki_resolve_invite", {
+          inviteCode: normalized,
+        }),
+      ),
+    );
+    if (!resolved.matchId) throw new Error("Loki did not return a room");
+    return {
+      roomId: resolved.matchId,
+      inviteCode: resolved.inviteCode ?? normalized,
+    };
   }
 
   async matchmake(input: {
     minPlayers: number;
     maxPlayers: number;
     teamSize?: number;
-  }): Promise<{ roomId: string; snapshot: ServerEnvelope }> {
+  }): Promise<JoinedRoom> {
     const socket = await this.#connectSocket();
     const matched = new Promise<{ match_id?: string; token?: string }>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("matchmaking timed out")), 30_000);
@@ -344,7 +472,11 @@ export class FirstPartyTransport implements LokiTransport {
     const joined = await socket.joinMatch(result.match_id, result.token);
     this.#roomId = joined.match_id;
     this.#roomKey = `match-${joined.match_id.slice(0, 12).toLowerCase()}`;
-    return { roomId: joined.match_id, snapshot: await this.#snapshot(joined.match_id) };
+    return {
+      roomId: joined.match_id,
+      inviteCode: "",
+      snapshot: await this.#snapshot(joined.match_id),
+    };
   }
 
   async send(message: ClientEnvelope): Promise<void> {
@@ -425,9 +557,11 @@ export class FirstPartyTransport implements LokiTransport {
       version: number;
       state: unknown;
     }>(
-      await this.#client.rpc(this.#requireSession(), "loki_room_snapshot", {
-        matchId: roomId,
-      }),
+      await wrapLokiCall(() =>
+        this.#client.rpc(this.#requireSession(), "loki_room_snapshot", {
+          matchId: roomId,
+        }),
+      ),
     );
     if (!state.ok) throw new Error("room snapshot failed");
     return ServerEnvelopeSchema.parse({

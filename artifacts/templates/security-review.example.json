@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-07T00:00:00.000Z",
+  "reviewer": {
+    "name": "replace-with-second-agent-name",
+    "model": "replace-with-model-id"
+  },
+  "operator": "sanborn.li.hk@gmail.com",
+  "approvedAt": "2026-09-07T00:00:00.000Z",
+  "checklist": {
+    "tenantIsolation": true,
+    "tokensSessions": true,
+    "zipLimits": true,
+    "sandboxCsp": true,
+    "githubWebhooks": true,
+    "nakamaTenantBoundaries": true,
+    "adminAuthorization": true
+  },
+  "evidenceReferences": [
+    "scripts/check-production.ts",
+    "test/nakama.integration.ts",
+    "test/hosting-safety.test.ts"
+  ],
+  "passed": true,
+  "_instructions": [
+    "A second AI agent fills the checklist from code and existing denial tests.",
+    "The operator email must sign; the agent must not self-approve.",
+    "Sentry, Grafana, and named firms do not satisfy this gate."
+  ]
+}

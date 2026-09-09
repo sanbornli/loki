@@ -5,7 +5,12 @@ import {
   type ProjectState,
 } from "../../../packages/protocol/src/index.js";
 import { Pool, type PoolClient } from "pg";
-import type { Deployment, ScanFinding } from "./deployments.js";
+import type {
+  Deployment,
+  ScanFinding,
+  SecurityReviewState,
+  SecurityReviewSummary,
+} from "./deployments.js";
 import type {
   Account,
   AuditRecord,
@@ -21,7 +26,13 @@ export interface OrganizationMembership extends Organization {
 
 export type DeploymentSummary = Pick<
   Deployment,
-  "id" | "projectId" | "contentHash" | "manifest" | "status" | "createdAt"
+  | "id"
+  | "projectId"
+  | "contentHash"
+  | "manifest"
+  | "status"
+  | "securityReview"
+  | "createdAt"
 >;
 
 export interface DashboardProject extends Project {
@@ -110,6 +121,9 @@ type DeploymentRow = {
   files: unknown;
   findings: unknown;
   status: Deployment["status"];
+  security_review_state?: SecurityReviewState | null;
+  security_review_finding_refs?: unknown | null;
+  security_review_last_error?: string | null;
   created_at: Date | string;
 };
 
@@ -130,6 +144,9 @@ type DashboardProjectRow = ProjectRow & {
   latest_deployment_content_hash: string | null;
   latest_deployment_manifest: unknown | null;
   latest_deployment_status: Deployment["status"] | null;
+  latest_security_review_state: SecurityReviewState | null;
+  latest_security_review_finding_refs: unknown | null;
+  latest_security_review_last_error: string | null;
   latest_deployment_created_at: Date | string | null;
 };
 
@@ -174,6 +191,26 @@ const projectFromRow = (row: ProjectRow): Project => ({
   updatedAt: iso(row.updated_at),
 });
 
+const securityReviewFromRow = (row: {
+  security_review_state?: SecurityReviewState | null;
+  security_review_finding_refs?: unknown | null;
+  security_review_last_error?: string | null;
+}): SecurityReviewSummary | undefined => {
+  if (!row.security_review_state) return undefined;
+  const findingRefs = row.security_review_finding_refs ?? [];
+  if (
+    !Array.isArray(findingRefs) ||
+    !findingRefs.every((ref) => typeof ref === "string")
+  ) {
+    throw new Error("invalid security review record");
+  }
+  return {
+    state: row.security_review_state,
+    findingRefs,
+    lastError: row.security_review_last_error ?? undefined,
+  };
+};
+
 const deploymentFromRow = (row: DeploymentRow): Deployment => {
   if (
     !Array.isArray(row.files) ||
@@ -190,6 +227,7 @@ const deploymentFromRow = (row: DeploymentRow): Deployment => {
     files: row.files,
     findings: row.findings as ScanFinding[],
     status: row.status,
+    securityReview: securityReviewFromRow(row),
     createdAt: iso(row.created_at),
   };
 };
@@ -213,6 +251,11 @@ const deploymentSummaryFromProjectRow = (
     contentHash: row.latest_deployment_content_hash,
     manifest: GameManifestSchema.parse(row.latest_deployment_manifest),
     status: row.latest_deployment_status,
+    securityReview: securityReviewFromRow({
+      security_review_state: row.latest_security_review_state,
+      security_review_finding_refs: row.latest_security_review_finding_refs,
+      security_review_last_error: row.latest_security_review_last_error,
+    }),
     createdAt: iso(row.latest_deployment_created_at),
   };
 };
@@ -241,12 +284,21 @@ const projectDashboardSelect = (additionalColumns = "") => `
          latest.content_hash AS latest_deployment_content_hash,
          latest.manifest AS latest_deployment_manifest,
          latest.status AS latest_deployment_status,
+         latest.security_review_state AS latest_security_review_state,
+         latest.security_review_finding_refs AS latest_security_review_finding_refs,
+         latest.security_review_last_error AS latest_security_review_last_error,
          latest.created_at AS latest_deployment_created_at
     FROM projects
     LEFT JOIN deployments ON deployments.project_id = projects.id
     LEFT JOIN LATERAL (
-      SELECT id, project_id, content_hash, manifest, status, created_at
+      SELECT candidate.id, candidate.project_id, candidate.content_hash,
+             candidate.manifest, candidate.status, candidate.created_at,
+             review.state AS security_review_state,
+             review.finding_refs AS security_review_finding_refs,
+             review.last_error AS security_review_last_error
         FROM deployments AS candidate
+        LEFT JOIN security_review_jobs AS review
+          ON review.deployment_id = candidate.id
        WHERE candidate.project_id = projects.id
        ORDER BY candidate.created_at DESC, candidate.id DESC
        LIMIT 1
@@ -307,7 +359,9 @@ export class DashboardService implements DashboardOperations {
             ON organization_members.organization_id = projects.organization_id
            AND organization_members.account_id = $1
          GROUP BY projects.id, latest.id, latest.project_id, latest.content_hash,
-                  latest.manifest, latest.status, latest.created_at
+                  latest.manifest, latest.status, latest.security_review_state,
+                  latest.security_review_finding_refs,
+                  latest.security_review_last_error, latest.created_at
          ORDER BY projects.updated_at DESC, projects.id`,
         [actorId],
       ),
@@ -329,8 +383,12 @@ export class DashboardService implements DashboardOperations {
     projectId: string,
   ): Promise<Deployment[]> {
     const result = await this.pool.query<DeploymentRow>(
-      `SELECT deployments.*
+      `SELECT deployments.*, review.state AS security_review_state,
+              review.finding_refs AS security_review_finding_refs,
+              review.last_error AS security_review_last_error
          FROM deployments
+         LEFT JOIN security_review_jobs AS review
+           ON review.deployment_id = deployments.id
          JOIN projects ON projects.id = deployments.project_id
          JOIN organization_members
            ON organization_members.organization_id = projects.organization_id
@@ -411,7 +469,9 @@ export class DashboardService implements DashboardOperations {
       `${projectDashboardSelect(", organizations.name AS organization_name")}
         JOIN organizations ON organizations.id = projects.organization_id
        GROUP BY projects.id, organizations.name, latest.id, latest.project_id,
-                latest.content_hash, latest.manifest, latest.status, latest.created_at
+                latest.content_hash, latest.manifest, latest.status,
+                latest.security_review_state, latest.security_review_finding_refs,
+                latest.security_review_last_error, latest.created_at
        ORDER BY projects.updated_at DESC, projects.id`,
     );
     return result.rows.map((row) => ({

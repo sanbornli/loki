@@ -9,7 +9,11 @@ import { PostgresDeploymentDedupService } from "./deployment-dedup.js";
 import { DeploymentService } from "./deployments.js";
 import { GitHubAppClient } from "./github-app.js";
 import { PostgresGitHubConnectionService } from "./github-connections.js";
-import { PlayInviteSigner, PostgresHostingAuthorization } from "./hosting-auth.js";
+import {
+  GuestResumeSigner,
+  PlayInviteSigner,
+  PostgresHostingAuthorization,
+} from "./hosting-auth.js";
 import { NakamaGateway } from "./nakama.js";
 import { startObservability } from "./observability.js";
 import {
@@ -17,6 +21,7 @@ import {
   PostgresPlatformService,
 } from "./postgres.js";
 import { R2ArtifactStore } from "./r2.js";
+import { reviewDeploymentFiles } from "./async-security.js";
 import { PostgresSafetyService, SecurityReviewWorker } from "./safety.js";
 import { startApiServer } from "./server.js";
 import { SupabaseAuthVerifier } from "./supabase-auth.js";
@@ -50,14 +55,14 @@ const tokens = new SessionTokenService({
 });
 const platform = new PostgresPlatformService(pool, tokens);
 const safety = new PostgresSafetyService(pool);
+const playInviteKey = environment.LOKI_PLAY_INVITE_KEY
+  ? Buffer.from(environment.LOKI_PLAY_INVITE_KEY, "base64url")
+  : createHash("sha256").update(environment.LOKI_SESSION_PRIVATE_KEY!).digest();
 const hostingAuth = new PostgresHostingAuthorization(
   pool,
-  new PlayInviteSigner(
-    environment.LOKI_PLAY_INVITE_KEY
-      ? Buffer.from(environment.LOKI_PLAY_INVITE_KEY, "base64url")
-      : createHash("sha256").update(environment.LOKI_SESSION_PRIVATE_KEY!).digest(),
-  ),
+  new PlayInviteSigner(playInviteKey),
 );
+const guestResume = new GuestResumeSigner(playInviteKey);
 const dashboard = new DashboardService(pool);
 const deploymentDedup = new PostgresDeploymentDedupService(pool);
 const githubConnections = new PostgresGitHubConnectionService(pool);
@@ -95,16 +100,21 @@ const deployments = new DeploymentService(
   safety,
 );
 const securityWorker = new SecurityReviewWorker(pool, async (deploymentId) => {
-  const result = await pool.query<{ findings: unknown }>(
-    "SELECT findings FROM deployments WHERE id = $1",
+  const result = await pool.query<{ files: string[]; manifest: { networkAllowlist?: string[] } }>(
+    "SELECT files, manifest FROM deployments WHERE id = $1",
     [deploymentId],
   );
-  const findings = result.rows[0]?.findings;
-  if (!Array.isArray(findings)) throw new Error("deployment not found");
-  return {
-    decision: findings.length ? "quarantined" : "approved",
-    evidenceRefs: findings.map((_, index) => `scan-finding:${deploymentId}:${index}`),
-  };
+  const row = result.rows[0];
+  if (!row) throw new Error("deployment not found");
+  const files = new Map<string, Uint8Array>();
+  for (const name of row.files ?? []) {
+    const bytes = await artifacts.get(deploymentId, name);
+    if (bytes) files.set(name, bytes);
+  }
+  if (files.size === 0) {
+    return { decision: "needs_operator", evidenceRefs: [`async-scan:missing-bytes:${deploymentId}`] };
+  }
+  return reviewDeploymentFiles(files, row.manifest?.networkAllowlist ?? []);
 });
 const securityReviewTimer = setInterval(() => {
   void securityWorker.runOne().catch(observability.captureException);
@@ -166,6 +176,7 @@ const server = startApiServer(
     githubAppSlug: environment.LOKI_GITHUB_APP_SLUG,
     githubApp,
     hostingAuth,
+    guestResume,
     safety,
     playableUrl(projectId) {
       return new URL(

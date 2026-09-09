@@ -19,5 +19,7 @@ game manifest allowlist.
 
 `LokiClient` supports rooms, invite resolution, matchmaking, actions, events,
 host state, snapshots, presence, chat, private scores, token refresh, reconnect,
-and host-migration messages. Host authority is suitable for casual/unranked
-games, not ranked anti-cheat.
+and host-migration messages. Loki creates every room and issues the shareable
+invite code. Games call `createRoom()` and `joinRoom({ inviteCode })` and must
+not invent room keys. Host authority is suitable for casual/unranked games, not
+ranked anti-cheat.

@@ -102,8 +102,8 @@ export async function callLokiTool(
   }
   if (name === "integration_requirements") {
     return {
-      packages: ["@lokiplay/sdk@0.1.1", "@lokiplay/ui-web@0.1.1"],
-      command: "npm install @lokiplay/sdk@0.1.1 @lokiplay/ui-web@0.1.1",
+      packages: ["@lokiplay/sdk@0.1.2", "@lokiplay/ui-web@0.1.2"],
+      command: "npm install @lokiplay/sdk@0.1.2 @lokiplay/ui-web@0.1.2",
       apiOrigin: "https://api.lokiplay.cc",
       authority: "host",
       rankedIntegrity: false,
@@ -136,7 +136,7 @@ export async function callLokiTool(
     if (!/@lokiplay\/sdk|FirstPartyTransport|LokiClient/.test(joined)) {
       findings.push({
         code: "SDK_NOT_DETECTED",
-        message: "Install and initialize @lokiplay/sdk@0.1.1.",
+        message: "Install and initialize @lokiplay/sdk@0.1.2.",
       });
     }
     return { ok: findings.length === 0, findings };

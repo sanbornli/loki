@@ -1,0 +1,42 @@
+{
+  "zone": "lokiplay.cc",
+  "host": "api.lokiplay.cc",
+  "rules": [
+    {
+      "name": "account-and-org-create",
+      "expression": "http.host eq \"api.lokiplay.cc\" and http.request.method eq \"POST\" and http.request.uri.path eq \"/v1/organizations\"",
+      "periodSeconds": 3600,
+      "requests": 10
+    },
+    {
+      "name": "project-create",
+      "expression": "http.host eq \"api.lokiplay.cc\" and http.request.method eq \"POST\" and http.request.uri.path eq \"/v1/projects\"",
+      "periodSeconds": 3600,
+      "requests": 20
+    },
+    {
+      "name": "device-authorization",
+      "expression": "http.host eq \"api.lokiplay.cc\" and http.request.uri.path matches \"^/v1/cli/device\"",
+      "periodSeconds": 60,
+      "requests": 60
+    },
+    {
+      "name": "session-minting",
+      "expression": "http.host eq \"api.lokiplay.cc\" and http.request.method eq \"POST\" and (http.request.uri.path eq \"/v1/player-sessions\" or http.request.uri.path eq \"/v1/nakama-session\")",
+      "periodSeconds": 60,
+      "requests": 60
+    },
+    {
+      "name": "deployments",
+      "expression": "http.host eq \"api.lokiplay.cc\" and http.request.method eq \"POST\" and http.request.uri.path contains \"/v1/deployments\"",
+      "periodSeconds": 3600,
+      "requests": 20
+    },
+    {
+      "name": "github-webhooks",
+      "expression": "http.host eq \"api.lokiplay.cc\" and http.request.uri.path in {\"/v1/github/webhooks\" \"/v1/github/callback\"}",
+      "periodSeconds": 60,
+      "requests": 300
+    }
+  ]
+}

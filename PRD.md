@@ -391,9 +391,9 @@ A live Nakama/PostgreSQL prototype kept two games isolated, rejected forged
 game identity and cross-game room access, migrated the host, rejected stale
 updates, kept matchmaking game-specific, and supported an eight-player room at
 approximately nine updates per second. This is a conditional approval for the
-MVP architecture. Sustained 16-player load, reconnect storms, database/Nakama
-restart recovery, regional latency, and production cost must still pass before
-public launch.
+MVP architecture. Sustained 8-player rooms across 20 concurrent games, fail-closed
+Nakama restart (old rooms die; new rooms work), database restore, regional
+latency, and production cost must still pass before public launch.
 
 Session types in MVP:
 

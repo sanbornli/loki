@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import {
   CostMeasurementSchema,
+  MASTER_OPERATOR_EMAIL,
+  OperatorSecurityReviewSchema,
   PilotMatrixSchema,
 } from "./release-evidence.js";
 
@@ -33,6 +35,12 @@ const Evidence = z.object({
   evidenceFile: z.string().min(1),
   evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/),
   notes: z.string().min(1).optional(),
+  operator: z
+    .object({
+      email: z.literal(MASTER_OPERATOR_EMAIL),
+      approvedAt: z.string().datetime({ offset: true }),
+    })
+    .optional(),
   external: z
     .object({
       organization: z.string().min(1),
@@ -77,11 +85,19 @@ function validateTypedEvidence(gate: string, bytes: Buffer): void {
     const load = z
       .object({
         passed: z.literal(true),
+        target: z.object({
+          playersPerRoom: z.literal(8),
+          rooms: z.number().int().min(20),
+          updatesPerSecond: z.number().min(5).max(10),
+          durationSeconds: z.number().min(600),
+        }),
         measurements: z.object({
           recovery: z.union([
             z.object({
               attempted: z.literal(true),
-              ratio: z.number().min(0.95),
+              mode: z.literal("fail-closed"),
+              oldRoomsDead: z.literal(true),
+              newRoomUpdatesOk: z.literal(true),
               durationMs: z.number().max(60_000),
             }),
             z.object({ attempted: z.literal(false) }),
@@ -108,6 +124,9 @@ function validateTypedEvidence(gate: string, bytes: Buffer): void {
     }
   }
   if (gate === "cost") CostMeasurementSchema.parse(value);
+  if (gate === "external-security-review") {
+    OperatorSecurityReviewSchema.parse(value);
+  }
   if (gate === "package-registry-install") {
     z.object({ mode: z.literal("registry"), passed: z.literal(true) }).parse(
       value,
@@ -162,11 +181,17 @@ export async function verifyReleaseGates(
     ) {
       failures.push(`${gate}: evidence is future-dated or older than ${options.maxAgeDays ?? 30} days`);
     }
-    if (
-      (gate === "external-security-review" ||
-        gate === "external-legal-review") &&
-      !entry.external
-    ) {
+    if (gate === "external-security-review") {
+      if (
+        !entry.operator ||
+        entry.operator.email !== MASTER_OPERATOR_EMAIL
+      ) {
+        failures.push(
+          `${gate}: operator attestation from ${MASTER_OPERATOR_EMAIL} is required`,
+        );
+      }
+    }
+    if (gate === "external-legal-review" && !entry.external) {
       failures.push(`${gate}: independent reviewer evidence is required`);
     }
     try {

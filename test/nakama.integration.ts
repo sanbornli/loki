@@ -8,6 +8,7 @@ import {
   type Socket,
 } from "@heroiclabs/nakama-js";
 import WebSocket from "ws";
+import { ServerEnvelopeSchema } from "../packages/protocol/src/index.js";
 
 globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket;
 
@@ -214,6 +215,7 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   const roomA = await rpc<{
     matchId: string;
     projectId: string;
+    roomKey: string;
     inviteCode: string;
     inviteExpiresAt: number;
     maxPlayers: number;
@@ -222,26 +224,64 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   }>(
     a1,
     "loki_create_room",
-    { roomKey: "shared-room", projectId: "game-b" },
+    { projectId: "game-b" },
   );
-  const roomB = await rpc<{ matchId: string; projectId: string }>(
+  const roomB = await rpc<{
+    matchId: string;
+    projectId: string;
+    roomKey: string;
+    inviteCode: string;
+  }>(
     b1,
     "loki_create_room",
-    { roomKey: "shared-room", projectId: "game-a" },
+    { projectId: "game-a" },
   );
   assert.equal(roomA.projectId, "game-a");
   assert.equal(roomB.projectId, "game-b");
   assert.notEqual(roomA.matchId, roomB.matchId);
+  assert.notEqual(roomA.roomKey, roomB.roomKey);
+  assert.match(roomA.roomKey, /^[a-z0-9-]{1,64}$/);
   assert.equal(roomA.maxPlayers, 16);
   assert.equal(roomA.tickRate, 5);
   assert.equal(roomA.visibility, "matchmaking");
   assert.ok(roomA.inviteExpiresAt > Date.now());
 
-  const secondInvite = await rpc<{ inviteCode: string }>(
+  const joinedRoomA = await rpc<{ matchId: string; projectId: string }>(
+    a2,
+    "loki_join_room",
+    { inviteCode: roomA.inviteCode },
+  );
+  const joinedRoomB = await rpc<{ matchId: string; projectId: string }>(
+    b2,
+    "loki_join_room",
+    { inviteCode: roomB.inviteCode },
+  );
+  assert.equal(joinedRoomA.matchId, roomA.matchId);
+  assert.equal(joinedRoomA.projectId, "game-a");
+  assert.equal(joinedRoomB.matchId, roomB.matchId);
+  assert.equal(joinedRoomB.projectId, "game-b");
+  const secondCreate = await rpc<{ matchId: string }>(a2, "loki_create_room", {});
+  assert.notEqual(secondCreate.matchId, roomA.matchId);
+  const reconnectRoom = await rpc<{ matchId: string; inviteCode: string }>(
     a1,
     "loki_create_room",
-    { roomKey: "invite-uniqueness" },
+    {},
   );
+  await a1.socket.joinMatch(reconnectRoom.matchId);
+  await a1.socket.leaveMatch(reconnectRoom.matchId);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const reconnectExisting = await rpc<{ matchId: string }>(
+    a3,
+    "loki_join_room",
+    { inviteCode: reconnectRoom.inviteCode },
+  );
+  assert.equal(reconnectExisting.matchId, reconnectRoom.matchId);
+  await a3.socket.joinMatch(reconnectRoom.matchId);
+  await assert.rejects(
+    rpc(a2, "loki_join_room", { inviteCode: "missing-room" }),
+  );
+
+  const secondInvite = await rpc<{ inviteCode: string }>(a1, "loki_create_room", {});
   assert.match(roomA.inviteCode, /^[A-F0-9]{16}$/);
   assert.notEqual(secondInvite.inviteCode, roomA.inviteCode);
 
@@ -259,6 +299,29 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   await Promise.all(
     gameAUsers.slice(1).map((user) => user.socket.joinMatch(roomA.matchId)),
   );
+  const [delayedJoinSnapshot, delayedHostPresence] = await Promise.all([
+    nextMatchData(
+      a2,
+      roomA.matchId,
+      13,
+      (message) => message.type === "snapshot",
+    ),
+    nextMatchData(
+      a1,
+      roomA.matchId,
+      13,
+      (message) =>
+        message.type === "presence" &&
+        Array.isArray(message.members) &&
+        message.members.length === 8,
+    ),
+  ]);
+  assert.equal(
+    (delayedHostPresence.members as unknown[]).length,
+    8,
+  );
+  ServerEnvelopeSchema.parse(delayedHostPresence);
+  assert.equal(delayedJoinSnapshot.hostId, a1.session.user_id);
   await assert.rejects(
     b1.socket.joinMatch(roomA.matchId),
     (error: unknown) =>
@@ -304,7 +367,7 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   assert.deepEqual(updated, {
     ok: true,
     projectId: "game-a",
-    roomKey: "shared-room",
+    roomKey: roomA.roomKey,
     hostId: a1.session.user_id,
     version: 1,
     state: { tick: 1 },
@@ -388,6 +451,28 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   const stateEnvelope = await statePromise;
   assert.equal(stateEnvelope.hostId, a1.session.user_id);
   assert.deepEqual(stateEnvelope.state, { tick: 52, authoritative: true });
+  const alignedVersion = await rpc<{ version: number }>(
+    a1,
+    "loki_room_snapshot",
+    { matchId: roomA.matchId },
+  );
+  assert.equal(alignedVersion.version, stateEnvelope.sequence);
+
+  const driftedStatePromise = nextMatchData(
+    a2,
+    roomA.matchId,
+    12,
+    (message) =>
+      message.type === "state" &&
+      Boolean((message.state as { drifted?: boolean } | undefined)?.drifted),
+  );
+  await sendEnvelope(a1, roomA.matchId, 12, 2, {
+    type: "host_state",
+    expectedVersion: stateEnvelope.sequence + 4,
+    state: { tick: 53, drifted: true },
+  });
+  const driftedState = await driftedStatePromise;
+  assert.deepEqual(driftedState.state, { tick: 53, drifted: true });
 
   const nonHostErrorPromise = nextMatchData(
     a2,
@@ -414,8 +499,8 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   const realtimeSnapshot = await snapshotPromise;
   assert.equal(realtimeSnapshot.hostId, a1.session.user_id);
   assert.deepEqual(realtimeSnapshot.state, {
-    tick: 52,
-    authoritative: true,
+    tick: 53,
+    drifted: true,
   });
 
   const chatPromise = nextMatchData(
@@ -515,8 +600,8 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   const reconnectSnapshot = await reconnectMessage;
   assert.equal(reconnectSnapshot.hostId, a1.session.user_id);
   assert.deepEqual(reconnectSnapshot.state, {
-    tick: 52,
-    authoritative: true,
+    tick: 53,
+    drifted: true,
   });
 
   const hostChangedPromise = nextMatchData(
@@ -537,7 +622,7 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
     { matchId: roomA.matchId },
   );
   assert.equal(migrated.hostId, hostChanged.hostId);
-  assert.equal(migrated.version, 52);
+  assert.equal(migrated.version, driftedState.sequence);
 
   const matchmakingUsers = [a1, a2, b1, b2];
   const matchedPromises = matchmakingUsers.map(nextMatch);
@@ -590,7 +675,7 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   await provisionTenant(b1.session.user_id!, "game-b", {
     concurrentRoomQuota: 1,
   });
-  await assert.rejects(rpc(b1, "loki_create_room", { roomKey: "over-quota" }));
+  await assert.rejects(rpc(b1, "loki_create_room", {}));
 
   const suspendedPromise = nextMatchData(
     a2,

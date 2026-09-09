@@ -3,7 +3,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { DeploymentService } from "../apps/api/src/deployments.js";
-import { PlayInviteSigner } from "../apps/api/src/hosting-auth.js";
+import { GuestResumeSigner, PlayInviteSigner } from "../apps/api/src/hosting-auth.js";
 import { PlatformService } from "../apps/api/src/platform.js";
 import { startApiServer } from "../apps/api/src/server.js";
 
@@ -33,6 +33,57 @@ test("creator transitions cannot publish without operator review", () => {
   assert.throws(
     () => platform.transitionProject(creator.account.id, project.id, "published"),
     /publication is closed/i,
+  );
+});
+
+test("guest player sessions resume the same identity from a signed cookie", async (t) => {
+  const platform = new PlatformService();
+  const creator = platform.registerCreator("creator@example.test", "Studio");
+  const project = platform.createProject(
+    creator.account.id,
+    creator.organization.id,
+    { name: "Public Game", slug: "public-game" },
+  );
+  platform.transitionProject(creator.account.id, project.id, "private");
+  platform.transitionProject(creator.account.id, project.id, "unlisted");
+  platform.setActiveDeployment(creator.account.id, project.id, crypto.randomUUID());
+  const guestResume = new GuestResumeSigner(Buffer.alloc(32, 9));
+  const server = startApiServer({
+    platform,
+    deployments: new DeploymentService(platform),
+    guestResume,
+    async authenticateCreator() {
+      return creator.account.id;
+    },
+    async authenticatePlayer() {
+      return undefined;
+    },
+  }, 0);
+  t.after(() => server.close());
+  await once(server, "listening");
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const first = await fetch(`${origin}/v1/player-sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectId: project.id }),
+  });
+  assert.equal(first.status, 201);
+  const cookie = first.headers.get("set-cookie");
+  assert.match(cookie ?? "", new RegExp(`loki_guest_${project.id}=`));
+  const firstToken = ((await first.json()) as { token: string }).token;
+  const second = await fetch(`${origin}/v1/player-sessions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: cookie!.split(";", 1)[0]!,
+    },
+    body: JSON.stringify({ projectId: project.id, playerId: crypto.randomUUID() }),
+  });
+  assert.equal(second.status, 201);
+  const secondToken = ((await second.json()) as { token: string }).token;
+  assert.equal(
+    platform.tokens.verify(firstToken).subject,
+    platform.tokens.verify(secondToken).subject,
   );
 });
 

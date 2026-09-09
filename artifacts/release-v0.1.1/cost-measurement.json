@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-08T07:00:00.000Z",
+  "currency": "USD",
+  "windowHours": 744,
+  "activePlayerHours": 26.666666666666668,
+  "activeMatchHours": 3.3333333333333335,
+  "costs": {
+    "compute": 0.5932829508840741,
+    "database": 0,
+    "objectStorage": 0,
+    "bandwidth": 0.0286230955,
+    "monitoring": 0,
+    "other": 5
+  },
+  "sourceReferences": [
+    "railway usage --period previous --json (2026-08-08T05:21:17Z to 2026-09-08T05:21:17Z; $0.6219 metered)",
+    "Railway Hobby subscription $5/month on workspace Lokiplay",
+    "artifacts/release-v0.1.1/load-recovery.json (8 players x 20 rooms x 10 minutes)",
+    "Supabase and R2 invoices absent; unpriced usage recorded as 0"
+  ]
+}

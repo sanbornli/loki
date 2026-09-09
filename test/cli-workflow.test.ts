@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import {
   detectFramework,
   detectOutputDirectory,
   detectPackageManager,
+  isDirectExecution,
   selectBuildScript,
 } from "../packages/cli/src/index.js";
 
@@ -20,6 +22,22 @@ async function fixture(
   );
   return directory;
 }
+
+test("recognizes npm-style symlink as direct CLI execution", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "lokiplay-bin-"));
+  const executable = path.join(directory, "dist", "index.js");
+  const binDirectory = path.join(directory, "node_modules", ".bin");
+  const binPath = path.join(binDirectory, "lokiplay");
+  try {
+    await mkdir(path.dirname(executable), { recursive: true });
+    await mkdir(binDirectory, { recursive: true });
+    await writeFile(executable, "#!/usr/bin/env node\n");
+    await symlink(path.relative(binDirectory, executable), binPath);
+    assert.equal(isDirectExecution(pathToFileURL(executable).href, binPath), true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("detects package managers from lockfiles and rejects ambiguity", async () => {
   const directory = await fixture({ scripts: { build: "vite build" } });

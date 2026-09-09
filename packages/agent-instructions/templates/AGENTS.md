@@ -10,6 +10,8 @@
   migration.
 - Never trust or override the `projectId`, player identity, room membership, or
   sequence returned by Loki.
+- Create rooms with `createRoom()` and join with `joinRoom({ inviteCode })`.
+  Games must not invent Loki room keys.
 - Keep game state JSON-compatible and use finite safe integers.
 - Handle reconnect snapshots, host changes, stale-update errors, and focus
   release when the Loki overlay opens.

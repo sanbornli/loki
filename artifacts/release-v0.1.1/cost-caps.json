@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-08T06:59:13.716Z",
+  "currency": "USD",
+  "assumptions": {
+    "monthlyBudget": 25,
+    "reserveRatio": 0.5,
+    "usableBudget": 12.5,
+    "playerHoursPerAccount": 10,
+    "matchHoursPerAccount": 2
+  },
+  "measured": {
+    "total": 5.621906046384074,
+    "costPerPlayerHour": 0.21082147673940277,
+    "costPerMatchHour": 1.6865718139152222
+  },
+  "recommendedPublicFreeAccounts": 2,
+  "projectedCostPerAccount": 5.481358395224472,
+  "policy": "Zero is returned for unpriced usage; do not infer unlimited capacity."
+}

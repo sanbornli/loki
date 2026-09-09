@@ -78,7 +78,7 @@ export class NakamaGateway {
     return {
       token: session.token,
       refreshToken: session.refresh_token,
-      playerId: claims.subject,
+      playerId: nakamaClaims.uid,
       projectId: claims.projectId,
     };
   }

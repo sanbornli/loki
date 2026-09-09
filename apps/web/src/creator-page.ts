@@ -335,6 +335,33 @@ const creatorStyles = `
   gap: 0.65rem;
 }
 
+.integration-prompt {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--line);
+}
+
+.integration-prompt h6 {
+  margin: 0 0 0.65rem;
+  color: var(--quiet);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.integration-prompt pre {
+  overflow-x: auto;
+  margin: 0;
+  padding: clamp(0.9rem, 2vw, 1.25rem);
+  border: 1px solid var(--line);
+  background: var(--ink);
+  color: var(--muted);
+  font: 0.68rem/1.65 var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .integration-status {
   display: grid;
   gap: 0.7rem;
@@ -625,8 +652,8 @@ const creatorScript = String.raw`
     const TOKEN_KEY = "loki.creator.access-token";
     const allowedTransitions = {
       draft: ["private"],
-      private: ["draft", "unlisted", "review_requested"],
-      unlisted: ["private", "review_requested"],
+      private: ["draft", "unlisted"],
+      unlisted: ["private"],
       review_requested: ["private"],
       published: ["unlisted"],
       suspended: []
@@ -875,7 +902,7 @@ const creatorScript = String.raw`
       }));
       const pill = element("span", {
         className: "pill",
-        text: text(project && project.state, "draft").replaceAll("_", " ")
+        text: projectStateLabel(project && project.state)
       });
       pill.dataset.state = text(project && project.state, "draft");
       top.append(titleGroup, pill);
@@ -987,7 +1014,12 @@ const creatorScript = String.raw`
       }
       playableRow.appendChild(playableValue);
       statusList.appendChild(playableRow);
-      integrationPanel.append(integrationCopy, statusList);
+
+      const promptPreview = element("section", { className: "integration-prompt" });
+      promptPreview.setAttribute("aria-label", "Full agent prompt");
+      promptPreview.appendChild(element("h6", { text: "Full agent prompt" }));
+      promptPreview.appendChild(element("pre", { text: agentPrompt(project) }));
+      integrationPanel.append(integrationCopy, statusList, promptPreview);
 
       const historyPanel = element("section", { className: "tool-panel", hidden: true });
       historyPanel.appendChild(element("h4", { text: "Immutable history" }));
@@ -1032,13 +1064,41 @@ const creatorScript = String.raw`
     }
 
     function deploymentStatus(project) {
+      const deployment = project && project.latestDeployment;
+      if (deployment) return securityReviewStatus(deployment, project);
       return text(
-        project && (
-          project.deploymentStatus ||
-          (project.latestDeployment && project.latestDeployment.status)
-        ),
+        project && project.deploymentStatus,
         project && project.activeDeploymentId ? "Active" : "Not deployed"
       ).replaceAll("_", " ");
+    }
+
+    function securityReviewStatus(deployment, project) {
+      const reviewState = text(
+        deployment && deployment.securityReview && deployment.securityReview.state,
+        ""
+      );
+      if (reviewState === "pending") return "Security scan queued";
+      if (reviewState === "running") return "Security scan in progress";
+      if (reviewState === "needs_operator") {
+        return "Needs an operator; approval will activate it automatically";
+      }
+      if (reviewState === "failed") return "Security scan is retrying";
+      if (
+        reviewState === "quarantined" ||
+        (deployment && deployment.status === "quarantined") ||
+        (deployment && deployment.status === "blocked")
+      ) {
+        return "Rejected by security review";
+      }
+      if (
+        reviewState === "approved" ||
+        (deployment && ["ready", "ready_with_warnings"].includes(deployment.status))
+      ) {
+        return project && project.activeDeploymentId === deployment.id
+          ? "Passed and publicly playable"
+          : "Passed security review";
+      }
+      return "Security review status unavailable";
     }
 
     function latestPlayableUrl(project) {
@@ -1060,8 +1120,12 @@ const creatorScript = String.raw`
           productConfig.lokiplayVersion ||
           productConfig.packageVersion
         ),
-        "0.1.1"
+        "0.1.2"
       );
+    }
+
+    function configuredCliVersion() {
+      return text(productConfig && productConfig.cliVersion, "0.1.2");
     }
 
     function agentPrompt(project) {
@@ -1069,6 +1133,7 @@ const creatorScript = String.raw`
       const projectName = text(project && project.name, "Untitled project");
       const projectSlug = text(project && project.slug, "project");
       const version = configuredPackageVersion();
+      const cliVersion = configuredCliVersion();
       const apiUrl = String(productConfig.apiOrigin || "").replace(/\/+$/, "");
       const playerUrl = new URL(
         "/play/" + encodeURIComponent(projectId),
@@ -1083,30 +1148,41 @@ const creatorScript = String.raw`
         "- Slug: " + projectSlug,
         "- Project ID: " + projectId,
         "- Loki package version: " + version,
+        "- Loki CLI version: " + cliVersion,
         "- Canonical API URL: " + apiUrl,
         "- Canonical player URL: " + playerUrl,
         "",
-        "Use only the official packages and pin the exact version shown above:",
-        "- CLI: lokiplay@" + version,
+        "Package installation and creator authentication are separate. Package installation is public and must not require Loki credentials. Creator authentication happens only through the Loki CLI device flow.",
+        "",
+        "Use only the official public packages and pin the exact version shown above:",
+        "- CLI: lokiplay@" + cliVersion,
         "- Runtime SDK: @lokiplay/sdk@" + version,
         "- Optional web UI: @lokiplay/ui-web@" + version,
         "- Protocol package: @lokiplay/protocol@" + version + " (only if the SDK or existing repository directly requires it)",
-        "- Agent instructions: @lokiplay/agent-instructions@" + version,
         "- MCP package: @lokiplay/mcp@" + version + " (tooling only; never ship it in the game bundle)",
         "Do not install or import @loki/*, any unofficial package named loki, or @heroiclabs/nakama-js.",
+        "Before implementation, verify the required public packages are available from the registry:",
+        "   npm view @lokiplay/sdk@" + version + " version",
+        "   npm view lokiplay@" + cliVersion + " version",
+        "Stop and report the failing command if either exact version is unavailable. Do not substitute a local workspace, git dependency, tarball, unpublished package, or different version.",
         "",
         "Repository inspection and implementation",
         "1. Inspect the repository before changing it: identify its package manager, framework, entry points, existing multiplayer/game-state architecture, scripts, and browser production output directory.",
-        "2. Preserve the existing stack and UI. Add the smallest complete Loki integration using @lokiplay/sdk; add @lokiplay/ui-web only when the repository needs Loki-provided UI.",
+        "2. Preserve the existing stack and UI. Install the exact public @lokiplay/sdk version with the repository's package manager and add the smallest complete Loki integration; add @lokiplay/ui-web only when the repository needs Loki-provided UI.",
         "3. Ensure the finished browser build contains game.json, index.html, and all required static assets. Do not ship source-only output, backend processes, secrets, creator ad scripts, or localhost dependencies.",
         "4. Use the repository's own install, typecheck, test, lint, and production-build commands. Fix integration-caused failures and verify the built output, not only source code.",
-        "5. Connect this exact project, then ship from the repository:",
-        "   npx lokiplay@" + version + " connect --project " + projectId,
-        "   npx lokiplay@" + version + " ship",
+        "5. Before connecting or shipping, ask the user to authorize creator access. After approval, run the device login command and give the user its displayed URL and code so they can sign in and approve this terminal:",
+        "   LOKI_API_URL=" + apiUrl + " npx lokiplay@" + cliVersion + " login",
+        "6. After the CLI reports \"Logged in\", connect this exact project. This verifies that the authenticated creator can access the project and writes only the non-secret project link to the repository:",
+        "   npx lokiplay@" + cliVersion + " connect --project " + projectId,
+        "7. Ship the finished build:",
+        "   npx lokiplay@" + cliVersion + " ship",
+        "Never ask the user to paste an access token or deployment credential. If login, ownership verification, or deployment fails, report the exact non-secret error and stop rather than bypassing authentication.",
         "",
         "Host-authoritative requirements",
         "- Loki owns identity, project and tenant boundaries, room membership, matchmaking, event sequencing, snapshots, and host migration.",
         "- Never trust, replace, or override the projectId, player identity, membership, host assignment, sequence, or snapshots returned by Loki.",
+        "- Create rooms with createRoom() and join with joinRoom({ inviteCode }). Do not invent Loki room keys or pass player-typed codes to createRoom.",
         "- Clients submit intents; the current host validates and applies authoritative state changes. Do not create a parallel authoritative backend or direct Nakama integration.",
         "- Keep replicated state JSON-compatible and use finite safe integers.",
         "- Handle reconnect snapshots, host changes, stale-update errors, disconnects, and focus release when the Loki overlay opens.",
@@ -1243,7 +1319,7 @@ const creatorScript = String.raw`
         }));
         const status = element("span", {
           className: "pill",
-          text: text(deployment && deployment.status, "unknown").replaceAll("_", " ")
+          text: securityReviewStatus(deployment, project)
         });
         status.dataset.state = text(deployment && deployment.status, "unknown");
         heading.appendChild(status);
@@ -1252,6 +1328,10 @@ const creatorScript = String.raw`
           className: "deployment-meta",
           text: formatDate(deployment && deployment.createdAt) +
             (project && project.activeDeploymentId === id ? " · ACTIVE RELEASE" : " · IMMUTABLE")
+        }));
+        item.appendChild(element("p", {
+          className: "deployment-meta",
+          text: securityReviewStatus(deployment, project)
         }));
         item.appendChild(element("p", {
           className: "deployment-hash",
@@ -1269,47 +1349,9 @@ const creatorScript = String.raw`
           }
           item.appendChild(findingList);
         }
-        if (
-          project &&
-          project.activeDeploymentId !== id &&
-          deployment &&
-          deployment.status !== "blocked"
-        ) {
-          const activateButton = element("button", {
-            className: "button button-quiet",
-            text: "Activate this release",
-            type: "button"
-          });
-          activateButton.addEventListener("click", () =>
-            activateDeployment(project.id, id, activateButton)
-          );
-          item.appendChild(activateButton);
-        }
         list.appendChild(item);
       }
       container.appendChild(list);
-    }
-
-    async function activateDeployment(projectId, deploymentId, button) {
-      button.disabled = true;
-      setGlobalStatus("Activating immutable release…", true);
-      try {
-        await api(
-          "/v1/projects/" + encodeURIComponent(projectId) +
-            "/deployments/" + encodeURIComponent(deploymentId) + "/activate",
-          { method: "POST" }
-        );
-        state.deployments.delete(projectId);
-        await loadOverview({ quiet: true });
-        setGlobalStatus("Release activated.", false);
-        window.setTimeout(() => setGlobalStatus("", false), 2400);
-      } catch (error) {
-        button.disabled = false;
-        setGlobalStatus(
-          error instanceof Error ? error.message : "Could not activate release.",
-          false
-        );
-      }
     }
 
     async function transitionProject(projectId, next, button) {
@@ -1348,11 +1390,17 @@ const creatorScript = String.raw`
       const labels = {
         draft: "Return to draft",
         private: "Make private",
-        unlisted: "Make unlisted",
+        unlisted: "Make public",
         review_requested: "Request review",
         published: "Publish"
       };
       return labels[next] || next.replaceAll("_", " ");
+    }
+
+    function projectStateLabel(value) {
+      const projectState = text(value, "draft");
+      if (projectState === "unlisted") return "Public";
+      return projectState.replaceAll("_", " ");
     }
 
     function slugify(value) {
@@ -1531,6 +1579,10 @@ const creatorScript = String.raw`
     });
 
     logoutButton.addEventListener("click", () => signOut(""));
+
+    if (window.location.pathname === "/signup") {
+      setAuthMode("signup");
+    }
 
     if (state.token) {
       loadOverview();

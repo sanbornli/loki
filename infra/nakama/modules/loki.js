@@ -6,6 +6,7 @@ var TENANT_COLLECTION = "_loki_tenants";
 var TENANT_KEY = "membership";
 var PROJECT_COLLECTION = "_loki_projects";
 var INVITE_COLLECTION = "_loki_invites";
+var ROOM_KEY_COLLECTION = "_loki_room_keys";
 var DEFAULT_MAX_PLAYERS = 16;
 var DEFAULT_TICK_RATE = 5;
 var DEFAULT_INVITE_TTL_SECONDS = 900;
@@ -15,6 +16,7 @@ var MAX_CHAT_BYTES = 500;
 var MESSAGE_RATE_LIMIT = 20;
 var CHAT_RATE_LIMIT = 5;
 var CHAT_RATE_WINDOW_MS = 10000;
+var EMPTY_ROOM_GRACE_SECONDS = 30;
 
 var OP_ACTION = 10;
 var OP_EVENT = 11;
@@ -52,6 +54,18 @@ var integerInRange = function (value, minimum, maximum) {
 
 var validRoomKey = function (value) {
   return typeof value === "string" && /^[a-z0-9-]{1,64}$/.test(value);
+};
+
+var allocateRoomKey = function (nk) {
+  return nk.uuidv4().replace(/-/g, "");
+};
+
+var normalizeInviteCode = function (value) {
+  return typeof value === "string" ? value.toUpperCase() : "";
+};
+
+var validInviteCode = function (value) {
+  return /^[A-F0-9]{16}$/.test(value);
 };
 
 var validLeaderboardId = function (value) {
@@ -251,6 +265,51 @@ var activeRoomCount = function (nk, projectId, quota) {
   return matches ? matches.length : 0;
 };
 
+var findRoomByKey = function (nk, projectId, roomKey) {
+  var records = nk.storageRead([
+    { collection: ROOM_KEY_COLLECTION, key: projectId + ":" + roomKey },
+  ]);
+  return records && records.length === 1 && records[0].value
+    ? records[0].value
+    : null;
+};
+
+var indexRoomKey = function (nk, projectId, roomKey, matchId) {
+  nk.storageWrite([
+    {
+      collection: ROOM_KEY_COLLECTION,
+      key: projectId + ":" + roomKey,
+      value: { matchId: matchId, projectId: projectId, roomKey: roomKey },
+      version: "*",
+      permissionRead: 0,
+      permissionWrite: 0,
+    },
+  ]);
+};
+
+var releaseRoomKey = function (nk, state) {
+  var records = nk.storageRead([
+    {
+      collection: ROOM_KEY_COLLECTION,
+      key: state.projectId + ":" + state.roomKey,
+    },
+  ]);
+  if (
+    records &&
+    records.length === 1 &&
+    records[0].value &&
+    records[0].value.matchId === state.roomId
+  ) {
+    nk.storageDelete([
+      {
+        collection: ROOM_KEY_COLLECTION,
+        key: state.projectId + ":" + state.roomKey,
+        version: records[0].version,
+      },
+    ]);
+  }
+};
+
 var createInvite = function (nk, matchId, projectId, ttlSeconds) {
   var expiresAt = nowMs() + ttlSeconds * 1000;
   for (var attempt = 0; attempt < 8; attempt += 1) {
@@ -293,24 +352,39 @@ var roomParams = function (projectId, roomKey, creatorId, config, source) {
 
 var rpcCreateRoom = function (ctx, logger, nk, payload) {
   if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
-  var input = parsePayload(payload);
-  if (!validRoomKey(input.roomKey)) {
-    throw codedError("INVALID_MESSAGE", "invalid room key");
-  }
+  parsePayload(payload);
   var projectId = tenantForUser(nk, ctx.userId);
   var config = requireActiveProject(nk, projectId);
   if (activeRoomCount(nk, projectId, config.concurrentRoomQuota) >= config.concurrentRoomQuota) {
     throw codedError("QUOTA_EXCEEDED", "concurrent room quota exceeded");
   }
-  var params = roomParams(projectId, input.roomKey, ctx.userId, config, "rpc");
-  var matchId = nk.matchCreate(MATCH_NAME, params);
+  var roomKey = "";
+  var matchId = "";
+  var params = null;
+  var indexed = false;
+  for (var attempt = 0; attempt < 8; attempt += 1) {
+    roomKey = allocateRoomKey(nk);
+    if (findRoomByKey(nk, projectId, roomKey)) continue;
+    params = roomParams(projectId, roomKey, ctx.userId, config, "rpc");
+    matchId = nk.matchCreate(MATCH_NAME, params);
+    try {
+      indexRoomKey(nk, projectId, roomKey, matchId);
+      indexed = true;
+      break;
+    } catch (_) {
+      // A generated-key collision is retried with a new opaque identifier.
+    }
+  }
+  if (!indexed || !params) {
+    throw codedError("SERVICE_UNAVAILABLE", "room allocation failed");
+  }
   var invite = createInvite(nk, matchId, projectId, config.inviteTtlSeconds);
   return JSON.stringify({
     ok: true,
     code: "OK",
     matchId: matchId,
     projectId: projectId,
-    roomKey: input.roomKey,
+    roomKey: roomKey,
     inviteCode: invite.inviteCode,
     inviteExpiresAt: invite.expiresAt,
     maxPlayers: params.maxPlayers,
@@ -320,14 +394,7 @@ var rpcCreateRoom = function (ctx, logger, nk, payload) {
   });
 };
 
-var rpcResolveInvite = function (ctx, logger, nk, payload) {
-  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
-  var input = parsePayload(payload);
-  var inviteCode =
-    typeof input.inviteCode === "string" ? input.inviteCode.toUpperCase() : "";
-  if (!/^[A-F0-9]{16}$/.test(inviteCode)) {
-    throw codedError("INVITE_INVALID", "invalid invite code");
-  }
+var readInvite = function (nk, inviteCode) {
   var objects = nk.storageRead([
     { collection: INVITE_COLLECTION, key: inviteCode },
   ]);
@@ -345,6 +412,40 @@ var rpcResolveInvite = function (ctx, logger, nk, payload) {
     }
     throw codedError("INVITE_EXPIRED", "invite expired");
   }
+  return invite;
+};
+
+var rpcJoinRoom = function (ctx, logger, nk, payload) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  var inviteCode = normalizeInviteCode(input.inviteCode);
+  if (!validInviteCode(inviteCode)) {
+    throw codedError("INVITE_INVALID", "invalid invite code");
+  }
+  var invite = readInvite(nk, inviteCode);
+  var projectId = tenantForUser(nk, ctx.userId);
+  if (invite.projectId !== projectId) {
+    throw codedError("TENANT_MISMATCH", "tenant mismatch");
+  }
+  requireActiveProject(nk, projectId);
+  return JSON.stringify({
+    ok: true,
+    code: "OK",
+    matchId: invite.matchId,
+    projectId: projectId,
+    inviteCode: inviteCode,
+    expiresAt: invite.expiresAt,
+  });
+};
+
+var rpcResolveInvite = function (ctx, logger, nk, payload) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  var inviteCode = normalizeInviteCode(input.inviteCode);
+  if (!validInviteCode(inviteCode)) {
+    throw codedError("INVITE_INVALID", "invalid invite code");
+  }
+  var invite = readInvite(nk, inviteCode);
   var projectId = tenantForUser(nk, ctx.userId);
   if (invite.projectId !== projectId) {
     throw codedError("TENANT_MISMATCH", "tenant mismatch");
@@ -460,7 +561,9 @@ var memberPresence = function (userId, member, hostId) {
     joinedAt: member.joinedAt,
     host: userId === hostId,
   };
-  if (member.team !== undefined) result.team = member.team;
+  if (integerInRange(member.team, 0, DEFAULT_MAX_PLAYERS)) {
+    result.team = member.team;
+  }
   return result;
 };
 
@@ -513,6 +616,27 @@ var snapshotFields = function (state) {
     hostId: state.hostId,
     state: state.sharedState,
   };
+};
+
+var hasSharedState = function (state) {
+  return Boolean(
+    state.sharedState &&
+      typeof state.sharedState === "object" &&
+      Object.keys(state.sharedState).length,
+  );
+};
+
+// Host-authority clients often send the last snapshot sequence they saw,
+// which can drift ahead of the stored version after presence envelopes.
+// Accept that newer token, but still reject a true rollback.
+var applyHostState = function (state, expectedVersion, nextState) {
+  if (!integerInRange(expectedVersion, 0, 9007199254740991)) return false;
+  if (expectedVersion < state.version) return false;
+  state.sharedState = nextState;
+  if (state.sequence <= expectedVersion) state.sequence = expectedVersion + 1;
+  if (state.sequence <= state.version) state.sequence = state.version + 1;
+  state.version = state.sequence;
+  return true;
 };
 
 var legacySnapshot = function (state) {
@@ -569,6 +693,7 @@ var matchInit = function (ctx, logger, nk, params) {
       nextJoinOrdinal: 0,
       members: {},
       rateLimits: {},
+      joinSyncs: [],
       emptyTicks: 0,
       lastStatusCheckTick: -1,
     },
@@ -607,6 +732,7 @@ var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, prese
 
 var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
   var joins = [];
+  var roomAlreadyOccupied = Object.keys(state.members).length > 0;
   for (var index = 0; index < presences.length; index += 1) {
     var presence = presences[index];
     var member = state.members[presence.userId];
@@ -623,8 +749,17 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
     } else {
       member.sessionId = presence.sessionId;
     }
-    if (!state.hostId) state.hostId = presence.userId;
+    if (!state.hostId || !state.members[state.hostId]) {
+      state.hostId = presence.userId;
+    }
     joins.push(memberPresence(presence.userId, member, state.hostId));
+    if (roomAlreadyOccupied || index > 0) {
+      state.joinSyncs.push({
+        presence: presence,
+        ticks: 2,
+        attempts: 3,
+      });
+    }
   }
 
   // Legacy snapshots keep the existing SDK and Phase 0 tests compatible.
@@ -676,7 +811,12 @@ var matchLeave = function (ctx, logger, nk, dispatcher, tick, state, presences) 
       delete state.rateLimits[presence.userId];
     }
   }
-  if (!Object.keys(state.members).length) return null;
+  if (!Object.keys(state.members).length) {
+    state.hostId = "";
+    state.emptyTicks = 0;
+    updateLabel(dispatcher, state);
+    return { state: state };
+  }
   if (!state.members[state.hostId]) state.hostId = electHost(state.members);
 
   broadcastEnvelope(
@@ -703,6 +843,22 @@ var matchLeave = function (ctx, logger, nk, dispatcher, tick, state, presences) 
         previousHostId: previousHostId || undefined,
         hostId: state.hostId,
         stateVersion: state.version,
+      },
+      null,
+      null,
+      true,
+    );
+    // Repeat the same leave set after host migration. Remaining clients that
+    // only apply presence once they are host still see who disconnected.
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_SNAPSHOT,
+      "presence",
+      {
+        joins: [],
+        leaves: leaves,
+        members: presenceList(state.members, state.hostId),
       },
       null,
       null,
@@ -970,7 +1126,7 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
       );
       return;
     }
-    if (input.expectedVersion !== state.version) {
+    if (!applyHostState(state, input.expectedVersion, input.state)) {
       sendProtocolError(
         dispatcher,
         state,
@@ -981,8 +1137,6 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
       );
       return;
     }
-    state.sharedState = input.state;
-    state.version += 1;
     broadcastEnvelope(
       dispatcher,
       state,
@@ -1111,16 +1265,75 @@ var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
       null,
       true,
     );
+    releaseRoomKey(nk, state);
     return null;
   }
 
   if (!Object.keys(state.members).length) {
     state.emptyTicks += 1;
-    return state.emptyTicks >= state.tickRate * 10 ? null : { state: state };
+    if (state.emptyTicks >= state.tickRate * EMPTY_ROOM_GRACE_SECONDS) {
+      releaseRoomKey(nk, state);
+      return null;
+    }
+    return { state: state };
   }
   state.emptyTicks = 0;
   for (var index = 0; messages && index < messages.length; index += 1) {
     processRealtimeMessage(logger, nk, dispatcher, state, messages[index]);
+  }
+  for (var syncIndex = state.joinSyncs.length - 1; syncIndex >= 0; syncIndex -= 1) {
+    var sync = state.joinSyncs[syncIndex];
+    var syncedMember = state.members[sync.presence.userId];
+    if (!syncedMember || syncedMember.sessionId !== sync.presence.sessionId) {
+      state.joinSyncs.splice(syncIndex, 1);
+      continue;
+    }
+    sync.ticks -= 1;
+    if (sync.ticks > 0) continue;
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_SNAPSHOT,
+      "snapshot",
+      snapshotFields(state),
+      [sync.presence],
+      null,
+      true,
+    );
+    if (hasSharedState(state)) {
+      broadcastEnvelope(
+        dispatcher,
+        state,
+        OP_HOST_STATE,
+        "state",
+        { hostId: state.hostId, state: state.sharedState },
+        [sync.presence],
+        null,
+        true,
+      );
+    }
+    if (sync.attempts === 3) {
+      broadcastEnvelope(
+        dispatcher,
+        state,
+        OP_SNAPSHOT,
+        "presence",
+        {
+          joins: [],
+          leaves: [],
+          members: presenceList(state.members, state.hostId),
+        },
+        null,
+        null,
+        true,
+      );
+    }
+    sync.attempts -= 1;
+    if (sync.attempts > 0) {
+      sync.ticks = 2;
+    } else {
+      state.joinSyncs.splice(syncIndex, 1);
+    }
   }
   return { state: state };
 };
@@ -1138,6 +1351,7 @@ var matchTerminate = function (ctx, logger, nk, dispatcher, tick, state, graceSe
       true,
     );
   }
+  releaseRoomKey(nk, state);
   return { state: state };
 };
 
@@ -1267,6 +1481,7 @@ var InitModule = function (ctx, logger, nk, initializer) {
   initializer.registerRpc("loki_provision_tenant", rpcProvisionTenant);
   initializer.registerRpc("loki_tenant", rpcTenant);
   initializer.registerRpc("loki_create_room", rpcCreateRoom);
+  initializer.registerRpc("loki_join_room", rpcJoinRoom);
   initializer.registerRpc("loki_resolve_invite", rpcResolveInvite);
   initializer.registerRpc("loki_room_snapshot", rpcRoomSnapshot);
   initializer.registerRpc("loki_room_update", rpcRoomUpdate);

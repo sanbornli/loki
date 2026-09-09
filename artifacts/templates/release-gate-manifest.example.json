@@ -15,7 +15,8 @@
   "_instructions": [
     "Add exactly one passing entry for every gate listed by scripts/verify-release-gates.ts.",
     "Evidence paths are resolved relative to this manifest.",
-    "External security and legal entries must include external.organization, reviewer, reportReference, and approvedAt.",
+    "The external-security-review entry must include operator.email sanborn.li.hk@gmail.com and operator.approvedAt. Do not use external.organization or monitoring products for that gate.",
+    "The external-legal-review entry must include external.organization, reviewer, reportReference, and approvedAt from counsel.",
     "The verifier rejects missing, stale, future-dated, duplicate, unreadable, or digest-mismatched evidence."
   ]
 }

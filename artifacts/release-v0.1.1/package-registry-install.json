@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-08T07:28:48.920Z",
+  "mode": "registry",
+  "passed": true,
+  "requestedSpecs": [
+    "@lokiplay/protocol@0.1.1",
+    "@lokiplay/sdk@0.1.1",
+    "@lokiplay/ui-web@0.1.1",
+    "@lokiplay/mcp@0.1.1",
+    "lokiplay@0.1.1"
+  ],
+  "ecosystems": {
+    "npm": {
+      "source": "registry.npmjs.org",
+      "version": "0.1.1",
+      "evidenced": true
+    },
+    "maven": {
+      "source": "repo1.maven.org",
+      "coordinate": "cc.lokiplay:loki-sdk:0.1.1",
+      "pom": 200,
+      "gradleResolved": true
+    },
+    "swift": {
+      "source": "https://github.com/sanbornli/loki.git#v0.1.1",
+      "product": "LokiSDK",
+      "packageSwift": 200
+    },
+    "unity": {
+      "source": "https://github.com/sanbornli/loki.git?path=/clients/unity#v0.1.1",
+      "package": "play.loki.sdk",
+      "version": "0.1.1"
+    }
+  }
+}

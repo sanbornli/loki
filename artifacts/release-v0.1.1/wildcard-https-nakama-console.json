@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-07T16:30:00.000Z",
+  "environment": "production",
+  "checks": {
+    "apiHttps": true,
+    "wildcardCertificateCoversPlayAndArbitrarySubdomains": true,
+    "playLokiplayCcHttps": true,
+    "arbitraryProjectSubdomainHttps": true,
+    "nakamaConsolePort7351Closed": true,
+    "nakamaPublicConsolePathAbsent": true,
+    "nakamaHasNoPublicCustomDomain": true
+  },
+  "observations": {
+    "api": "https://api.lokiplay.cc/health/ready returned 200 with postgres, r2, and nakama checks",
+    "wildcardCertSans": ["lokiplay.cc", "*.lokiplay.cc"],
+    "wildcardIssuer": "Google Trust Services WE1",
+    "play": "https://play.lokiplay.cc/ returned HTTP 200 with a browser user-agent",
+    "arbitrarySubdomain": "https://arbitrary-check-9f3a.lokiplay.cc/ completed TLS with the wildcard certificate",
+    "nakama": "https://nakama-production-e5fc.up.railway.app/console returned 404; TCP 7351 timed out; no public console hostname is assigned"
+  }
+}

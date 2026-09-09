@@ -7,8 +7,10 @@ service variables and must never be committed or included in game builds.
 
 - Supabase project 1: creator/player identity and Loki control-plane data
 - Supabase project 2: dedicated Nakama PostgreSQL data
-- Railway: API, web, workers, Nakama compute, and infrastructure monitoring
-- Cloudflare R2/CDN/DNS: immutable game files and application/game domains
+- Railway: API, creator/player web, workers, Nakama compute, and infrastructure
+  monitoring
+- Cloudflare Pages/R2/CDN/DNS: the marketing homepage, immutable game files,
+  and application/game domains
 - Sentry: browser/API exceptions, application traces/logs, uptime, and releases
 
 ## Current production resources
@@ -20,6 +22,8 @@ service variables and must never be committed or included in game builds.
 - Railway project `lokiplay-production` with `api`, `web`, and `nakama`
   services deployed in Singapore. Temporary verification endpoints exist for
   all three services.
+- Cloudflare Pages project `lokiplay` serves the marketing homepage at
+  `lokiplay.cc`.
 - Cloudflare R2 is configured and passed write, read, immutable-release, and
   cleanup checks. `api.lokiplay.cc` and `*.lokiplay.cc` are attached to Railway.
   The wildcard traffic record is proxied through Cloudflare in Full SSL mode,
@@ -48,8 +52,10 @@ data-consistency tests define the topology.
    string if required by Railway networking, in `NAKAMA_DATABASE_URL`.
 9. Apply Loki migrations only to the platform project with
    `npm run db:migrate`. Nakama applies its own migrations to its project.
-10. Enable point-in-time recovery on both projects before private beta and test
-    each restore path.
+10. Before private beta, keep provider daily backups on and prove a dated
+    logical dump/restore of Loki schemas plus an immutable R2 restore. Supabase
+    PITR is a Phase 2 upgrade when losing up to a daily-backup window is no
+    longer acceptable.
 
 Supabase identifies the human. Loki's database remains authoritative for
 organizations, memberships, roles, projects, and deployment permissions.
@@ -93,6 +99,13 @@ and Nakama session exchange. In-memory implementations remain for local tests.
    `*.lokiplay.cc`, for `play.lokiplay.cc` and per-project isolated origins.
 6. Add Turnstile to registration and abuse-sensitive forms when those frontends
    are built.
+7. Apply the zone rate-limit rules in
+   [`infra/cloudflare/api-rate-limits.json`](/Users/sanborn/Desktop/loki/infra/cloudflare/api-rate-limits.json)
+   on `api.lokiplay.cc` for account/project creation, device authorization,
+   session minting, deployments, and GitHub webhook paths:
+   `CLOUDFLARE_API_TOKEN=... npx tsx scripts/apply-cloudflare-rate-limits.ts`.
+   The API also enforces the same buckets in process and keys them by
+   `CF-Connecting-IP`.
 
 Cloudflare Access is an optional extra boundary for staging and the operator
 console. It is not creator/player identity.
@@ -131,9 +144,13 @@ contents, or uploaded game source as telemetry.
 Grafana Cloud is deferred until longer retention, custom infrastructure metrics,
 or cross-provider operations justify another monitoring supplier.
 
-Before private beta, alerts must cover API error rate, deployment failures,
-Nakama disconnects, room creation failures, PostgreSQL saturation, R2 errors,
-and missing telemetry.
+The Lokiplay workspace is on Railway Hobby. Set a workspace usage soft/hard
+limit so compute cannot run past the public free-tier budget. Crash, OOM, and
+volume webhooks are the automated event path. Threshold monitors for API error
+rate, failed deploys, Nakama disconnects, room-creation failures, PostgreSQL
+saturation, R2 errors, restart loops, and missing heartbeats are created in the
+Railway dashboard when the API does not expose monitor-create. Sentry remains
+deferred.
 
 ## Verification
 

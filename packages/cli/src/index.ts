@@ -8,11 +8,12 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { zipSync } from "fflate";
 import { GameManifestSchema } from "../../protocol/src/index.js";
 
@@ -28,6 +29,8 @@ const AGENT_INSTRUCTIONS = `# Loki integration rules
   migration.
 - Never trust or override the \`projectId\`, player identity, room membership, or
   sequence returned by Loki.
+- Create rooms with \`createRoom()\` and join with \`joinRoom({ inviteCode })\`.
+  Games must not invent Loki room keys.
 - Keep game state JSON-compatible and use finite safe integers.
 - Handle reconnect snapshots, host changes, stale-update errors, and focus
   release when the Loki overlay opens.
@@ -579,8 +582,28 @@ interface DeploymentResult {
   id: string;
   projectId: string;
   contentHash: string;
-  status: "ready" | "ready_with_warnings" | "blocked";
+  status:
+    | "ready"
+    | "ready_with_warnings"
+    | "blocked"
+    | "security_review_pending"
+    | "quarantined";
+  securityReview?: {
+    state:
+      | "pending"
+      | "running"
+      | "approved"
+      | "quarantined"
+      | "failed"
+      | "needs_operator";
+    findingRefs: string[];
+    lastError?: string;
+  };
   playableUrl?: string;
+}
+
+interface ProjectResult {
+  activeDeploymentId?: string;
 }
 
 async function activateDeployment(
@@ -596,32 +619,106 @@ async function activateDeployment(
   );
 }
 
-async function pollDeployment(
+function shipTimeoutMs(): number {
+  const configured = Number(process.env.LOKI_SHIP_TIMEOUT_MS ?? 10 * 60 * 1_000);
+  if (!Number.isSafeInteger(configured) || configured < 1_000) {
+    throw new Error("LOKI_SHIP_TIMEOUT_MS must be an integer of at least 1000");
+  }
+  return configured;
+}
+
+async function waitForDeploymentApproval(
   endpoint: string,
   accessToken: string,
   projectId: string,
   deploymentId: string,
 ): Promise<DeploymentResult> {
-  stage("poll", "started", { deploymentId });
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  stage("security_review", "started", { deploymentId });
+  const deadline = Date.now() + shipTimeoutMs();
+  let lastReviewState: string | undefined;
+  while (Date.now() < deadline) {
     const deployments = await apiJson<DeploymentResult[]>(
       `${endpoint}/v1/projects/${projectId}/deployments`,
       accessToken,
     );
     const deployment = deployments.find((candidate) => candidate.id === deploymentId);
     if (deployment) {
-      if (deployment.status === "blocked") {
-        throw new Error(`Deployment ${deploymentId} was blocked`);
+      if (["blocked", "quarantined"].includes(deployment.status)) {
+        throw new Error(`Deployment ${deploymentId} was rejected by security review`);
       }
-      stage("poll", "complete", {
-        deploymentId,
-        deploymentStatus: deployment.status,
-      });
-      return deployment;
+      if (["ready", "ready_with_warnings"].includes(deployment.status)) {
+        stage("security_review", "complete", {
+          deploymentId,
+          deploymentStatus: deployment.status,
+        });
+        return deployment;
+      }
+      const reviewState = deployment.securityReview?.state ?? "pending";
+      if (reviewState !== lastReviewState) {
+        stage("security_review", "started", {
+          deploymentId,
+          reviewState,
+        });
+        lastReviewState = reviewState;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  throw new Error(`Timed out waiting for deployment ${deploymentId}`);
+  throw new Error(
+    `Timed out waiting for security review of deployment ${deploymentId}`,
+  );
+}
+
+async function waitForActivation(
+  endpoint: string,
+  accessToken: string,
+  projectId: string,
+  deploymentId: string,
+): Promise<void> {
+  const deadline = Date.now() + shipTimeoutMs();
+  while (Date.now() < deadline) {
+    const project = await apiJson<ProjectResult>(
+      `${endpoint}/v1/projects/${projectId}`,
+      accessToken,
+    );
+    if (project.activeDeploymentId === deploymentId) return;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error(`Timed out waiting for deployment ${deploymentId} to activate`);
+}
+
+export async function verifyPlayableUrl(
+  playableUrl: string,
+  accessToken?: string,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(playableUrl, {
+      headers: {
+        accept: "text/html",
+        ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+      },
+      redirect: "follow",
+    });
+  } catch (error) {
+    throw new Error(
+      `Playable URL could not be reached: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (!response.ok) {
+    throw new Error(`Playable URL returned HTTP ${response.status}`);
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  const source = await response.text();
+  if (
+    !contentType.toLowerCase().includes("text/html") ||
+    !/<iframe\b/i.test(source) ||
+    !source.includes("loki:init")
+  ) {
+    throw new Error("Playable URL did not return an activated Loki game page");
+  }
 }
 
 async function ship(directory: string, requestedProjectId?: string): Promise<void> {
@@ -691,16 +788,6 @@ async function ship(directory: string, requestedProjectId?: string): Promise<voi
 
   if (deployment) {
     stage("upload", "reused", { deploymentId: deployment.id });
-    stage("activate", "started", { deploymentId: deployment.id });
-    await activateDeployment(endpoint, session.accessToken, projectId, deployment.id);
-    stage("activate", "complete", { deploymentId: deployment.id });
-    const polled = await pollDeployment(
-      endpoint,
-      session.accessToken,
-      projectId,
-      deployment.id,
-    );
-    deployment = { ...polled, playableUrl: deployment.playableUrl };
   } else {
     stage("credentials", "started");
     const credential = await apiJson<{ credentialId: string; secret: string }>(
@@ -710,7 +797,6 @@ async function ship(directory: string, requestedProjectId?: string): Promise<voi
     );
     stage("credentials", "complete");
     stage("upload", "started", { contentHash });
-    stage("activate", "started");
     const response = await fetch(`${endpoint}/v1/deployments?activate=true`, {
       method: "POST",
       headers: {
@@ -726,18 +812,26 @@ async function ship(directory: string, requestedProjectId?: string): Promise<voi
       deploymentId: deployment.id,
       deploymentStatus: deployment.status,
     });
-    stage("activate", "complete", { deploymentId: deployment.id });
-    const polled = await pollDeployment(
-      endpoint,
-      session.accessToken,
-      projectId,
-      deployment.id,
-    );
-    deployment = { ...polled, playableUrl: deployment.playableUrl };
   }
 
-  stage("ready", "complete", { deploymentId: deployment.id });
-  console.log(`Deployment ID: ${deployment.id}`);
+  const submittedPlayableUrl = deployment.playableUrl;
+  const approved = await waitForDeploymentApproval(
+    endpoint,
+    session.accessToken,
+    projectId,
+    deployment.id,
+  );
+  deployment = { ...approved, playableUrl: submittedPlayableUrl };
+  stage("activate", "started", { deploymentId: deployment.id });
+  await activateDeployment(endpoint, session.accessToken, projectId, deployment.id);
+  await waitForActivation(
+    endpoint,
+    session.accessToken,
+    projectId,
+    deployment.id,
+  );
+  stage("activate", "complete", { deploymentId: deployment.id });
+
   const playableUrl =
     deployment.playableUrl ??
     (process.env.LOKI_WEB_URL
@@ -746,6 +840,11 @@ async function ship(directory: string, requestedProjectId?: string): Promise<voi
   if (!playableUrl) {
     throw new Error("Deployment succeeded, but the API did not return a playable URL");
   }
+  stage("playability", "started", { deploymentId: deployment.id });
+  await verifyPlayableUrl(playableUrl, session.accessToken);
+  stage("playability", "complete", { deploymentId: deployment.id });
+  stage("ready", "complete", { deploymentId: deployment.id });
+  console.log(`Deployment ID: ${deployment.id}`);
   console.log(`Playable URL: ${playableUrl}`);
 }
 
@@ -881,7 +980,19 @@ async function main(argv: string[]): Promise<void> {
   );
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function isDirectExecution(
+  moduleUrl: string,
+  argvPath: string | undefined,
+): boolean {
+  if (!argvPath) return false;
+  try {
+    return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution(import.meta.url, process.argv[1])) {
   main(process.argv.slice(2)).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

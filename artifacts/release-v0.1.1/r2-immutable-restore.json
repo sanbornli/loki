@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-07T16:32:35.000Z",
+  "providerBackupReference": "cloudflare-r2-wrangler-object-copy-verification-2026-09-07",
+  "source": {
+    "sha256": "b36428ce1d505dc51bc1cd44214d1afb18e359ed33cb19484f74b10cc0263537",
+    "bytes": 41,
+    "bucket": "lokiplay-releases-production"
+  },
+  "restore": {
+    "sha256": "b36428ce1d505dc51bc1cd44214d1afb18e359ed33cb19484f74b10cc0263537",
+    "bytes": 41,
+    "bucket": "lokiplay-restore-scratch",
+    "rtoSeconds": 5
+  }
+}

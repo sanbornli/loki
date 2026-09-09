@@ -16,7 +16,8 @@ import {
 } from "./github-connections.js";
 import type { NakamaGateway } from "./nakama.js";
 import type { PlatformOperations } from "./platform.js";
-import type { HostingAuthorization } from "./hosting-auth.js";
+import type { GuestResumeSigner, HostingAuthorization } from "./hosting-auth.js";
+import { clientAddress, rateLimitFor } from "./http-rate-limit.js";
 import { ServiceError, type SafetyOperations } from "./safety.js";
 
 export interface ApiDependencies {
@@ -38,6 +39,7 @@ export interface ApiDependencies {
   authenticatePlayer?(request: IncomingMessage): Promise<string | undefined>;
   dashboard?: DashboardOperations;
   hostingAuth?: HostingAuthorization;
+  guestResume?: GuestResumeSigner;
   safety?: SafetyOperations;
   readiness?(): Promise<Record<string, boolean>>;
   log?(record: Record<string, unknown>): void;
@@ -275,22 +277,10 @@ export function createApiHandler(dependencies: ApiDependencies) {
         json(response, ok ? 200 : 503, { ok, checks });
         return;
       }
-      const limitedOperations: Record<string, { limit: number; window: number }> = {
-        "/v1/projects": { limit: 20, window: 3600 },
-        "/v1/organizations": { limit: 10, window: 3600 },
-        "/v1/cli/device": { limit: 20, window: 60 },
-        "/v1/player-sessions": { limit: 60, window: 60 },
-        "/v1/deployments": { limit: 20, window: 3600 },
-        "/v1/github/webhooks": { limit: 300, window: 60 },
-      };
-      const rate =
-        limitedOperations[url.pathname] ??
-        (/^\/v1\/projects\/[0-9a-f-]{36}\/deployment-credentials$/i.test(url.pathname)
-          ? { limit: 20, window: 3600 }
-          : undefined);
+      const rate = rateLimitFor(request.method ?? "GET", url.pathname);
       if (rate && dependencies.safety) {
         await dependencies.safety.rateLimit(
-          request.socket.remoteAddress ?? "unknown",
+          clientAddress(request.headers, request.socket.remoteAddress),
           `${request.method}:${url.pathname}`,
           rate.limit,
           rate.window,
@@ -548,6 +538,19 @@ export function createApiHandler(dependencies: ApiDependencies) {
           actorId,
           url.searchParams.get("status") ?? "open",
         ));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/v1/operator/security-reviews") {
+        if (!dependencies.safety) throw new Error("security review unavailable");
+        const actorId = await dependencies.authenticateCreator(request);
+        json(
+          response,
+          200,
+          await dependencies.safety.listSecurityReviews(
+            actorId,
+            url.searchParams.get("state") ?? "needs_operator",
+          ),
+        );
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/cli/device") {
@@ -972,11 +975,35 @@ export function createApiHandler(dependencies: ApiDependencies) {
           1,
           30 * 24 * 60 * 60,
         );
+        const resumedGuestId = authenticatedPlayerId
+          ? undefined
+          : dependencies.guestResume?.readPlayerId(
+              typeof request.headers.cookie === "string"
+                ? request.headers.cookie
+                : undefined,
+              input.projectId,
+            );
         const token = await dependencies.platform.issuePlayerSession(
           input.projectId,
-          authenticatedPlayerId,
+          authenticatedPlayerId ?? resumedGuestId,
           authenticatedPlayerId ? false : (input.guest ?? true),
         );
+        if (!authenticatedPlayerId && dependencies.guestResume) {
+          const playerId = dependencies.platform.tokens.verify(token).subject;
+          const forwarded = request.headers["x-forwarded-proto"];
+          const secure =
+            (typeof forwarded === "string" &&
+              forwarded.split(",")[0]?.trim() === "https") ||
+            Boolean(
+              request.socket &&
+                "encrypted" in request.socket &&
+                request.socket.encrypted,
+            );
+          response.setHeader(
+            "set-cookie",
+            dependencies.guestResume.setCookie(input.projectId, playerId, secure),
+          );
+        }
         json(response, 201, { token, expiresIn: 600 });
         return;
       }

@@ -149,7 +149,7 @@ const body = `
         <h1 id="player-title">Your game, one link away.</h1>
       </div>
       <p class="player-hero-copy">
-        Open an unlisted Loki project directly. An account is optional; private
+        Open a public Loki project directly. An account is optional; private
         releases remain restricted until a creator shares authorized access.
       </p>
     </section>
@@ -306,7 +306,7 @@ const script = `
     const items = readRecent();
     recentGrid.replaceChildren();
     if (!items.length) {
-      recentGrid.append(makeState("No recent games yet. Open an unlisted play link or choose a public game."));
+      recentGrid.append(makeState("No recent games yet. Open a public play link or choose a catalog game."));
       clearRecent.hidden = true;
       return;
     }
@@ -334,7 +334,7 @@ const script = `
       return;
     }
     entryError.textContent = "";
-    rememberGame({ projectId: id, name: "Private or unlisted game" });
+    rememberGame({ projectId: id, name: "Private or public game" });
     window.location.assign("/play/" + encodeURIComponent(id));
   });
 
@@ -353,7 +353,7 @@ const script = `
       const items = catalogItems(await response.json()).filter((item) => projectId(item));
       catalogGrid.replaceChildren();
       if (!items.length) {
-        catalogGrid.append(makeState("No public games are listed yet. Private and unlisted play links still work."));
+        catalogGrid.append(makeState("No games are listed yet. Private and public play links still work."));
         return;
       }
       for (const item of items) catalogGrid.append(makeGameCard(item, false));
@@ -373,7 +373,7 @@ export function renderPlayerPlatformPage(config: ProductPageConfig): string {
     config,
     title: "Play on Loki",
     description:
-      "Open unlisted Loki games directly or browse the reviewed public catalog.",
+      "Open public Loki games directly or browse the reviewed catalog.",
     body,
     styles: pageStyles,
     moduleScript: script,

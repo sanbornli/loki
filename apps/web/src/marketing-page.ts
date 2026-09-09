@@ -560,7 +560,7 @@ const body = `
           <article class="editorial-card editorial-card-raised">
             <p class="card-index">03 / Distribution</p>
             <h3>A path from private link to public game.</h3>
-            <p>Stay unlisted while you experiment. When the game is ready, request review and put it in front of players.</p>
+            <p>Keep it private while you experiment. When the game is ready, make it public and share one playable link.</p>
             <ul class="feature-list">
               <li>Reviewed catalog</li>
               <li>Public game page</li>

@@ -5,6 +5,7 @@ import {
   GameManifestSchema,
   type GameManifest,
 } from "../../../packages/protocol/src/index.js";
+import { literalOutboundUrls } from "./network-scan.js";
 import type { PlatformOperations } from "./platform.js";
 
 export interface ScanFinding {
@@ -20,6 +21,20 @@ export interface ScanFinding {
   message: string;
 }
 
+export type SecurityReviewState =
+  | "pending"
+  | "running"
+  | "approved"
+  | "quarantined"
+  | "failed"
+  | "needs_operator";
+
+export interface SecurityReviewSummary {
+  state: SecurityReviewState;
+  findingRefs: string[];
+  lastError?: string;
+}
+
 export interface Deployment {
   id: string;
   projectId: string;
@@ -33,6 +48,7 @@ export interface Deployment {
     | "blocked"
     | "security_review_pending"
     | "quarantined";
+  securityReview?: SecurityReviewSummary;
   createdAt: string;
 }
 
@@ -275,9 +291,9 @@ function scanFiles(
         message: "Dynamic code evaluation is not allowed",
       });
     }
-    for (const match of source.matchAll(/https?:\/\/[^\s"'<>\\)]+/g)) {
+    for (const outboundUrl of literalOutboundUrls(source)) {
       try {
-        const url = new URL(match[0]);
+        const url = new URL(outboundUrl);
         if (
           !["localhost", "127.0.0.1"].includes(url.hostname) &&
           !allowedOrigins.has(url.origin)

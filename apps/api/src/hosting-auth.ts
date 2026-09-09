@@ -53,6 +53,84 @@ export class PlayInviteSigner {
   }
 }
 
+type GuestResumePayload = {
+  projectId: string;
+  playerId: string;
+  expiresAt: number;
+};
+
+export class GuestResumeSigner {
+  constructor(readonly secret: Uint8Array) {
+    if (secret.byteLength < 32) throw new Error("guest resume signing key must be 32 bytes");
+  }
+
+  issue(projectId: string, playerId: string, now = Math.floor(Date.now() / 1000)): string {
+    const payload: GuestResumePayload = {
+      projectId,
+      playerId,
+      expiresAt: now + 30 * 24 * 60 * 60,
+    };
+    const body = encode(JSON.stringify(payload));
+    const signature = createHmac("sha256", this.secret).update(body).digest("base64url");
+    return `${body}.${signature}`;
+  }
+
+  cookieName(projectId: string): string {
+    return `loki_guest_${projectId}`;
+  }
+
+  readPlayerId(
+    cookieHeader: string | undefined,
+    projectId: string,
+    now = Math.floor(Date.now() / 1000),
+  ): string | undefined {
+    if (!cookieHeader) return undefined;
+    const prefix = `${this.cookieName(projectId)}=`;
+    const token = cookieHeader
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(prefix))
+      ?.slice(prefix.length);
+    return token ? this.verify(decodeURIComponent(token), projectId, now) : undefined;
+  }
+
+  setCookie(projectId: string, playerId: string, secure: boolean, now = Math.floor(Date.now() / 1000)): string {
+    const token = this.issue(projectId, playerId, now);
+    return [
+      `${this.cookieName(projectId)}=${encodeURIComponent(token)}`,
+      "Path=/",
+      "HttpOnly",
+      "Max-Age=2592000",
+      secure ? "Secure; SameSite=None" : "SameSite=Lax",
+    ].join("; ");
+  }
+
+  verify(token: string, projectId: string, now = Math.floor(Date.now() / 1000)): string | undefined {
+    const [body, signature, extra] = token.split(".");
+    if (!body || !signature || extra) return undefined;
+    const expected = createHmac("sha256", this.secret).update(body).digest();
+    const actual = Buffer.from(signature, "base64url");
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+      return undefined;
+    }
+    try {
+      const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as GuestResumePayload;
+      if (
+        payload.projectId !== projectId ||
+        typeof payload.playerId !== "string" ||
+        !/^[0-9a-f-]{36}$/i.test(payload.playerId) ||
+        !Number.isSafeInteger(payload.expiresAt) ||
+        payload.expiresAt <= now
+      ) {
+        return undefined;
+      }
+      return payload.playerId;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 export interface HostingAuthorization {
   createInvite(
     actorId: string,

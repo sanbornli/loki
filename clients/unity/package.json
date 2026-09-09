@@ -1,6 +1,6 @@
 {
   "name": "play.loki.sdk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Loki SDK",
   "description": "Headless protocol-v1 client for Unity.",
   "unity": "2021.3",

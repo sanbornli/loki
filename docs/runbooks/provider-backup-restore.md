@@ -2,11 +2,15 @@
 
 ## PostgreSQL
 
-1. Confirm Supabase PITR is enabled for both platform and Nakama databases and
-   record the provider backup/PITR reference and target recovery timestamp.
-2. Create isolated scratch projects with no production traffic or credentials.
-3. Restore through the provider workflow. For logical verification, install
-   matching PostgreSQL client tools and run:
+1. Confirm provider daily backups are on for both platform and Nakama
+   databases. Record the dump/backup reference and the time the copy was taken.
+   Phase 1 accepts losing writes since that copy (up to about a day). Do not
+   restore in place on production.
+2. Create an isolated scratch database with no production traffic or
+   credentials. A local Postgres or a dedicated scratch Supabase project is
+   enough; PITR scratch-project restore is Phase 2.
+3. Restore through the logical dump path. Install matching PostgreSQL client
+   tools and run:
 
    `LOKI_BACKUP_SOURCE_DATABASE_URL=... LOKI_BACKUP_SCRATCH_DATABASE_URL=... LOKI_PROVIDER_BACKUP_REFERENCE=... LOKI_ALLOW_SCRATCH_DATABASE_REPLACE=yes npx tsx scripts/verify-postgres-restore.ts`
 

@@ -136,7 +136,11 @@ export function createWebHandler(dependencies: WebDependencies) {
               : renderMarketingPage(dependencies.productConfig);
         } else if (url.pathname === "/play") {
           productPage = renderPlayerPlatformPage(dependencies.productConfig);
-        } else if (url.pathname === "/creator") {
+        } else if (
+          url.pathname === "/creator" ||
+          url.pathname === "/login" ||
+          url.pathname === "/signup"
+        ) {
           productPage = renderCreatorPage(dependencies.productConfig);
         } else if (url.pathname === "/device") {
           productPage = renderDevicePage(
@@ -172,19 +176,22 @@ export function createWebHandler(dependencies: WebDependencies) {
           project.activeDeploymentId!,
         );
         if (!deployment) throw new Error("deployment not found");
+        const apiOrigin =
+          dependencies.productConfig?.apiOrigin ?? "https://api.lokiplay.cc";
         const html = renderPlayerShell({
           title: project.name,
           projectId,
           deploymentId: project.activeDeploymentId!,
           gameOrigin: dependencies.gameOrigin(projectId),
           entrypoint: deployment.manifest.entrypoint,
+          apiOrigin,
           playInvite: playInvite || undefined,
         });
         const gameOrigin = new URL(dependencies.gameOrigin(projectId)).origin;
         response.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "content-security-policy":
-            `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src ${gameOrigin}; base-uri 'none'; object-src 'none'`,
+            `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src ${gameOrigin}; connect-src ${new URL(apiOrigin).origin}; base-uri 'none'; object-src 'none'`,
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
         });
@@ -226,7 +233,10 @@ export function createWebHandler(dependencies: WebDependencies) {
           return;
         }
         response.writeHead(200, {
-          ...gameSecurityHeaders(deployment.manifest),
+          ...gameSecurityHeaders(
+            deployment.manifest,
+            dependencies.gameOrigin(projectId!),
+          ),
           "content-type":
             mimeTypes[path.posix.extname(file).toLowerCase()] ??
             "application/octet-stream",

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-07T19:23:58.150Z",
+  "startedAt": "2026-09-07T19:13:02.685Z",
+  "target": {
+    "playersPerRoom": 8,
+    "rooms": 20,
+    "updatesPerSecond": 5,
+    "durationSeconds": 600
+  },
+  "budgets": {
+    "maxErrorRatio": 0.01,
+    "maxP95RttMs": 250,
+    "maxRecoverySeconds": 60,
+    "recoveryMode": "fail-closed"
+  },
+  "measurements": {
+    "attempts": 47540,
+    "errors": 0,
+    "errorRatio": 0,
+    "p50RttMs": 156.7832500000368,
+    "p95RttMs": 247.03020899998955,
+    "p99RttMs": 257.41324999998324,
+    "recovery": {
+      "attempted": true,
+      "mode": "fail-closed",
+      "actionUrl": "http://127.0.0.1:8799",
+      "oldRoomsDead": true,
+      "oldRoomsChecked": 20,
+      "oldRoomsStillAlive": 0,
+      "newRoomUpdatesOk": true,
+      "durationMs": 1147.9121670000022
+    }
+  },
+  "passed": true
+}

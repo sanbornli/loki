@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-07T16:29:37.533Z",
+  "environment": "api.lokiplay.cc",
+  "checks": {
+    "crossProjectCreatorDenied": true,
+    "privateAnonymousPlayDenied": true,
+    "creatorPrivatePlayAllowed": true,
+    "deploymentCredentialQuotaDenied": true,
+    "killSwitchDeniedNewPlayerSession": true,
+    "killSwitchDeniedNewDeploymentCredential": true,
+    "reportCreated": true,
+    "reportListedForOperator": true,
+    "reportResolved": true,
+    "r2HostedAssetRead": true,
+    "nakamaTokenExchange": true
+  },
+  "measurements": {
+    "killSwitchLatencyMs": 1102.8921249999985
+  }
+}

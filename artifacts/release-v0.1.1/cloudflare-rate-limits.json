@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-08T07:30:00.000Z",
+  "host": "api.lokiplay.cc",
+  "apiProcessBuckets": true,
+  "clientIpHeader": "CF-Connecting-IP",
+  "specFile": "infra/cloudflare/api-rate-limits.json",
+  "cloudflareApply": {
+    "attempted": false,
+    "reason": "CLOUDFLARE_API_TOKEN is not present in the Railway API service or this environment"
+  },
+  "paths": [
+    "POST /v1/organizations",
+    "POST /v1/projects",
+    "POST /v1/cli/device",
+    "POST /v1/cli/device/approve",
+    "GET /v1/cli/device/:code",
+    "POST /v1/player-sessions",
+    "POST /v1/nakama-session",
+    "POST /v1/deployments",
+    "POST /v1/github/webhooks",
+    "GET|POST /v1/github/callback",
+    "POST /v1/reports"
+  ]
+}

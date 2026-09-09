@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-07T16:34:47.664Z",
+  "providerBackupReference": "pg_dump-schema-public+loki_internal-2026-09-07; supabase pitr_enabled=false walg_enabled=true",
+  "sourceFingerprint": {
+    "table_count": "20",
+    "migration_count": "7"
+  },
+  "restoredFingerprint": {
+    "table_count": "20",
+    "migration_count": "7"
+  },
+  "scratchWriteVerified": true,
+  "rtoSeconds": 40.449822542
+}

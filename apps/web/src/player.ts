@@ -13,22 +13,27 @@ const escapeHtml = (value: string): string =>
       })[character]!,
   );
 
-export function gameSecurityHeaders(manifest: GameManifest): Record<string, string> {
+export function gameSecurityHeaders(
+  manifest: GameManifest,
+  resourceOrigin: string,
+): Record<string, string> {
+  const assetsOrigin = new URL(resourceOrigin).origin;
   const connections = [
     "https://api.lokiplay.cc",
+    "https://multiplayer.lokiplay.cc",
     "wss://multiplayer.lokiplay.cc",
     ...manifest.networkAllowlist.map((value) => new URL(value).origin),
   ].join(" ");
   return {
     "content-security-policy": [
       "default-src 'none'",
-      "script-src 'self'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob:",
-      "media-src 'self' blob:",
-      "font-src 'self'",
+      `script-src ${assetsOrigin}`,
+      `style-src ${assetsOrigin} 'unsafe-inline'`,
+      `img-src ${assetsOrigin} data: blob:`,
+      `media-src ${assetsOrigin} blob:`,
+      `font-src ${assetsOrigin}`,
       `connect-src ${connections}`,
-      "worker-src 'self' blob:",
+      `worker-src ${assetsOrigin} blob:`,
       "frame-src 'none'",
       "object-src 'none'",
       "base-uri 'none'",
@@ -36,7 +41,7 @@ export function gameSecurityHeaders(manifest: GameManifest): Record<string, stri
     ].join("; "),
     "permissions-policy":
       "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=()",
-    "cross-origin-resource-policy": "same-origin",
+    "cross-origin-resource-policy": "cross-origin",
     "referrer-policy": "no-referrer",
     "x-content-type-options": "nosniff",
   };
@@ -77,7 +82,7 @@ export function renderPlayerShell(input: {
     <iframe
       title="${escapeHtml(input.title)}"
       src="${escapeHtml(gameUrl.toString())}"
-      sandbox="allow-scripts allow-pointer-lock"
+      sandbox="allow-scripts allow-pointer-lock allow-same-origin"
       allow="gamepad; fullscreen"
       referrerpolicy="no-referrer"
     ></iframe>
@@ -85,20 +90,33 @@ export function renderPlayerShell(input: {
   <script type="module">
     const frame = document.querySelector("iframe");
     const status = document.querySelector("#status");
-    const channel = new MessageChannel();
     const nonce = crypto.randomUUID();
     const apiOrigin = ${JSON.stringify(input.apiOrigin ?? "https://api.lokiplay.cc")};
-    frame.addEventListener("load", () => {
-      frame.contentWindow.postMessage(
-        { type: "loki:init", protocolVersion: 1, nonce },
-        ${JSON.stringify(gameUrl.origin)},
-        [channel.port2],
-      );
-    });
-    channel.port1.onmessage = (event) => {
+    const pendingPorts = new Set();
+    let bridgePort;
+    let handshakeTimer;
+    let connectionTimer;
+
+    const stopHandshake = (selectedPort) => {
+      window.clearInterval(handshakeTimer);
+      window.clearTimeout(connectionTimer);
+      for (const port of pendingPorts) {
+        if (port !== selectedPort) port.close();
+      }
+      pendingPorts.clear();
+      if (selectedPort) pendingPorts.add(selectedPort);
+    };
+
+    const handleBridgeMessage = (port, event) => {
       if (event.data?.nonce !== nonce) return;
-      if (event.data.type === "loki:ready") status.textContent = "Connected";
+      if (bridgePort && bridgePort !== port) return;
+      bridgePort = port;
+      stopHandshake(port);
+      if (event.data.type === "loki:ready") {
+        status.textContent = "Connected";
+      }
       if (event.data.type === "loki:session") {
+        status.textContent = "Authorizing…";
         void (async () => {
           try {
             const playerResponse = await fetch(apiOrigin + "/v1/player-sessions", {
@@ -119,14 +137,20 @@ export function renderPlayerShell(input: {
               headers: { authorization: "Bearer " + player.token },
             });
             if (!nakamaResponse.ok) throw new Error("multiplayer session denied");
-            channel.port1.postMessage({
+            port.postMessage({
               type: "loki:session",
               nonce,
               requestId: event.data.requestId,
               session: await nakamaResponse.json(),
             });
+            status.textContent = "Connected";
+            window.setTimeout(() => {
+              status.hidden = true;
+            }, 1_500);
           } catch (error) {
-            channel.port1.postMessage({
+            status.textContent = "Connection failed";
+            status.title = error instanceof Error ? error.message : "session failed";
+            port.postMessage({
               type: "loki:error",
               nonce,
               requestId: event.data.requestId,
@@ -137,6 +161,30 @@ export function renderPlayerShell(input: {
         })();
       }
     };
+
+    const offerBridge = () => {
+      if (bridgePort) return;
+      const channel = new MessageChannel();
+      pendingPorts.add(channel.port1);
+      channel.port1.onmessage = (event) => handleBridgeMessage(channel.port1, event);
+      channel.port1.start();
+      frame.contentWindow.postMessage(
+        { type: "loki:init", protocolVersion: 1, nonce },
+        "*",
+        [channel.port2],
+      );
+    };
+
+    frame.addEventListener("load", () => {
+      status.textContent = "Connecting…";
+      offerBridge();
+      handshakeTimer = window.setInterval(offerBridge, 500);
+      connectionTimer = window.setTimeout(() => {
+        stopHandshake();
+        status.textContent = "Connection timed out";
+        status.title = "The game did not request a multiplayer session.";
+      }, 15_000);
+    });
   </script>
 </body>
 </html>`;

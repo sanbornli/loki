@@ -453,7 +453,12 @@ export class PostgresPlatformService implements PlatformOperations {
       if (!deployment.rowCount) throw new Error("deployment not found");
       const updated = await client.query<ProjectRow>(
         `UPDATE projects
-            SET active_deployment_id = $2, updated_at = now()
+            SET active_deployment_id = $2,
+                state = CASE
+                  WHEN state = 'draft' THEN 'unlisted'::project_state
+                  ELSE state
+                END,
+                updated_at = now()
           WHERE id = $1
           RETURNING *`,
         [projectId, deploymentId],
