@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 const outputPosition = process.argv.indexOf("--output");
 const output =
   outputPosition === -1 ? undefined : process.argv[outputPosition + 1];
-const version = process.env.LOKI_PACKAGE_VERSION ?? "0.2.0";
+const version = process.env.LOKI_PACKAGE_VERSION ?? "0.2.1";
 const tag = `v${version}`;
 
 async function run(
@@ -106,14 +106,14 @@ let package = Package(
     name: "LokiNativeVerify",
     platforms: [.macOS(.v12)],
     dependencies: [
-        .package(url: "https://github.com/sanbornli/loki.git", exact: "${version}"),
+        .package(url: "https://github.com/sanbornli/loki.git", exact: "${version}")
     ],
     targets: [
         .target(
             name: "LokiNativeVerify",
-            dependencies: [.product(name: "LokiSDK", package: "loki")],
-        ),
-    ],
+            dependencies: [.product(name: "LokiSDK", package: "loki")]
+        )
+    ]
 )
 `,
   );

@@ -32,6 +32,7 @@ export class LokiOverlayElement extends HTMLElement {
         .status{color:${state.connected ? "#86efac" : "#fca5a5"}}
         ul{list-style:none;padding:0;margin:8px 0}
         li{padding:4px 0}
+        .room-code{user-select:all}
         .chat{border-top:1px solid #3f3f46;margin-top:8px;padding-top:8px}
         form{display:flex;gap:6px}
         input{min-width:0;flex:1;background:#27272a;color:white;border:1px solid #52525b;border-radius:6px;padding:6px}
@@ -42,7 +43,7 @@ export class LokiOverlayElement extends HTMLElement {
           <strong>Loki</strong>
           <span class="status">${state.connected ? "Connected" : "Offline"}</span>
         </header>
-        ${state.roomCode ? `<p>Room <strong>${this.#escape(state.roomCode)}</strong> <button id="copy">Copy invite</button></p>` : ""}
+        ${state.roomCode ? `<p>Room <strong class="room-code">${this.#escape(state.roomCode)}</strong> <button id="copy" type="button">Copy invite</button></p>` : ""}
         <strong>Players (${state.players.length})</strong>
         <ul>${state.players
           .map(
@@ -65,10 +66,7 @@ export class LokiOverlayElement extends HTMLElement {
         </form>
       </aside>`;
     this.#root.querySelector("#copy")?.addEventListener("click", () => {
-      if (state.roomCode) {
-        void navigator.clipboard.writeText(state.roomCode);
-        this.dispatchEvent(new CustomEvent("loki-invite-copied"));
-      }
+      if (state.roomCode) void this.#copyInvite(state.roomCode);
     });
     this.#root.querySelector("#chat-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -85,6 +83,37 @@ export class LokiOverlayElement extends HTMLElement {
         this.dispatchEvent(new CustomEvent("loki-focus-release"));
       }
     });
+  }
+
+  async #copyInvite(value: string): Promise<void> {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        this.#copyWithFallback(value);
+      }
+      this.dispatchEvent(new CustomEvent("loki-invite-copied"));
+    } catch {
+      try {
+        this.#copyWithFallback(value);
+        this.dispatchEvent(new CustomEvent("loki-invite-copied"));
+      } catch {
+        this.dispatchEvent(new CustomEvent("loki-invite-copy-failed"));
+      }
+    }
+  }
+
+  #copyWithFallback(value: string): void {
+    const fallback = document.createElement("textarea");
+    fallback.value = value;
+    fallback.setAttribute("readonly", "");
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.appendChild(fallback);
+    fallback.select();
+    const copied = document.execCommand("copy");
+    fallback.remove();
+    if (!copied) throw new Error("Copy was not available.");
   }
 
   #escape(value: string): string {

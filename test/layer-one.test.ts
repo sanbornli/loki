@@ -242,6 +242,7 @@ test("player shell and game responses enforce origin isolation", () => {
     shell,
     /sandbox="allow-scripts allow-pointer-lock allow-same-origin"/,
   );
+  assert.match(shell, /allow="gamepad; fullscreen; clipboard-write"/);
   assert.match(shell, /MessageChannel/);
   assert.match(shell, /postMessage\([\s\S]*"\*",[\s\S]*\[channel\.port2\]/);
   assert.match(shell, /Connection timed out/);
@@ -274,7 +275,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.2\.0"/);
+  assert.match(creator, /"0\.2\.1"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
@@ -380,6 +381,10 @@ test("web server delivers the active immutable release through a sandbox shell",
     shellSource,
     /sandbox="allow-scripts allow-pointer-lock allow-same-origin"/,
   );
+  assert.match(
+    shellSource,
+    /allow="gamepad; fullscreen; clipboard-write"/,
+  );
 
   const asset = await fetch(
     `${origin}/games/${project.id}/releases/${release.id}/index.html`,
@@ -457,6 +462,8 @@ test("JavaScript SDK follows the Loki protocol without Nakama types", async () =
     client.joinRoom({ inviteCode: "not-a-loki-invite" }),
     /INVITE_INVALID/,
   );
+  await client.joinRoom({ inviteCode: "123456" });
+  await client.joinRoom({ inviteCode: "ABCDEF0123456789" });
   assert.equal(received[0]?.type, "state");
   assert.deepEqual(received[0]?.state, { tick: 1, seated: true });
   await client.sendAction({ move: 1 });

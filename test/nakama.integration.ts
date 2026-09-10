@@ -328,7 +328,7 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   );
 
   const secondInvite = await rpc<{ inviteCode: string }>(a1, "loki_create_room", {});
-  assert.match(roomA.inviteCode, /^[A-F0-9]{16}$/);
+  assert.match(roomA.inviteCode, /^[0-9]{6}$/);
   assert.notEqual(secondInvite.inviteCode, roomA.inviteCode);
 
   const resolvedInvite = await rpc<{ matchId: string }>(

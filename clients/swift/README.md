@@ -8,7 +8,7 @@ messages, presence, chat, private leaderboards, reconnect, and host migration.
 ## Install
 
 Add `https://github.com/sanbornli/loki.git` through Swift Package Manager and
-select version `0.2.0` exactly. The repository root exposes `LokiSDK`.
+select version `0.2.1` exactly. The repository root exposes `LokiSDK`.
 
 Prefer `createSynchronizedRoom(initialState:reduce:)` for shared state. The
 wrapper matches the JavaScript API: `create()`, `join(inviteCode:)`,

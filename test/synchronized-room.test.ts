@@ -103,10 +103,14 @@ class MemoryTransport implements LokiTransport {
       throw new Error("create room failed");
     }
     this.#projectId = input.projectId;
+    let inviteCode = "";
+    do {
+      inviteCode = String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
+    } while (roomsByInvite.has(inviteCode));
     const room: RoomRecord = {
       roomId: crypto.randomUUID(),
       projectId: input.projectId,
-      inviteCode: crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase(),
+      inviteCode,
       hostId: this.#requirePlayer(),
       version: 0,
       sequence: 0,
@@ -1049,7 +1053,7 @@ test("reconnect restores authoritative state and membership", async () => {
   assert.equal(hostRoom.getSnapshot().connection, "connected");
   assert.equal(hostRoom.members.length, 2);
   assert.equal(memberRoom.members.length, 2);
-  assert.equal(created.inviteCode.length, 16);
+  assert.match(created.inviteCode, /^[0-9]{6}$/);
 });
 
 test("late join receives the current authoritative state", async () => {

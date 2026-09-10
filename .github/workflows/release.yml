@@ -78,7 +78,17 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           export LOKI_REGISTRY_PACKAGE_SPECS="[\"@lokiplay/protocol@$version\",\"@lokiplay/sdk@$version\",\"@lokiplay/ui-web@$version\",\"@lokiplay/mcp@$version\",\"lokiplay@$version\"]"
-          npx tsx scripts/package-install-smoke.ts --registry
+          for attempt in $(seq 1 20); do
+            if npx tsx scripts/package-install-smoke.ts --registry; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              echo "npm registry did not expose ${version} packages in time"
+              exit 1
+            fi
+            echo "registry smoke failed; waiting for npm propagation (attempt ${attempt}/20)"
+            sleep 30
+          done
 
   publish-kotlin:
     needs: [nakama-live]

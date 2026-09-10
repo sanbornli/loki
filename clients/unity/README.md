@@ -11,7 +11,7 @@ callbacks.
 In Unity Package Manager, add the Git URL with the package subdirectory:
 
 ```text
-https://github.com/sanbornli/loki.git?path=/clients/unity#v0.2.0
+https://github.com/sanbornli/loki.git?path=/clients/unity#v0.2.1
 ```
 
 Prefer `CreateSynchronizedRoom(initialState, reduce)` for shared state. The

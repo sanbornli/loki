@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.2.0
+npm install @lokiplay/sdk@0.2.1
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -20,7 +20,8 @@ game manifest allowlist.
 `LokiClient` supports rooms, invite resolution, matchmaking, actions, events,
 host state, snapshots, presence, chat, private scores, token refresh, reconnect,
 and host-migration messages. Loki creates every room and issues the shareable
-invite code. Call `createRoom()` and `joinRoom({ inviteCode })` and do not invent
+invite code. New rooms issue a 6-digit code. `0.2.0` 16-character hex codes
+still join. Call `createRoom()` and `joinRoom({ inviteCode })` and do not invent
 room keys.
 
 Prefer `createSynchronizedRoom()` for shared state. Supply opaque state, opaque

@@ -83,7 +83,7 @@ export function renderPlayerShell(input: {
       title="${escapeHtml(input.title)}"
       src="${escapeHtml(gameUrl.toString())}"
       sandbox="allow-scripts allow-pointer-lock allow-same-origin"
-      allow="gamepad; fullscreen"
+      allow="gamepad; fullscreen; clipboard-write"
       referrerpolicy="no-referrer"
     ></iframe>
   </main>

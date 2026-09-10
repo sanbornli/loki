@@ -6,6 +6,7 @@ var TENANT_COLLECTION = "_loki_tenants";
 var TENANT_KEY = "membership";
 var PROJECT_COLLECTION = "_loki_projects";
 var INVITE_COLLECTION = "_loki_invites";
+var INVITE_FAIL_COLLECTION = "_loki_invite_fails";
 var ROOM_KEY_COLLECTION = "_loki_room_keys";
 var DEFAULT_MAX_PLAYERS = 16;
 var DEFAULT_TICK_RATE = 5;
@@ -16,6 +17,8 @@ var MAX_CHAT_BYTES = 500;
 var MESSAGE_RATE_LIMIT = 20;
 var CHAT_RATE_LIMIT = 5;
 var CHAT_RATE_WINDOW_MS = 10000;
+var INVITE_FAIL_LIMIT = 10;
+var INVITE_FAIL_WINDOW_MS = 60000;
 var EMPTY_ROOM_GRACE_SECONDS = 30;
 var MAX_RECENT_ACTIONS = 64;
 var RECENT_ACTION_TTL_MS = 600000;
@@ -64,11 +67,92 @@ var allocateRoomKey = function (nk) {
 };
 
 var normalizeInviteCode = function (value) {
-  return typeof value === "string" ? value.toUpperCase() : "";
+  return typeof value === "string" ? value.trim().toUpperCase() : "";
 };
 
 var validInviteCode = function (value) {
-  return /^[A-F0-9]{16}$/.test(value);
+  return /^[0-9]{6}$/.test(value) || /^[A-F0-9]{16}$/.test(value);
+};
+
+var inviteStorageKey = function (projectId, inviteCode) {
+  return /^[0-9]{6}$/.test(inviteCode) ? projectId + ":" + inviteCode : inviteCode;
+};
+
+var allocateInviteCode = function (nk) {
+  var hex = nk.uuidv4().replace(/-/g, "");
+  var value = parseInt(hex.slice(0, 8), 16) % 1000000;
+  var code = String(value);
+  while (code.length < 6) {
+    code = "0" + code;
+  }
+  return code;
+};
+
+var readInviteFailBudget = function (nk, userId) {
+  var objects = nk.storageRead([
+    { collection: INVITE_FAIL_COLLECTION, key: userId },
+  ]);
+  var now = nowMs();
+  var record =
+    objects && objects.length === 1 && objects[0].value
+      ? objects[0].value
+      : { windowStart: now, count: 0 };
+  if (!integerInRange(record.windowStart, 0, 9007199254740991) || now - record.windowStart >= INVITE_FAIL_WINDOW_MS) {
+    record = { windowStart: now, count: 0 };
+  }
+  return {
+    record: record,
+    version: objects && objects.length === 1 ? objects[0].version : "*",
+  };
+};
+
+var requireInviteAttemptBudget = function (nk, userId) {
+  var budget = readInviteFailBudget(nk, userId);
+  if (budget.record.count >= INVITE_FAIL_LIMIT) {
+    throw codedError("RATE_LIMITED", "too many invite attempts");
+  }
+  return budget;
+};
+
+var writeInviteFailBudget = function (nk, userId, budget) {
+  try {
+    nk.storageWrite([
+      {
+        collection: INVITE_FAIL_COLLECTION,
+        key: userId,
+        value: budget.record,
+        version: budget.version,
+        permissionRead: 0,
+        permissionWrite: 0,
+      },
+    ]);
+  } catch (_) {
+    // Best-effort limiter; a write race must not block invite resolution.
+  }
+};
+
+var recordInviteFailure = function (nk, userId, budget) {
+  budget.record.count += 1;
+  writeInviteFailBudget(nk, userId, budget);
+};
+
+var clearInviteFailures = function (nk, userId) {
+  try {
+    var objects = nk.storageRead([
+      { collection: INVITE_FAIL_COLLECTION, key: userId },
+    ]);
+    if (objects && objects.length === 1) {
+      nk.storageDelete([
+        {
+          collection: INVITE_FAIL_COLLECTION,
+          key: userId,
+          version: objects[0].version,
+        },
+      ]);
+    }
+  } catch (_) {
+    // Successful joins should not fail because cleanup raced.
+  }
 };
 
 var validActionId = function (value) {
@@ -472,12 +556,12 @@ var releaseRoomKey = function (nk, state) {
 var createInvite = function (nk, matchId, projectId, ttlSeconds) {
   var expiresAt = nowMs() + ttlSeconds * 1000;
   for (var attempt = 0; attempt < 8; attempt += 1) {
-    var inviteCode = nk.uuidv4().replace(/-/g, "").slice(0, 16).toUpperCase();
+    var inviteCode = allocateInviteCode(nk);
     try {
       nk.storageWrite([
         {
           collection: INVITE_COLLECTION,
-          key: inviteCode,
+          key: inviteStorageKey(projectId, inviteCode),
           value: {
             matchId: matchId,
             projectId: projectId,
@@ -553,9 +637,10 @@ var rpcCreateRoom = function (ctx, logger, nk, payload) {
   });
 };
 
-var readInvite = function (nk, inviteCode) {
+var readInvite = function (nk, projectId, inviteCode) {
+  var key = inviteStorageKey(projectId, inviteCode);
   var objects = nk.storageRead([
-    { collection: INVITE_COLLECTION, key: inviteCode },
+    { collection: INVITE_COLLECTION, key: key },
   ]);
   if (!objects || objects.length !== 1 || !objects[0].value) {
     throw codedError("INVITE_INVALID", "invite not found");
@@ -564,7 +649,7 @@ var readInvite = function (nk, inviteCode) {
   if (!integerInRange(invite.expiresAt, 0, 9007199254740991) || invite.expiresAt <= nowMs()) {
     try {
       nk.storageDelete([
-        { collection: INVITE_COLLECTION, key: inviteCode },
+        { collection: INVITE_COLLECTION, key: key },
       ]);
     } catch (_) {
       // Expiry is enforced even if best-effort cleanup races another resolver.
@@ -574,25 +659,45 @@ var readInvite = function (nk, inviteCode) {
   return invite;
 };
 
-var rpcJoinRoom = function (ctx, logger, nk, payload) {
-  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
-  var input = parsePayload(payload);
-  var inviteCode = normalizeInviteCode(input.inviteCode);
+var resolveInviteForUser = function (nk, userId, rawInviteCode) {
+  var budget = requireInviteAttemptBudget(nk, userId);
+  var inviteCode = normalizeInviteCode(rawInviteCode);
+  var projectId = tenantForUser(nk, userId);
   if (!validInviteCode(inviteCode)) {
+    recordInviteFailure(nk, userId, budget);
     throw codedError("INVITE_INVALID", "invalid invite code");
   }
-  var invite = readInvite(nk, inviteCode);
-  var projectId = tenantForUser(nk, ctx.userId);
+  var invite;
+  try {
+    invite = readInvite(nk, projectId, inviteCode);
+  } catch (error) {
+    recordInviteFailure(nk, userId, budget);
+    throw error;
+  }
   if (invite.projectId !== projectId) {
+    recordInviteFailure(nk, userId, budget);
     throw codedError("TENANT_MISMATCH", "tenant mismatch");
   }
   requireActiveProject(nk, projectId);
+  clearInviteFailures(nk, userId);
+  return {
+    projectId: projectId,
+    inviteCode: inviteCode,
+    matchId: invite.matchId,
+    expiresAt: invite.expiresAt,
+  };
+};
+
+var rpcJoinRoom = function (ctx, logger, nk, payload) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  var invite = resolveInviteForUser(nk, ctx.userId, input.inviteCode);
   return JSON.stringify({
     ok: true,
     code: "OK",
     matchId: invite.matchId,
-    projectId: projectId,
-    inviteCode: inviteCode,
+    projectId: invite.projectId,
+    inviteCode: invite.inviteCode,
     expiresAt: invite.expiresAt,
   });
 };
@@ -600,21 +705,12 @@ var rpcJoinRoom = function (ctx, logger, nk, payload) {
 var rpcResolveInvite = function (ctx, logger, nk, payload) {
   if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
   var input = parsePayload(payload);
-  var inviteCode = normalizeInviteCode(input.inviteCode);
-  if (!validInviteCode(inviteCode)) {
-    throw codedError("INVITE_INVALID", "invalid invite code");
-  }
-  var invite = readInvite(nk, inviteCode);
-  var projectId = tenantForUser(nk, ctx.userId);
-  if (invite.projectId !== projectId) {
-    throw codedError("TENANT_MISMATCH", "tenant mismatch");
-  }
-  requireActiveProject(nk, projectId);
+  var invite = resolveInviteForUser(nk, ctx.userId, input.inviteCode);
   return JSON.stringify({
     ok: true,
     code: "OK",
     matchId: invite.matchId,
-    inviteCode: inviteCode,
+    inviteCode: invite.inviteCode,
     expiresAt: invite.expiresAt,
   });
 };

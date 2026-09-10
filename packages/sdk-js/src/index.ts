@@ -111,10 +111,13 @@ const wrapLokiCall = async <T>(operation: () => Promise<T>): Promise<T> => {
 
 const normalizeInviteCode = (value: string): string => value.trim().toUpperCase();
 
+const validInviteCode = (value: string): boolean =>
+  /^[0-9]{6}$/.test(value) || /^[A-F0-9]{16}$/.test(value);
+
 const requireInviteCode = (value: string): string => {
   const inviteCode = normalizeInviteCode(value);
-  if (!/^[A-F0-9]{16}$/.test(inviteCode)) {
-    throw new Error("INVITE_INVALID: invite codes are 16 letters or digits issued by Loki");
+  if (!validInviteCode(inviteCode)) {
+    throw new Error("INVITE_INVALID: invite codes are 6 digits issued by Loki");
   }
   return inviteCode;
 };
