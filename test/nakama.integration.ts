@@ -662,6 +662,7 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
     13,
     (message) => message.type === "host_changed",
   );
+  await rpc(a1, "loki_leave_room", { matchId: roomA.matchId });
   await a1.socket.leaveMatch(roomA.matchId);
   const hostChanged = await hostChangedPromise;
   assert.equal(hostChanged.previousHostId, a1.session.user_id);
