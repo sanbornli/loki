@@ -2,6 +2,8 @@ import {
   actionIdentityKey,
   canonicalJson,
   PROTOCOL_VERSION,
+  snapshotMembersAreComplete,
+  type MembershipStatus,
   type Presence,
   type ServerEnvelope,
 } from "../../protocol/src/index.js";
@@ -70,12 +72,16 @@ export type Schema<T> = {
   parse(value: unknown): T;
 };
 
+export type { MembershipStatus };
+
 export type SynchronizedRoomSnapshot<State> = {
   roomId: string;
   inviteCode: string;
   playerId: string;
   hostId: string;
   members: RoomMember[];
+  membership: MembershipStatus;
+  membershipRevision: number;
   state: State;
   stateVersion: number;
   connection: ConnectionState;
@@ -196,8 +202,8 @@ const mergeMembers = (
       host: join.playerId === hostId || join.host,
     });
   }
-  if (message.members.length) {
-    return asMembers(message.members, hostId);
+  if (snapshotMembersAreComplete(message)) {
+    return asMembers(message.members ?? [], hostId);
   }
   return [...byId.values()].map((member) => ({
     ...member,
@@ -267,6 +273,8 @@ export class SynchronizedRoom<State, Action> {
   #inviteCode = "";
   #hostId = "";
   #members: RoomMember[] = [];
+  #membersComplete = false;
+  #membershipRevision = 0;
   #state: State;
   #stateVersion = 0;
   #connection: ConnectionState = "idle";
@@ -294,6 +302,10 @@ export class SynchronizedRoom<State, Action> {
     return this.#members.map((member) => ({ ...member }));
   }
 
+  get membership(): MembershipStatus {
+    return this.#membershipStatus();
+  }
+
   getSnapshot(): SynchronizedRoomSnapshot<State> {
     return {
       roomId: this.#roomId,
@@ -301,6 +313,8 @@ export class SynchronizedRoom<State, Action> {
       playerId: this.#playerId,
       hostId: this.#hostId,
       members: this.members,
+      membership: this.#membershipStatus(),
+      membershipRevision: this.#membershipRevision,
       state: cloneJson(this.#state),
       stateVersion: this.#stateVersion,
       connection: this.#connection,
@@ -558,7 +572,8 @@ export class SynchronizedRoom<State, Action> {
     this.#unsubscribeConnection = this.#host.onConnection?.((event) => {
       if (this.#isInactive()) return;
       if (event === "reconnect_failed") {
-        this.#failRoom("indeterminate", "reconnect failed");
+        this.#resyncing = true;
+        this.#setConnection("reconnecting");
         return;
       }
       if (event === "disconnected") {
@@ -756,6 +771,7 @@ export class SynchronizedRoom<State, Action> {
     if (message.type === "presence") {
       this.#hostId = message.members.find((member) => member.host)?.playerId || this.#hostId;
       this.#members = mergeMembers(this.#members, message, this.#hostId);
+      this.#applyMembershipMeta(message);
       this.#emit();
       return;
     }
@@ -879,8 +895,14 @@ export class SynchronizedRoom<State, Action> {
       }
     }
     if (message.hostId) this.#hostId = message.hostId;
-    if (message.type === "snapshot" && message.members?.length) {
-      this.#members = asMembers(message.members, this.#hostId);
+    if (
+      message.type === "snapshot" &&
+      snapshotMembersAreComplete(message)
+    ) {
+      this.#members = asMembers(message.members ?? [], this.#hostId);
+    }
+    if (message.type === "snapshot") {
+      this.#applyMembershipMeta(message);
     }
     const incomingVersion = message.stateVersion;
     const stale =
@@ -1230,11 +1252,34 @@ export class SynchronizedRoom<State, Action> {
     }
   }
 
+  #applyMembershipMeta(message: {
+    members?: unknown;
+    membersComplete?: boolean;
+    membershipRevision?: number;
+  }): void {
+    if (snapshotMembersAreComplete(message)) this.#membersComplete = true;
+    if (
+      message.membershipRevision !== undefined &&
+      message.membershipRevision >= this.#membershipRevision
+    ) {
+      this.#membershipRevision = message.membershipRevision;
+    }
+  }
+
+  #membershipStatus(): MembershipStatus {
+    const haveSelf =
+      Boolean(this.#playerId) &&
+      this.#members.some((member) => member.playerId === this.#playerId);
+    return this.#membersComplete && haveSelf ? "ready" : "synchronizing";
+  }
+
   #clearIdentity(): void {
     this.#roomId = "";
     this.#inviteCode = "";
     this.#hostId = "";
     this.#members = [];
+    this.#membersComplete = false;
+    this.#membershipRevision = 0;
   }
 
   #isInactive(): boolean {

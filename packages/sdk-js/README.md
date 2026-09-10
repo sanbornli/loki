@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.2.1
+npm install @lokiplay/sdk@0.2.2
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -55,3 +55,17 @@ be synchronous, deterministic, and JSON-compatible. Only the current host runs
 the room identity in `leave_failed` and blocks a new join until `leave()`
 succeeds or `close()` abandons the handle. 0.2.0 clients fail fast when a
 snapshot does not advertise `capabilities.synchronized_rooms`.
+
+Protocol numbers must be finite safe integers. Encode fractional values with
+`quantize` / `dequantize` before they enter synchronized state (for example
+`quantize(3.35, 100)` is `335`). An omitted or empty `members` list is not a
+leave. Clients replace the roster only when `membersComplete` is true, or when
+that flag is omitted and `members` is non-empty. `snapshot.membership` is
+`ready` only when the local player is present on a complete roster; otherwise
+it is `synchronizing`.
+
+Loki-hosted games run inside a sandboxed iframe. Bundle JavaScript and fonts
+as same-origin files. Do not use inline scripts, Google Fonts, remote
+stylesheets, or `<form>` submissions. On mobile, the SDK defers reconnect
+while the page is hidden or offline, then retries with backoff and
+resynchronizes from an authoritative snapshot instead of failing the room.

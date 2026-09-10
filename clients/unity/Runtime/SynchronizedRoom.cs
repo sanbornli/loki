@@ -55,15 +55,19 @@ namespace Loki.Play.SDK
         public readonly string PlayerId;
         public readonly string HostId;
         public readonly IReadOnlyList<RoomMember> Members;
+        public readonly string Membership;
+        public readonly long MembershipRevision;
         public readonly JsonValue State;
         public readonly long StateVersion;
         public readonly ConnectionState Connection;
         public readonly SynchronizedRoomError LastError;
         public SynchronizedRoomSnapshot(
             string roomId, string inviteCode, string playerId, string hostId, IReadOnlyList<RoomMember> members,
-            JsonValue state, long stateVersion, ConnectionState connection, SynchronizedRoomError lastError)
+            string membership, long membershipRevision, JsonValue state, long stateVersion,
+            ConnectionState connection, SynchronizedRoomError lastError)
         {
             RoomId = roomId; InviteCode = inviteCode; PlayerId = playerId; HostId = hostId; Members = members;
+            Membership = membership; MembershipRevision = membershipRevision;
             State = state; StateVersion = stateVersion; Connection = connection; LastError = lastError;
         }
     }
@@ -84,6 +88,8 @@ namespace Loki.Play.SDK
         private string inviteCode = "";
         private string hostId = "";
         private List<RoomMember> members = new List<RoomMember>();
+        private bool membersComplete;
+        private long membershipRevision;
         private int generation;
         private bool resyncing;
         private readonly Dictionary<string, TaskCompletionSource<SynchronizedRoomSnapshot>> pending =
@@ -110,7 +116,8 @@ namespace Loki.Play.SDK
             lock (gate)
             {
                 return new SynchronizedRoomSnapshot(
-                    roomId, inviteCode, playerId, hostId, members.ToArray(), state, stateVersion, connection, lastError);
+                    roomId, inviteCode, playerId, hostId, members.ToArray(), MembershipStatus(), membershipRevision,
+                    state, stateVersion, connection, lastError);
             }
         }
 
@@ -291,7 +298,11 @@ namespace Loki.Play.SDK
             if (IsInactive()) return;
             if (eventName == "reconnect_failed")
             {
-                FailRoom(SynchronizedRoomOutcome.Indeterminate, "reconnect failed");
+                lock (gate)
+                {
+                    resyncing = true;
+                    connection = ConnectionState.Reconnecting;
+                }
                 return;
             }
             if (eventName == "disconnected")
@@ -349,7 +360,7 @@ namespace Loki.Play.SDK
             {
                 var nextHost = message.Fields.OptionalString("hostId");
                 if (nextHost != null) hostId = nextHost;
-                members = ReadMembers(message, hostId);
+                ApplyMembership(message);
                 return;
             }
             if (message.Type == "host_changed")
@@ -406,7 +417,7 @@ namespace Loki.Play.SDK
             }
             var nextHost = message.Fields.OptionalString("hostId");
             if (nextHost != null) hostId = nextHost;
-            if (replace) members = ReadMembers(message, hostId);
+            if (replace) ApplyMembership(message);
             var incoming = message.Fields.OptionalLong("stateVersion");
             var stale = incoming.HasValue && incoming.Value < stateVersion;
             JsonValue stateValue;
@@ -434,6 +445,66 @@ namespace Loki.Play.SDK
                 connection != ConnectionState.Reconnecting)
             {
                 connection = ConnectionState.Connected;
+            }
+        }
+
+        private string MembershipStatus()
+        {
+            var haveSelf = playerId.Length > 0 && members.Exists(member => member.PlayerId == playerId);
+            return membersComplete && haveSelf ? "ready" : "synchronizing";
+        }
+
+        private static bool SnapshotMembersAreComplete(ServerEnvelope message)
+        {
+            var complete = message.Fields.OptionalBool("membersComplete");
+            if (complete == true) return true;
+            if (complete == false) return false;
+            return ReadMembers(message, "").Count > 0;
+        }
+
+        private void ApplyMembership(ServerEnvelope message)
+        {
+            var revision = message.Fields.OptionalLong("membershipRevision");
+            if (revision.HasValue && revision.Value >= membershipRevision) membershipRevision = revision.Value;
+            if (SnapshotMembersAreComplete(message))
+            {
+                members = ReadMembers(message, hostId);
+                membersComplete = true;
+                return;
+            }
+            JsonValue rawLeaves;
+            if (message.Fields.TryGetValue("leaves", out rawLeaves))
+            {
+                var leaves = rawLeaves as JsonValue.ArrayValue;
+                if (leaves != null)
+                {
+                    var left = new HashSet<string>();
+                    for (var i = 0; i < leaves.Value.Count; i++)
+                        left.Add(leaves.Value[i].AsObject().String("playerId"));
+                    members.RemoveAll(member => left.Contains(member.PlayerId));
+                }
+            }
+            JsonValue rawJoins;
+            if (message.Fields.TryGetValue("joins", out rawJoins))
+            {
+                var joins = rawJoins as JsonValue.ArrayValue;
+                if (joins != null)
+                {
+                    for (var i = 0; i < joins.Value.Count; i++)
+                    {
+                        var fields = joins.Value[i].AsObject();
+                        var id = fields.String("playerId");
+                        members.RemoveAll(member => member.PlayerId == id);
+                        JsonValue hostValue;
+                        var hostFlag = fields.TryGetValue("host", out hostValue) && hostValue is JsonValue.BoolValue && ((JsonValue.BoolValue)hostValue).Value;
+                        members.Add(new RoomMember(
+                            id,
+                            fields.OptionalString("sessionId") ?? id,
+                            fields.OptionalLong("joinedAt") ?? 0,
+                            fields.OptionalLong("team"),
+                            hostFlag || id == hostId));
+                    }
+                }
             }
         }
 
@@ -520,6 +591,8 @@ namespace Loki.Play.SDK
             inviteCode = "";
             hostId = "";
             members = new List<RoomMember>();
+            membersComplete = false;
+            membershipRevision = 0;
         }
     }
 }

@@ -28,13 +28,17 @@ import { renderPlayerPlatformPage } from "../apps/web/src/player-platform-page.j
 import { startWebServer } from "../apps/web/src/server.js";
 import {
   archiveBuild,
+  hostingPolicyErrors,
   initializeProject,
   validateBuildDirectory,
   verifyPlayableUrl,
 } from "../packages/cli/src/index.js";
 import {
   LokiClient,
+  ReconnectScheduler,
+  encodeMatchStateBytes,
   lokiErrorFromUnknown,
+  reconnectDelayMs,
   type LokiTransport,
 } from "../packages/sdk-js/src/index.js";
 import type {
@@ -275,11 +279,14 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.2\.1"/);
+  assert.match(creator, /"0\.2\.2"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
   assert.match(creator, /createSynchronizedRoom\(\)/);
+  assert.match(creator, /Google Fonts/);
+  assert.match(creator, /inline <script>/);
+  assert.match(creator, /<form> submissions/);
   assert.match(creator, /Package installation and creator authentication are separate/);
   assert.match(creator, /Needs an operator; approval will activate it automatically/);
   assert.match(creator, /Passed and publicly playable/);
@@ -396,6 +403,19 @@ test("web server delivers the active immutable release through a sandbox shell",
     /connect-src https:\/\/api\.lokiplay\.cc https:\/\/multiplayer\.lokiplay\.cc wss:\/\/multiplayer\.lokiplay\.cc/
   );
   assert.match(await asset.text(), /Playable/);
+});
+
+test("match-state encoding round-trips Unicode JSON", () => {
+  const message = {
+    type: "host_state",
+    text: "Scratch — the cue ball was pocketed. 中文 · ✅",
+  };
+  const bytes = encodeMatchStateBytes(message);
+  assert.equal(bytes instanceof Uint8Array, true);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(bytes)), message);
+  assert.throws(() => {
+    btoa(JSON.stringify(message));
+  });
 });
 
 test("SDK converts transport failures into readable Loki errors", async () => {
@@ -539,7 +559,11 @@ test("CLI initializes, validates and archives finished builds", async () => {
     await writeFile(path.join(directory, "index.html"), "<!doctype html>");
     const validation = await validateBuildDirectory(directory);
     assert.ok(validation.files.includes("game.json"));
-    assert.match(await readFile(path.join(directory, "AGENTS.md"), "utf8"), /Loki/);
+    const agents = await readFile(path.join(directory, "AGENTS.md"), "utf8");
+    assert.match(agents, /Loki/);
+    assert.match(agents, /inline `<script>`/);
+    assert.match(agents, /Google Fonts/);
+    assert.match(agents, /<form>/);
     assert.ok((await archiveBuild(directory)).byteLength > 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -558,4 +582,140 @@ test("CLI verifies that a playable URL returns an activated Loki shell", async (
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   await verifyPlayableUrl(origin, "creator-token");
   assert.equal(authorization, "Bearer creator-token");
+});
+
+test("CLI hosting policy rejects inline scripts, remote fonts, and forms", async () => {
+  assert.match(
+    hostingPolicyErrors(
+      "index.html",
+      '<script>window.createRoom()</script>',
+    )[0] ?? "",
+    /inline <script>/,
+  );
+  assert.match(
+    hostingPolicyErrors(
+      "index.html",
+      '<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter">',
+    ).join("\n"),
+    /Google Fonts|remote stylesheets/,
+  );
+  assert.match(
+    hostingPolicyErrors("index.html", '<form action="/join"><button>Join</button></form>')[0] ?? "",
+    /<form>/,
+  );
+  assert.match(
+    hostingPolicyErrors("index.html", '<button onclick="join()">Join</button>')[0] ?? "",
+    /event handlers/,
+  );
+  assert.deepEqual(
+    hostingPolicyErrors(
+      "index.html",
+      '<!doctype html><script src="game.js"></script><button type="button">Join</button>',
+    ),
+    [],
+  );
+
+  const directory = await mkdtemp(path.join(os.tmpdir(), "lokiplay-hosting-"));
+  try {
+    await initializeProject(directory, { name: "Hosted Game" });
+    await writeFile(
+      path.join(directory, "index.html"),
+      `<!doctype html>
+<html><body>
+  <form><input name="code"><button>Join</button></form>
+  <script>join()</script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter">
+</body></html>`,
+    );
+    await assert.rejects(async () => {
+      await validateBuildDirectory(directory);
+    }, (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      assert.match(message, /inline <script>/);
+      assert.match(message, /<form>/);
+      assert.match(message, /Google Fonts|remote stylesheets/);
+      return true;
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("reconnect scheduler waits for visibility and retries with backoff", async () => {
+  assert.equal(reconnectDelayMs(0, () => 0.5), 375);
+  assert.equal(reconnectDelayMs(10, () => 1), 15_000);
+
+  let visible = false;
+  let online = true;
+  let attempts = 0;
+  let shouldFail = true;
+  const scheduler = new ReconnectScheduler({
+    canRun: () => visible && online,
+    delay: () => 0,
+    reconnect: async () => {
+      attempts += 1;
+      if (shouldFail) throw new Error("socket closed");
+    },
+  });
+  scheduler.request();
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(attempts, 0);
+  visible = true;
+  scheduler.notifyEnvironmentChanged();
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.ok(attempts >= 1);
+  const beforeSuccess = attempts;
+  shouldFail = false;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(attempts >= beforeSuccess);
+  const afterSuccess = attempts;
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(attempts, afterSuccess);
+  scheduler.dispose();
+});
+
+test("release workflow retries npm smoke and generates a Swift 5.9 manifest", async () => {
+  const workflow = await readFile(
+    path.join(process.cwd(), ".github/workflows/release.yml"),
+    "utf8",
+  );
+  assert.match(workflow, /seq 1 20/);
+  assert.match(workflow, /sleep 30/);
+  assert.match(workflow, /package-install-smoke\.ts --registry/);
+  assert.match(workflow, /waiting for npm propagation/);
+
+  const swift = await readFile(
+    path.join(process.cwd(), "scripts/verify-native-registry-install.ts"),
+    "utf8",
+  );
+  assert.match(swift, /swift-tools-version: 5\.9/);
+  assert.match(
+    swift,
+    /\.package\(url: "https:\/\/github\.com\/sanbornli\/loki\.git", exact: "\$\{version\}"\)\n/,
+  );
+  assert.match(
+    swift,
+    /dependencies: \[\.product\(name: "LokiSDK", package: "loki"\)\]\n/,
+  );
+  assert.doesNotMatch(
+    swift,
+    /\.package\(url: "https:\/\/github\.com\/sanbornli\/loki\.git", exact: "\$\{version\}"\),/,
+  );
+  assert.doesNotMatch(
+    swift,
+    /dependencies: \[\.product\(name: "LokiSDK", package: "loki"\)\],/,
+  );
+});
+
+test("Nakama defers disconnect leaves through a reconnect grace period", async () => {
+  const runtime = await readFile(
+    path.join(process.cwd(), "infra/nakama/modules/loki.js"),
+    "utf8",
+  );
+  assert.match(runtime, /DISCONNECT_GRACE_SECONDS = 20/);
+  assert.match(runtime, /disconnectGraces/);
+  assert.match(runtime, /expireDisconnectGraces/);
+  assert.match(runtime, /state\.disconnectGraces\[presence\.userId\] = \{/);
+  assert.match(runtime, /loki_leave_room/);
+  assert.match(runtime, /operation === "depart"/);
 });

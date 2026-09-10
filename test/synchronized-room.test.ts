@@ -27,6 +27,7 @@ type RoomRecord = {
   sequence: number;
   state: unknown;
   members: Map<string, { sessionId: string; joinedAt: number }>;
+  membershipRevision: number;
   recent: Map<
     string,
     {
@@ -116,6 +117,7 @@ class MemoryTransport implements LokiTransport {
       sequence: 0,
       state: {},
       members: new Map(),
+      membershipRevision: 0,
       recent: new Map(),
       transports: new Set(),
       messageCount: 0,
@@ -453,6 +455,7 @@ class MemoryTransport implements LokiTransport {
       return;
     }
     const playerId = this.#requirePlayer();
+    if (room.members.has(playerId)) room.membershipRevision += 1;
     room.members.delete(playerId);
     room.transports.delete(this);
     const leaves = [
@@ -482,6 +485,8 @@ class MemoryTransport implements LokiTransport {
         joins: [],
         leaves,
         members: this.#members(room),
+        membersComplete: true,
+        membershipRevision: room.membershipRevision,
       }),
     );
     this.#room = undefined;
@@ -637,6 +642,8 @@ class MemoryTransport implements LokiTransport {
         state: { n: -1 },
         stateVersion: Math.max(0, room.version - 1),
         members: this.#members(room),
+        membersComplete: true,
+        membershipRevision: room.membershipRevision,
         capabilities: DEFAULT_RUNTIME_CAPABILITIES,
       }),
     );
@@ -664,6 +671,9 @@ class MemoryTransport implements LokiTransport {
 
   #enter(room: RoomRecord): JoinedRoom {
     const playerId = this.#requirePlayer();
+    if (!room.members.has(playerId)) {
+      room.membershipRevision += 1;
+    }
     room.members.set(playerId, { sessionId: playerId, joinedAt: Date.now() });
     room.transports.add(this);
     this.#room = room;
@@ -694,6 +704,8 @@ class MemoryTransport implements LokiTransport {
         ],
         leaves: [],
         members: this.#members(room),
+        membersComplete: true,
+        membershipRevision: room.membershipRevision,
       }),
     );
     return { roomId: room.roomId, inviteCode: room.inviteCode, snapshot };
@@ -734,10 +746,30 @@ class MemoryTransport implements LokiTransport {
         ? Math.max(0, room.version - 1)
         : room.version,
       members: this.#members(room),
+      membersComplete: true,
+      membershipRevision: room.membershipRevision,
       ...(this.#omitCapabilities
         ? {}
         : { capabilities: DEFAULT_RUNTIME_CAPABILITIES }),
     });
+  }
+
+  injectIncompleteMembershipSnapshot(): void {
+    const room = this.#room;
+    if (!room) return;
+    this.#deliver(
+      this,
+      envelope(room, {
+        type: "snapshot",
+        hostId: room.hostId,
+        state: room.state,
+        stateVersion: room.version,
+        members: [],
+        membersComplete: false,
+        membershipRevision: room.membershipRevision,
+        capabilities: DEFAULT_RUNTIME_CAPABILITIES,
+      }),
+    );
   }
 
   #members(room: RoomRecord) {
@@ -1380,6 +1412,15 @@ test("MCP advertises synchronized rooms and flags manual synchronization", async
     diagnosis.findings.some((finding) => finding.code === "MANUAL_SYNCHRONIZATION"),
     true,
   );
+  const hosted = (await callLokiTool(api, "diagnose_multiplayer", {
+    sources: [
+      '<script>createRoom()</script><form action="/join"><button>Join</button></form><link href="https://fonts.googleapis.com/css?family=Inter" rel="stylesheet">',
+    ],
+  })) as { findings: Array<{ code: string }> };
+  assert.deepEqual(
+    hosted.findings.map((finding) => finding.code).sort(),
+    ["INLINE_SCRIPT", "REMOTE_FONT", "SANDBOX_FORM", "SDK_NOT_DETECTED"],
+  );
 });
 
 test("concurrent reconnects coalesce to one snapshot", async () => {
@@ -1435,11 +1476,16 @@ test("stale recovery snapshots cannot roll state backward", async () => {
   assert.deepEqual(hostRoom.getSnapshot().state, { n: 5 });
 });
 
-test("automatic reconnect failure leaves reconnecting", async () => {
+test("automatic reconnect failure stays recoverable", async () => {
   const { hostRoom, hostTransport } = await pair();
   hostTransport.emitReconnectFailed();
-  assert.equal(hostRoom.getSnapshot().connection, "failed");
-  await assert.rejects(hostRoom.reconnect(), /terminal/);
+  assert.equal(hostRoom.getSnapshot().connection, "reconnecting");
+  await hostRoom.reconnect();
+  assert.ok(
+    ["connected", "resynchronizing", "reconnecting"].includes(
+      hostRoom.getSnapshot().connection,
+    ),
+  );
 });
 
 test("host reducer does not run twice for a prepared reconnect commit", async () => {
@@ -1462,6 +1508,30 @@ test("close abandons a failed leave handle", async () => {
   await hostRoom.close();
   assert.equal(hostRoom.getSnapshot().connection, "closed");
   assert.equal(host.roomId, undefined);
+});
+
+test("incomplete snapshots do not clear membership", async () => {
+  const { hostRoom, hostTransport, memberRoom } = await pair();
+  assert.equal(hostRoom.getSnapshot().membership, "ready");
+  assert.equal(memberRoom.getSnapshot().membership, "ready");
+  const before = hostRoom.members.map((member) => member.playerId).sort();
+  const revision = hostRoom.getSnapshot().membershipRevision;
+  hostTransport.injectIncompleteMembershipSnapshot();
+  assert.deepEqual(
+    hostRoom.members.map((member) => member.playerId).sort(),
+    before,
+  );
+  assert.equal(hostRoom.getSnapshot().membership, "ready");
+  assert.equal(hostRoom.getSnapshot().membershipRevision, revision);
+});
+
+test("explicit leaves still remove members", async () => {
+  const { hostRoom, memberRoom } = await pair();
+  const hostId = hostRoom.getSnapshot().playerId;
+  await memberRoom.leave();
+  assert.equal(hostRoom.members.length, 1);
+  assert.equal(hostRoom.members[0]?.playerId, hostId);
+  assert.equal(hostRoom.getSnapshot().membership, "ready");
 });
 
 test("old runtimes without synchronized_rooms capabilities fail fast", async () => {

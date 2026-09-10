@@ -184,6 +184,8 @@ export const ServerEnvelopeSchema = z.discriminatedUnion("type", [
     actionId: ActionIdSchema.optional(),
     senderId: ActionSenderIdSchema.optional(),
     members: z.array(PresenceSchema).optional(),
+    membersComplete: z.boolean().optional(),
+    membershipRevision: z.number().int().nonnegative().optional(),
     capabilities: RuntimeCapabilityBlockSchema.optional(),
   }),
   z.object({
@@ -215,6 +217,8 @@ export const ServerEnvelopeSchema = z.discriminatedUnion("type", [
     joins: z.array(PresenceSchema),
     leaves: z.array(PresenceSchema),
     members: z.array(PresenceSchema),
+    membersComplete: z.boolean().optional(),
+    membershipRevision: z.number().int().nonnegative().optional(),
   }),
   z.object({
     ...EnvelopeBase,
@@ -305,6 +309,42 @@ export const DEFAULT_RUNTIME_CAPABILITIES = {
     messagesPerSecond: 20,
   },
 } as const;
+
+export const MembershipStatusSchema = z.enum(["synchronizing", "ready"]);
+export type MembershipStatus = z.infer<typeof MembershipStatusSchema>;
+
+export function snapshotMembersAreComplete(input: {
+  members?: unknown;
+  membersComplete?: boolean;
+}): boolean {
+  if (input.membersComplete === true) return true;
+  if (input.membersComplete === false) return false;
+  return Array.isArray(input.members) && input.members.length > 0;
+}
+
+export function quantize(value: number, scale: number): number {
+  if (!Number.isFinite(value)) {
+    throw new Error("quantize requires a finite value");
+  }
+  if (!Number.isSafeInteger(scale) || scale <= 0) {
+    throw new Error("quantize requires a positive safe-integer scale");
+  }
+  const quantized = Math.round(value * scale);
+  if (!Number.isSafeInteger(quantized)) {
+    throw new Error("quantized value is not a finite safe integer");
+  }
+  return quantized;
+}
+
+export function dequantize(value: number, scale: number): number {
+  if (!Number.isSafeInteger(value)) {
+    throw new Error("dequantize requires a finite safe integer");
+  }
+  if (!Number.isSafeInteger(scale) || scale <= 0) {
+    throw new Error("dequantize requires a positive safe-integer scale");
+  }
+  return value / scale;
+}
 
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") {

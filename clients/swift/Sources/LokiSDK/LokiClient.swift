@@ -107,6 +107,8 @@ public struct ServerEnvelope: Codable, Equatable, Sendable {
     public let joins: [Presence]?
     public let leaves: [Presence]?
     public let members: [Presence]?
+    public let membersComplete: Bool?
+    public let membershipRevision: Int64?
     public let channel: String?
     public let messageId: String?
     public let text: String?

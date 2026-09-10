@@ -404,6 +404,8 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
     stateVersion: number;
     state: unknown;
     members: string[];
+    membersComplete?: boolean;
+    membershipRevision?: number;
     capabilities?: { synchronized_rooms?: boolean; limits?: { maxMessageBytes?: number } };
   }>(
     a1,
@@ -418,6 +420,8 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   assert.equal(updated.stateVersion, 1);
   assert.deepEqual(updated.state, { tick: 1 });
   assert.deepEqual(updated.members, initial.members);
+  assert.equal(updated.membersComplete, true);
+  assert.equal(typeof updated.membershipRevision, "number");
   assert.equal(updated.capabilities?.synchronized_rooms, true);
   assert.equal(updated.capabilities?.limits?.maxMessageBytes, 16384);
   const broadcast = await broadcastPromise;
@@ -1069,9 +1073,13 @@ test("sender-scoped actions isolate collisions and require host identity", async
 
   const snapshot = await rpc<{
     ok: boolean;
+    membersComplete?: boolean;
+    membershipRevision?: number;
     capabilities?: { synchronized_rooms?: boolean; limits?: { maxMessageBytes?: number } };
   }>(host, "loki_room_snapshot", { matchId: created.matchId });
   assert.equal(snapshot.ok, true);
+  assert.equal(snapshot.membersComplete, true);
+  assert.equal(typeof snapshot.membershipRevision, "number");
   assert.equal(snapshot.capabilities?.synchronized_rooms, true);
   assert.equal(snapshot.capabilities?.limits?.maxMessageBytes, 16384);
 

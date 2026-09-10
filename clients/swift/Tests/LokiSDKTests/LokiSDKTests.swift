@@ -23,6 +23,13 @@ private actor RecordingTransport: LokiTransport {
 }
 
 final class LokiSDKTests: XCTestCase {
+    func testQuantizeRoundsAndRejectsNonFinite() throws {
+        XCTAssertEqual(try LokiQuantize.quantize(3.35, scale: 100), 335)
+        XCTAssertEqual(try LokiQuantize.dequantize(335, scale: 100), 3.35, accuracy: 0.0001)
+        XCTAssertThrowsError(try LokiQuantize.quantize(.nan, scale: 100))
+        XCTAssertThrowsError(try LokiQuantize.quantize(3.35, scale: 0))
+    }
+
     func testFixtureDecodesAsRealJSON() throws {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "conformance", withExtension: "json", subdirectory: "Fixtures"))
         let root = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: url))
@@ -197,12 +204,12 @@ final class LokiSDKTests: XCTestCase {
         _ = try await room.create()
         _ = try await room.dispatch(.object(["d": .number(1)]))
         await client.notifyConnection("reconnect_failed")
-        var failed = await room.getSnapshot()
-        for _ in 0..<20 where failed.connection != .failed {
+        var snapshot = await room.getSnapshot()
+        for _ in 0..<20 where snapshot.connection != .reconnecting {
             try await Task.sleep(nanoseconds: 10_000_000)
-            failed = await room.getSnapshot()
+            snapshot = await room.getSnapshot()
         }
-        XCTAssertEqual(failed.connection, .failed)
+        XCTAssertEqual(snapshot.connection, .reconnecting)
     }
 
     func testAuthorityMigrationAndDuplicateSettlement() async throws {

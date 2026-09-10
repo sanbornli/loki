@@ -43,6 +43,8 @@ public struct SynchronizedRoomSnapshot: Sendable {
     public let playerId: String
     public let hostId: String
     public let members: [RoomMember]
+    public let membership: String
+    public let membershipRevision: Int64
     public let state: JSONValue
     public let stateVersion: Int64
     public let connection: ConnectionState
@@ -63,6 +65,8 @@ public actor SynchronizedRoom {
     private var inviteCode = ""
     private var hostId = ""
     private var members: [RoomMember] = []
+    private var membersComplete = false
+    private var membershipRevision: Int64 = 0
     private var generation = 0
     private var resyncing = false
     private var pending: [String: CheckedContinuation<SynchronizedRoomSnapshot, Error>] = [:]
@@ -95,6 +99,8 @@ public actor SynchronizedRoom {
             playerId: playerId,
             hostId: hostId,
             members: members,
+            membership: membershipStatus(),
+            membershipRevision: membershipRevision,
             state: state,
             stateVersion: stateVersion,
             connection: connection,
@@ -257,7 +263,8 @@ public actor SynchronizedRoom {
     private func onConnectionEvent(_ event: String) {
         if isInactive { return }
         if event == "reconnect_failed" {
-            failRoom(.indeterminate, "reconnect failed")
+            resyncing = true
+            connection = .reconnecting
             return
         }
         if event == "disconnected" {
@@ -324,9 +331,7 @@ public actor SynchronizedRoom {
             Task { try? await self.commit(actionId: actionId, action: action, senderId: message.senderId ?? "") }
         case "presence":
             hostId = message.members?.first(where: { $0.host })?.playerId ?? hostId
-            members = (message.members ?? []).map {
-                RoomMember(playerId: $0.playerId, sessionId: $0.sessionId, joinedAt: $0.joinedAt, team: $0.team, host: $0.host)
-            }
+            applyMembership(message, replaceIfComplete: true)
         case "host_changed":
             resyncing = true
             connection = .resynchronizing
@@ -369,10 +374,8 @@ public actor SynchronizedRoom {
             }
         }
         if let host = message.hostId { hostId = host }
-        if replace, let list = message.members {
-            members = list.map {
-                RoomMember(playerId: $0.playerId, sessionId: $0.sessionId, joinedAt: $0.joinedAt, team: $0.team, host: $0.host || $0.playerId == hostId)
-            }
+        if replace {
+            applyMembership(message, replaceIfComplete: true)
         }
         let incoming = message.stateVersion
         let stale = incoming != nil && incoming! < stateVersion
@@ -437,5 +440,53 @@ public actor SynchronizedRoom {
         inviteCode = ""
         hostId = ""
         members = []
+        membersComplete = false
+        membershipRevision = 0
+    }
+
+    private func membershipStatus() -> String {
+        let haveSelf = !playerId.isEmpty && members.contains { $0.playerId == playerId }
+        return membersComplete && haveSelf ? "ready" : "synchronizing"
+    }
+
+    private func snapshotMembersAreComplete(_ message: ServerEnvelope) -> Bool {
+        if message.membersComplete == true { return true }
+        if message.membersComplete == false { return false }
+        return !(message.members ?? []).isEmpty
+    }
+
+    private func applyMembership(_ message: ServerEnvelope, replaceIfComplete: Bool) {
+        if let revision = message.membershipRevision, revision >= membershipRevision {
+            membershipRevision = revision
+        }
+        if replaceIfComplete && snapshotMembersAreComplete(message) {
+            members = (message.members ?? []).map {
+                RoomMember(
+                    playerId: $0.playerId,
+                    sessionId: $0.sessionId,
+                    joinedAt: $0.joinedAt,
+                    team: $0.team,
+                    host: $0.host || $0.playerId == hostId
+                )
+            }
+            membersComplete = true
+            return
+        }
+        if let leaves = message.leaves {
+            let left = Set(leaves.map(\.playerId))
+            members.removeAll { left.contains($0.playerId) }
+        }
+        if let joins = message.joins {
+            for join in joins {
+                members.removeAll { $0.playerId == join.playerId }
+                members.append(RoomMember(
+                    playerId: join.playerId,
+                    sessionId: join.sessionId,
+                    joinedAt: join.joinedAt,
+                    team: join.team,
+                    host: join.host || join.playerId == hostId
+                ))
+            }
+        }
     }
 }

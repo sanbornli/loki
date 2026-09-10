@@ -29,6 +29,22 @@ private class RecordingTransport : LokiTransport {
 
 class LokiClientTest {
     @Test
+    fun quantizeRoundsAndRejectsNonFinite() {
+        assertEquals(335L, LokiQuantize.quantize(3.35, 100))
+        assertEquals(3.35, LokiQuantize.dequantize(335, 100))
+        try {
+            LokiQuantize.quantize(Double.NaN, 100)
+            throw AssertionError("expected non-finite quantize to fail")
+        } catch (_: IllegalArgumentException) {
+        }
+        try {
+            LokiQuantize.quantize(3.35, 0)
+            throw AssertionError("expected invalid scale to fail")
+        } catch (_: IllegalArgumentException) {
+        }
+    }
+
+    @Test
     fun fixtureDecodesAsRealJson() {
         val source = assertNotNull(javaClass.getResource("/conformance.json")).readText()
         val document = LokiJson.parse(source).objectMap()
@@ -206,7 +222,7 @@ class LokiClientTest {
         runAwait { isolatedRoom.create() }
         runAwait { isolatedRoom.dispatch(JsonValue.ObjectValue(mapOf("d" to 1L.jsonNumber()))) }
         isolated.notifyConnection("reconnect_failed")
-        assertEquals(ConnectionState.Failed, isolatedRoom.getSnapshot().connection)
+        assertEquals(ConnectionState.Reconnecting, isolatedRoom.getSnapshot().connection)
     }
 }
 

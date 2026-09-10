@@ -1,6 +1,6 @@
 {
   "name": "lokiplay",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Command-line tools for Loki game projects and deployments.",
   "license": "MIT",
   "repository": {
@@ -39,7 +39,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@lokiplay/protocol": "0.2.1",
+    "@lokiplay/protocol": "0.2.2",
     "fflate": "^0.8.3"
   }
 }

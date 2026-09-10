@@ -103,8 +103,8 @@ export async function callLokiTool(
   }
   if (name === "integration_requirements") {
     return {
-      packages: ["@lokiplay/sdk@0.2.1", "@lokiplay/ui-web@0.2.1"],
-      command: "npm install @lokiplay/sdk@0.2.1 @lokiplay/ui-web@0.2.1",
+      packages: ["@lokiplay/sdk@0.2.2", "@lokiplay/ui-web@0.2.2"],
+      command: "npm install @lokiplay/sdk@0.2.2 @lokiplay/ui-web@0.2.2",
       apiOrigin: "https://api.lokiplay.cc",
       authority: "host",
       rankedIntegrity: false,
@@ -137,10 +137,30 @@ export async function callLokiTool(
         message: "Use https://api.lokiplay.cc or an explicit non-production override.",
       });
     }
+    if (/<script\b(?![^>]*\bsrc\s*=)[^>]*>/i.test(joined) || /\son[a-z]+\s*=/i.test(joined)) {
+      findings.push({
+        code: "INLINE_SCRIPT",
+        message:
+          "Move JavaScript into a same-origin .js file. Inline <script> tags and event handlers are blocked by Loki CSP.",
+      });
+    }
+    if (/fonts\.googleapis\.com|fonts\.gstatic\.com/i.test(joined)) {
+      findings.push({
+        code: "REMOTE_FONT",
+        message: "Self-host font files. Google Fonts and other remote stylesheets are blocked by Loki CSP.",
+      });
+    }
+    if (/<form\b/i.test(joined)) {
+      findings.push({
+        code: "SANDBOX_FORM",
+        message:
+          "The Loki iframe does not allow form submission. Use <button type=\"button\"> and JavaScript click handlers.",
+      });
+    }
     if (!/@lokiplay\/sdk|FirstPartyTransport|LokiClient/.test(joined)) {
       findings.push({
         code: "SDK_NOT_DETECTED",
-        message: "Install and initialize @lokiplay/sdk@0.2.1.",
+        message: "Install and initialize @lokiplay/sdk@0.2.2.",
       });
     }
     if (

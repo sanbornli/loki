@@ -2,10 +2,17 @@ import {
   ClientEnvelopeSchema,
   ServerEnvelopeSchema,
   PROTOCOL_VERSION,
+  dequantize,
+  quantize,
   type ClientEnvelope,
   type ServerEnvelope,
 } from "../../protocol/src/index.js";
 import { Client, Session, type Socket } from "@heroiclabs/nakama-js";
+import {
+  createBrowserPageLifecycle,
+  ReconnectScheduler,
+  type PageLifecycle,
+} from "./reconnect.js";
 import {
   SynchronizedRoom,
   type ConnectionEvent,
@@ -27,15 +34,29 @@ export type {
   CommittedTransition,
   ConnectionEvent,
   ConnectionState,
+  MembershipStatus,
   RoomMember,
   Schema,
   SynchronizedRoomOutcome,
   SynchronizedRoomSnapshot,
 } from "./synchronized-room.js";
 
+export { dequantize, quantize };
+export {
+  createBrowserPageLifecycle,
+  ReconnectScheduler,
+  reconnectDelayMs,
+  RECONNECT_MAX_DELAY_MS,
+} from "./reconnect.js";
+export type { LifecycleState, PageLifecycle } from "./reconnect.js";
+
 export const LOKI_API_ORIGIN = "https://api.lokiplay.cc";
 
 const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
+
+export const encodeMatchStateBytes = (message: unknown): Uint8Array =>
+  textEncoder.encode(JSON.stringify(message));
 
 const payload = <T>(response: { payload?: object }): T => response.payload as T;
 
@@ -517,6 +538,7 @@ export interface FirstPartyTransportOptions {
   nakamaServerKey?: string;
   secure?: boolean;
   fetch?: typeof globalThis.fetch;
+  lifecycle?: PageLifecycle;
   sessionProvider?(token: string): Promise<{
     token: string;
     refreshToken?: string;
@@ -540,12 +562,26 @@ export class FirstPartyTransport implements LokiTransport {
   #connectionListeners = new Set<(event: ConnectionEvent) => void>();
   #ignoreDisconnect = false;
   #reconnectPromise?: Promise<void>;
+  #scheduler: ReconnectScheduler;
+  #unsubscribeLifecycle?: () => void;
 
   constructor(options: FirstPartyTransportOptions = {}) {
     this.#apiOrigin = (options.apiOrigin ?? LOKI_API_ORIGIN).replace(/\/+$/, "");
     this.#secure = options.secure ?? true;
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.#sessionProvider = options.sessionProvider;
+    const lifecycle = options.lifecycle ?? createBrowserPageLifecycle();
+    this.#scheduler = new ReconnectScheduler({
+      canRun: () => {
+        if (this.#closed || !this.#session) return false;
+        const state = lifecycle?.getState();
+        return !state || (state.visible && state.online);
+      },
+      reconnect: () => this.reconnect(),
+    });
+    this.#unsubscribeLifecycle = lifecycle?.subscribe(() => {
+      this.#scheduler.notifyEnvironmentChanged();
+    });
     this.#client = new Client(
       options.nakamaServerKey ?? "lokiplay",
       options.nakamaHost ?? "multiplayer.lokiplay.cc",
@@ -719,7 +755,11 @@ export class FirstPartyTransport implements LokiTransport {
               : message.type === "chat"
                 ? 14
                 : 15;
-    await socket.sendMatchState(message.roomId, opCode, JSON.stringify(message));
+    await socket.sendMatchState(
+      message.roomId,
+      opCode,
+      encodeMatchStateBytes(message),
+    );
   }
 
   subscribe(listener: (message: unknown) => void): () => void {
@@ -734,6 +774,11 @@ export class FirstPartyTransport implements LokiTransport {
 
   async leaveRoom(roomId: string): Promise<void> {
     try {
+      if (this.#session) {
+        await wrapLokiCall(() =>
+          this.#client.rpc(this.#session!, "loki_leave_room", { matchId: roomId }),
+        ).catch(() => undefined);
+      }
       await this.#socket?.leaveMatch(roomId);
     } finally {
       if (this.#roomId === roomId) {
@@ -752,6 +797,7 @@ export class FirstPartyTransport implements LokiTransport {
     if (this.#reconnectPromise) return this.#reconnectPromise;
     this.#reconnectPromise = this.#reconnectOnce()
       .then(() => {
+        this.#scheduler.reset();
         notifyListeners(this.#connectionListeners, "connected");
       })
       .finally(() => {
@@ -776,6 +822,9 @@ export class FirstPartyTransport implements LokiTransport {
 
   async close(): Promise<void> {
     this.#closed = true;
+    this.#scheduler.dispose();
+    this.#unsubscribeLifecycle?.();
+    this.#unsubscribeLifecycle = undefined;
     this.#socket?.disconnect(false);
     this.#socket = undefined;
     this.#listeners.clear();
@@ -800,10 +849,8 @@ export class FirstPartyTransport implements LokiTransport {
       this.#socket = undefined;
       if (this.#ignoreDisconnect) return;
       notifyListeners(this.#connectionListeners, "disconnected");
-      if (this.#closed || this.#reconnectPromise) return;
-      void this.reconnect().catch(() => {
-        notifyListeners(this.#connectionListeners, "reconnect_failed");
-      });
+      if (this.#closed) return;
+      this.#scheduler.request();
     };
     await socket.connect(this.#requireSession(), true);
     this.#socket = socket;

@@ -34,6 +34,10 @@ const AGENT_INSTRUCTIONS = `# Loki integration rules
 - Keep game state JSON-compatible and use finite safe integers.
 - Handle reconnect snapshots, host changes, stale-update errors, and focus
   release when the Loki overlay opens.
+- Loki-hosted games run in a sandbox iframe with a strict CSP. Do not use
+  inline \`<script>\` tags, inline event handlers, Google Fonts or other remote
+  stylesheets, or \`<form>\` submissions. Put JavaScript and fonts in same-origin
+  files and use \`<button type="button">\` for create/join controls.
 - Connect and ship with \`npx lokiplay connect --project <uuid>\` followed by
   \`npx lokiplay ship\`.
 `;
@@ -292,6 +296,58 @@ export async function detectOutputDirectory(
   );
 }
 
+const REMOTE_FONT_PATTERN = /fonts\.googleapis\.com|fonts\.gstatic\.com/i;
+const INLINE_EVENT_HANDLER_PATTERN = /\son[a-z]+\s*=/i;
+const FORM_TAG_PATTERN = /<form\b/i;
+const SCRIPT_TAG_PATTERN = /<script\b([^>]*)>/gi;
+const STYLESHEET_LINK_PATTERN =
+  /<link\b(?=[^>]*\brel\s*=\s*["'][^"']*stylesheet[^"']*["'])[^>]*\bhref\s*=\s*["'](?:https?:)?\/\/[^"']+["'][^>]*>|<link\b(?=[^>]*\bhref\s*=\s*["'](?:https?:)?\/\/[^"']+["'])[^>]*\brel\s*=\s*["'][^"']*stylesheet[^"']*["'][^>]*>/i;
+
+const isJsonScriptType = (type: string): boolean =>
+  /^application\/(?:ld\+)?json$/i.test(type);
+
+export function hostingPolicyErrors(file: string, source: string): string[] {
+  const errors: string[] = [];
+  if (/\.(?:html?|css|js|mjs)$/i.test(file) && REMOTE_FONT_PATTERN.test(source)) {
+    errors.push(
+      `${file}: Google Fonts are blocked by Loki CSP; self-host font files and reference them locally`,
+    );
+  }
+  if (!/\.html?$/i.test(file)) return errors;
+  SCRIPT_TAG_PATTERN.lastIndex = 0;
+  let script: RegExpExecArray | null;
+  while ((script = SCRIPT_TAG_PATTERN.exec(source))) {
+    const attrs = script[1] ?? "";
+    const type = /\btype\s*=\s*["']([^"']+)["']/i.exec(attrs)?.[1] ?? "text/javascript";
+    if (/\bsrc\s*=\s*["'](?:https?:)?\/\//i.test(attrs)) {
+      errors.push(
+        `${file}: remote <script src> is blocked by Loki CSP; bundle JavaScript into the finished build`,
+      );
+      continue;
+    }
+    if (/\bsrc\s*=/i.test(attrs) || isJsonScriptType(type)) continue;
+    errors.push(
+      `${file}: inline <script> is blocked by Loki CSP; move JavaScript to a same-origin .js file`,
+    );
+  }
+  if (INLINE_EVENT_HANDLER_PATTERN.test(source)) {
+    errors.push(
+      `${file}: inline event handlers are blocked by Loki CSP; bind listeners from a same-origin .js file`,
+    );
+  }
+  if (FORM_TAG_PATTERN.test(source)) {
+    errors.push(
+      `${file}: <form> submission is blocked in the Loki iframe; use <button type="button"> and JavaScript click handlers`,
+    );
+  }
+  if (STYLESHEET_LINK_PATTERN.test(source)) {
+    errors.push(
+      `${file}: remote stylesheets are blocked by Loki CSP; bundle CSS into the finished build`,
+    );
+  }
+  return errors;
+}
+
 async function walk(root: string, relative = ""): Promise<string[]> {
   const directory = path.join(root, relative);
   const entries = await readdir(directory, { withFileTypes: true });
@@ -357,6 +413,7 @@ export async function validateBuildDirectory(directory: string): Promise<{
     throw new Error(`entrypoint ${manifest.entrypoint} is missing`);
   }
   const warnings: string[] = [];
+  const hostingErrors: string[] = [];
   let multiplayerSdkDetected = !manifest.multiplayer?.enabled;
   for (const file of files) {
     if (/(^|\/)(server|backend)(\.|\/)/i.test(file)) {
@@ -384,6 +441,10 @@ export async function validateBuildDirectory(directory: string): Promise<{
     if (/https?:\/\/(?:localhost|127\.0\.0\.1)/i.test(source)) {
       warnings.push(`${file}: contains a localhost URL`);
     }
+    hostingErrors.push(...hostingPolicyErrors(file, source));
+  }
+  if (hostingErrors.length) {
+    throw new Error(hostingErrors.join("\n"));
   }
   if (!multiplayerSdkDetected) {
     warnings.push(

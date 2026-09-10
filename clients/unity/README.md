@@ -11,7 +11,7 @@ callbacks.
 In Unity Package Manager, add the Git URL with the package subdirectory:
 
 ```text
-https://github.com/sanbornli/loki.git?path=/clients/unity#v0.2.1
+https://github.com/sanbornli/loki.git?path=/clients/unity#v0.2.2
 ```
 
 Prefer `CreateSynchronizedRoom(initialState, reduce)` for shared state. The
@@ -19,7 +19,10 @@ wrapper matches the JavaScript API: `CreateAsync()`, `JoinAsync(inviteCode)`,
 `DispatchAsync(action)`, `LeaveAsync()`, `ReconnectAsync()`, and `CloseAsync()`.
 Supply opaque JSON state and actions plus a synchronous deterministic reducer.
 Action identity is `(senderId, actionId)`. A failed leave stays in
-`LeaveFailed` until retry or `CloseAsync()`.
+`LeaveFailed` until retry or `CloseAsync()`. Protocol numbers are integers;
+encode floats with `LokiQuantize.Quantize` / `Dequantize`. An omitted or empty
+`members` list is not a leave. Snapshot `Membership` is `ready` only when the
+local player is present on a complete roster.
 
 ## Test
 

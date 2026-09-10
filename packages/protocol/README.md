@@ -20,3 +20,10 @@ Rooms are host-authoritative. Loki validates tenancy, membership, sequencing,
 quotas, and host ownership, but it cannot prove that the elected host simulated
 gameplay honestly. This contract is intended for casual and unranked games and
 must not be used as a ranked anti-cheat boundary.
+
+Canonical JSON and synchronized-room numbers must be finite safe integers.
+`quantize` and `dequantize` convert fractional values into that integer
+contract. Snapshot and presence envelopes may include `membersComplete` and
+`membershipRevision`. An omitted or empty `members` list is incomplete, not a
+leave; `membersComplete: true` is required before an empty roster means
+everyone left.

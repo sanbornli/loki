@@ -41,6 +41,8 @@ data class SynchronizedRoomSnapshot(
     val playerId: String,
     val hostId: String,
     val members: List<RoomMember>,
+    val membership: String,
+    val membershipRevision: Long,
     val state: JsonValue,
     val stateVersion: Long,
     val connection: ConnectionState,
@@ -62,6 +64,8 @@ class SynchronizedRoom(
     private var inviteCode = ""
     private var hostId = ""
     private var members = listOf<RoomMember>()
+    private var membersComplete = false
+    private var membershipRevision = 0L
     private var generation = 0
     private var resyncing = false
     private val pending = mutableMapOf<String, Continuation<SynchronizedRoomSnapshot>>()
@@ -76,7 +80,19 @@ class SynchronizedRoom(
     val isHost: Boolean get() = playerId.isNotEmpty() && playerId == hostId
 
     fun getSnapshot() = lock.withLock {
-        SynchronizedRoomSnapshot(roomId, inviteCode, playerId, hostId, members, state, stateVersion, connection, lastError)
+        SynchronizedRoomSnapshot(
+            roomId,
+            inviteCode,
+            playerId,
+            hostId,
+            members,
+            membershipStatus(),
+            membershipRevision,
+            state,
+            stateVersion,
+            connection,
+            lastError,
+        )
     }
 
     suspend fun create(): SynchronizedRoomSnapshot = enter(true) { client.createSessionRoom() }
@@ -224,7 +240,10 @@ class SynchronizedRoom(
     private fun onConnection(event: String) {
         if (isInactive) return
         if (event == "reconnect_failed") {
-            failRoom(SynchronizedRoomOutcome.Indeterminate, "reconnect failed")
+            lock.withLock {
+                resyncing = true
+                connection = ConnectionState.Reconnecting
+            }
             return
         }
         if (event == "disconnected") {
@@ -271,8 +290,7 @@ class SynchronizedRoom(
             }
             "presence" -> {
                 message.fields.optionalString("hostId")?.let { hostId = it }
-                val list = (message.fields["members"] as? JsonValue.ArrayValue)?.value.orEmpty()
-                if (list.isNotEmpty()) members = list.map { it.toMember(hostId) }
+                applyMembership(message)
             }
             "host_changed" -> {
                 resyncing = true
@@ -320,10 +338,7 @@ class SynchronizedRoom(
             }
         }
         message.fields.optionalString("hostId")?.let { hostId = it }
-        if (replace) {
-            val list = (message.fields["members"] as? JsonValue.ArrayValue)?.value.orEmpty()
-            members = list.map { it.toMember(hostId) }
-        }
+        if (replace) applyMembership(message)
         val incoming = message.fields.optionalLong("stateVersion")
         val stale = incoming != null && incoming < stateVersion
         val stateValue = message.fields["state"]
@@ -387,6 +402,45 @@ class SynchronizedRoom(
         inviteCode = ""
         hostId = ""
         members = emptyList()
+        membersComplete = false
+        membershipRevision = 0L
+    }
+
+    private fun membershipStatus(): String {
+        val haveSelf = playerId.isNotEmpty() && members.any { it.playerId == playerId }
+        return if (membersComplete && haveSelf) "ready" else "synchronizing"
+    }
+
+    private fun snapshotMembersAreComplete(message: ServerEnvelope): Boolean {
+        val complete = message.fields.optionalBool("membersComplete")
+        if (complete == true) return true
+        if (complete == false) return false
+        val list = (message.fields["members"] as? JsonValue.ArrayValue)?.value
+        return !list.isNullOrEmpty()
+    }
+
+    private fun applyMembership(message: ServerEnvelope) {
+        val revision = message.fields.optionalLong("membershipRevision")
+        if (revision != null && revision >= membershipRevision) {
+            membershipRevision = revision
+        }
+        if (snapshotMembersAreComplete(message)) {
+            val list = (message.fields["members"] as? JsonValue.ArrayValue)?.value.orEmpty()
+            members = list.map { it.toMember(hostId) }
+            membersComplete = true
+            return
+        }
+        val leaves = (message.fields["leaves"] as? JsonValue.ArrayValue)?.value.orEmpty()
+        if (leaves.isNotEmpty()) {
+            val left = leaves.map { it.objectMap().string("playerId") }.toSet()
+            members = members.filter { it.playerId !in left }
+        }
+        val joins = (message.fields["joins"] as? JsonValue.ArrayValue)?.value.orEmpty()
+        if (joins.isNotEmpty()) {
+            val incoming = joins.map { it.toMember(hostId) }
+            val ids = incoming.map { it.playerId }.toSet()
+            members = members.filter { it.playerId !in ids } + incoming
+        }
     }
 
     private fun launch(block: suspend () -> Unit) {
@@ -414,4 +468,11 @@ fun Map<String, JsonValue>.optionalLong(key: String): Long? =
         null, JsonValue.Null -> null
         is JsonValue.Number -> value.value
         else -> error("Expected optional integer '$key'")
+    }
+
+fun Map<String, JsonValue>.optionalBool(key: String): Boolean? =
+    when (val value = get(key)) {
+        null, JsonValue.Null -> null
+        is JsonValue.Bool -> value.value
+        else -> error("Expected optional boolean '$key'")
     }

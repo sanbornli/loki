@@ -20,6 +20,7 @@ var CHAT_RATE_WINDOW_MS = 10000;
 var INVITE_FAIL_LIMIT = 10;
 var INVITE_FAIL_WINDOW_MS = 60000;
 var EMPTY_ROOM_GRACE_SECONDS = 30;
+var DISCONNECT_GRACE_SECONDS = 20;
 var MAX_RECENT_ACTIONS = 64;
 var RECENT_ACTION_TTL_MS = 600000;
 
@@ -738,6 +739,10 @@ var rpcRoomSnapshot = function (ctx, logger, nk, payload) {
   return signalRoom(ctx, nk, payload, "snapshot");
 };
 
+var rpcLeaveRoom = function (ctx, logger, nk, payload) {
+  return signalRoom(ctx, nk, payload, "depart");
+};
+
 var rpcRoomUpdate = function (ctx, logger, nk, payload) {
   return signalRoom(ctx, nk, payload, "update");
 };
@@ -900,6 +905,10 @@ var broadcastEnvelope = function (
   );
 };
 
+var bumpMembership = function (state) {
+  state.membershipRevision = (state.membershipRevision || 0) + 1;
+};
+
 var snapshotFields = function (state, actionId, senderId) {
   return {
     hostId: state.hostId,
@@ -908,6 +917,8 @@ var snapshotFields = function (state, actionId, senderId) {
     actionId: validActionId(actionId) ? actionId : undefined,
     senderId: senderId || undefined,
     members: presenceList(state.members, state.hostId),
+    membersComplete: true,
+    membershipRevision: state.membershipRevision || 0,
     capabilities: runtimeCapabilities(state),
   };
 };
@@ -991,9 +1002,11 @@ var matchInit = function (ctx, logger, nk, params) {
       sequence: 0,
       sharedState: {},
       nextJoinOrdinal: 0,
+      membershipRevision: 0,
       members: {},
       rateLimits: {},
       joinSyncs: [],
+      disconnectGraces: {},
       recentActions: {},
       emptyTicks: 0,
       lastStatusCheckTick: -1,
@@ -1031,11 +1044,110 @@ var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, prese
   };
 };
 
+var clearDisconnectGrace = function (state, userId) {
+  if (state.disconnectGraces && state.disconnectGraces[userId]) {
+    delete state.disconnectGraces[userId];
+  }
+};
+
+var applyLeaves = function (dispatcher, state, userIds) {
+  var previousHostId = state.hostId;
+  var leaves = [];
+  for (var index = 0; index < userIds.length; index += 1) {
+    var userId = userIds[index];
+    clearDisconnectGrace(state, userId);
+    var member = state.members[userId];
+    if (!member) continue;
+    leaves.push(memberPresence(userId, member, state.hostId));
+    delete state.members[userId];
+    delete state.rateLimits[userId];
+  }
+  if (!leaves.length) return;
+  bumpMembership(state);
+  if (!Object.keys(state.members).length) {
+    state.hostId = "";
+    state.emptyTicks = 0;
+    updateLabel(dispatcher, state);
+    return;
+  }
+  if (!state.members[state.hostId]) state.hostId = electHost(state.members);
+  broadcastEnvelope(
+    dispatcher,
+    state,
+    OP_SNAPSHOT,
+    "presence",
+    {
+      joins: [],
+      leaves: leaves,
+      members: presenceList(state.members, state.hostId),
+      membersComplete: true,
+      membershipRevision: state.membershipRevision || 0,
+    },
+    null,
+    null,
+    true,
+  );
+  if (previousHostId !== state.hostId) {
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_SNAPSHOT,
+      "host_changed",
+      {
+        previousHostId: previousHostId || undefined,
+        hostId: state.hostId,
+        stateVersion: state.version,
+      },
+      null,
+      null,
+      true,
+    );
+    broadcastEnvelope(
+      dispatcher,
+      state,
+      OP_SNAPSHOT,
+      "presence",
+      {
+        joins: [],
+        leaves: leaves,
+        members: presenceList(state.members, state.hostId),
+        membersComplete: true,
+        membershipRevision: state.membershipRevision || 0,
+      },
+      null,
+      null,
+      true,
+    );
+  }
+  updateLabel(dispatcher, state);
+};
+
+var expireDisconnectGraces = function (dispatcher, state) {
+  if (!state.disconnectGraces) state.disconnectGraces = {};
+  var expired = [];
+  for (var userId in state.disconnectGraces) {
+    if (!Object.prototype.hasOwnProperty.call(state.disconnectGraces, userId)) {
+      continue;
+    }
+    var grace = state.disconnectGraces[userId];
+    var member = state.members[userId];
+    if (!member || member.sessionId !== grace.sessionId) {
+      delete state.disconnectGraces[userId];
+      continue;
+    }
+    grace.ticks -= 1;
+    if (grace.ticks <= 0) expired.push(userId);
+  }
+  if (expired.length) applyLeaves(dispatcher, state, expired);
+};
+
 var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
   var joins = [];
+  var rosterChanged = false;
   var roomAlreadyOccupied = Object.keys(state.members).length > 0;
   for (var index = 0; index < presences.length; index += 1) {
     var presence = presences[index];
+    clearDisconnectGrace(state, presence.userId);
     var member = state.members[presence.userId];
     if (!member) {
       var ordinal = state.nextJoinOrdinal++;
@@ -1049,6 +1161,7 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
         node: presence.node || presence.nodeId,
       };
       state.members[presence.userId] = member;
+      rosterChanged = true;
     } else {
       member.sessionId = presence.sessionId;
       member.username = presence.username;
@@ -1066,6 +1179,7 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
       });
     }
   }
+  if (rosterChanged) bumpMembership(state);
 
   // Legacy snapshots keep the existing SDK and Phase 0 tests compatible.
   dispatcher.broadcastMessage(
@@ -1094,6 +1208,8 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
       joins: joins,
       leaves: [],
       members: presenceList(state.members, state.hostId),
+      membersComplete: true,
+      membershipRevision: state.membershipRevision || 0,
     },
     null,
     null,
@@ -1104,73 +1220,18 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
 };
 
 var matchLeave = function (ctx, logger, nk, dispatcher, tick, state, presences) {
-  var previousHostId = state.hostId;
-  var leaves = [];
+  if (!state.disconnectGraces) state.disconnectGraces = {};
   for (var index = 0; index < presences.length; index += 1) {
     var presence = presences[index];
     var member = state.members[presence.userId];
     // Ignore a delayed leave from the socket which a reconnect replaced.
     if (member && member.sessionId === presence.sessionId) {
-      leaves.push(memberPresence(presence.userId, member, state.hostId));
-      delete state.members[presence.userId];
-      delete state.rateLimits[presence.userId];
+      state.disconnectGraces[presence.userId] = {
+        sessionId: presence.sessionId,
+        ticks: Math.max(1, state.tickRate * DISCONNECT_GRACE_SECONDS),
+      };
     }
   }
-  if (!Object.keys(state.members).length) {
-    state.hostId = "";
-    state.emptyTicks = 0;
-    updateLabel(dispatcher, state);
-    return { state: state };
-  }
-  if (!state.members[state.hostId]) state.hostId = electHost(state.members);
-
-  broadcastEnvelope(
-    dispatcher,
-    state,
-    OP_SNAPSHOT,
-    "presence",
-    {
-      joins: [],
-      leaves: leaves,
-      members: presenceList(state.members, state.hostId),
-    },
-    null,
-    null,
-    true,
-  );
-  if (previousHostId !== state.hostId) {
-    broadcastEnvelope(
-      dispatcher,
-      state,
-      OP_SNAPSHOT,
-      "host_changed",
-      {
-        previousHostId: previousHostId || undefined,
-        hostId: state.hostId,
-        stateVersion: state.version,
-      },
-      null,
-      null,
-      true,
-    );
-    // Repeat the same leave set after host migration. Remaining clients that
-    // only apply presence once they are host still see who disconnected.
-    broadcastEnvelope(
-      dispatcher,
-      state,
-      OP_SNAPSHOT,
-      "presence",
-      {
-        joins: [],
-        leaves: leaves,
-        members: presenceList(state.members, state.hostId),
-      },
-      null,
-      null,
-      true,
-    );
-  }
-  updateLabel(dispatcher, state);
   return { state: state };
 };
 
@@ -1840,6 +1901,8 @@ var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
     return null;
   }
 
+  expireDisconnectGraces(dispatcher, state);
+
   if (!Object.keys(state.members).length) {
     state.emptyTicks += 1;
     if (state.emptyTicks >= state.tickRate * EMPTY_ROOM_GRACE_SECONDS) {
@@ -1897,6 +1960,8 @@ var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
           joins: [],
           leaves: [],
           members: presenceList(state.members, state.hostId),
+          membersComplete: true,
+          membershipRevision: state.membershipRevision || 0,
         },
         null,
         null,
@@ -1944,6 +2009,17 @@ var matchSignal = function (ctx, logger, nk, dispatcher, tick, state, data) {
     return {
       state: state,
       data: JSON.stringify({ ok: false, error: "tenant mismatch" }),
+    };
+  }
+  if (signal.operation === "depart") {
+    if (signal.actorId && state.members[signal.actorId]) {
+      applyLeaves(dispatcher, state, [signal.actorId]);
+    } else {
+      clearDisconnectGrace(state, signal.actorId);
+    }
+    return {
+      state: state,
+      data: JSON.stringify({ ok: true }),
     };
   }
   if (signal.operation === "update") {
@@ -2001,6 +2077,8 @@ var matchSignal = function (ctx, logger, nk, dispatcher, tick, state, data) {
       stateVersion: state.version,
       state: state.sharedState,
       members: orderedMemberIds(state.members),
+      membersComplete: true,
+      membershipRevision: state.membershipRevision || 0,
       capabilities: runtimeCapabilities(state),
     }),
   };
@@ -2065,6 +2143,7 @@ var InitModule = function (ctx, logger, nk, initializer) {
   initializer.registerRpc("loki_join_room", rpcJoinRoom);
   initializer.registerRpc("loki_resolve_invite", rpcResolveInvite);
   initializer.registerRpc("loki_room_snapshot", rpcRoomSnapshot);
+  initializer.registerRpc("loki_leave_room", rpcLeaveRoom);
   initializer.registerRpc("loki_room_update", rpcRoomUpdate);
   initializer.registerRpc("loki_leaderboard_submit", rpcLeaderboardSubmit);
   initializer.registerRpc("loki_leaderboard_list", rpcLeaderboardList);

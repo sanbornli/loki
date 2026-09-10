@@ -703,5 +703,14 @@ namespace Loki.Play.SDK
             return number.Value;
         }
 
+        public static bool? OptionalBool(this IReadOnlyDictionary<string, JsonValue> fields, string key)
+        {
+            JsonValue value;
+            if (!fields.TryGetValue(key, out value) || value is JsonValue.NullValue) return null;
+            var flag = value as JsonValue.BoolValue;
+            if (flag == null) throw new InvalidOperationException("Expected optional boolean '" + key + "'");
+            return flag.Value;
+        }
+
     }
 }

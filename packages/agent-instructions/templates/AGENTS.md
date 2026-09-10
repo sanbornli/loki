@@ -23,4 +23,8 @@
   when the Loki overlay opens.
 - Handle rejected actions from `dispatch()` without inventing a parallel
   protocol. Build and deploy from this repository.
+- Loki-hosted games run in a sandbox iframe with a strict CSP. Do not use
+  inline `<script>` tags, inline event handlers, Google Fonts or other remote
+  stylesheets, or `<form>` submissions. Put JavaScript and fonts in same-origin
+  files and use `<button type="button">` for create/join controls.
 - Run `npx lokiplay validate` before `npx lokiplay deploy`.

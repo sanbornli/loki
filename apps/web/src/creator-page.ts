@@ -1120,12 +1120,12 @@ const creatorScript = String.raw`
           productConfig.lokiplayVersion ||
           productConfig.packageVersion
         ),
-        "0.2.1"
+        "0.2.2"
       );
     }
 
     function configuredCliVersion() {
-      return text(productConfig && productConfig.cliVersion, "0.2.1");
+      return text(productConfig && productConfig.cliVersion, "0.2.2");
     }
 
     function agentPrompt(project) {
@@ -1188,6 +1188,7 @@ const creatorScript = String.raw`
         "- Keep replicated state JSON-compatible and use finite safe integers.",
         "- Subscribe to synchronized snapshots for state, members, connection status, and rejected actions. Handle disconnects and focus release when the Loki overlay opens.",
         "- Production multiplayer must run from a Loki-hosted finished browser build.",
+        "- Hosted games run in a sandbox iframe with a strict CSP. Do not use inline <script> tags, inline event handlers, Google Fonts or other remote stylesheets, or <form> submissions. Bundle JavaScript and fonts as same-origin files and use <button type=\"button\"> for create/join controls.",
         "",
         "Security and approval",
         "- Do not put credentials, access tokens, deployment secrets, private keys, or environment-secret values in code, game.json, logs, commits, this prompt, or the final report.",

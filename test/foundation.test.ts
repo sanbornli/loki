@@ -9,6 +9,9 @@ import {
   RoomConfigSchema,
   ServerEnvelopeSchema,
   canonicalJson,
+  dequantize,
+  quantize,
+  snapshotMembersAreComplete,
   stateHash,
 } from "../packages/protocol/src/index.js";
 
@@ -40,6 +43,18 @@ test("protocol validates manifests and canonical state consistently", () => {
   assert.equal(canonicalJson({ z: 1, a: [2, 3] }), '{"a":[2,3],"z":1}');
   assert.equal(stateHash({ a: 1, b: 2 }), stateHash({ b: 2, a: 1 }));
   assert.throws(() => canonicalJson({ invalid: Number.NaN }));
+  assert.throws(() => canonicalJson({ invalid: 3.35 }));
+  assert.equal(quantize(3.35, 100), 335);
+  assert.equal(dequantize(335, 100), 3.35);
+  assert.throws(() => quantize(Number.NaN, 100));
+  assert.throws(() => quantize(Number.MAX_SAFE_INTEGER, 100));
+  assert.equal(snapshotMembersAreComplete({ membersComplete: true, members: [] }), true);
+  assert.equal(snapshotMembersAreComplete({ membersComplete: false, members: [] }), false);
+  assert.equal(
+    snapshotMembersAreComplete({ members: [{ playerId: "a" }] }),
+    true,
+  );
+  assert.equal(snapshotMembersAreComplete({ members: [] }), false);
 });
 
 test("protocol rejects malformed and unsupported client messages", () => {
