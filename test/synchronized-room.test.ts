@@ -1467,8 +1467,11 @@ test("MCP advertises synchronized rooms and flags manual synchronization", async
   };
   const requirements = (await callLokiTool(api, "integration_requirements", {})) as {
     synchronizedRooms: boolean;
+    guidance: string;
   };
   assert.equal(requirements.synchronizedRooms, true);
+  assert.match(requirements.guidance, /Let Loki own lifecycle reconnect/);
+  assert.match(requirements.guidance, /Pointer Events/);
   const diagnosis = (await callLokiTool(api, "diagnose_multiplayer", {
     sources: ["client.sendHostState(0, { n: 1 })"],
   })) as { findings: Array<{ code: string }> };

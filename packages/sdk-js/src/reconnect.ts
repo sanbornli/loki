@@ -176,10 +176,9 @@ export class ForegroundController {
       return;
     }
     if (cause === "pageshow") {
-      if (background) {
-        this.#suspend();
-        return;
-      }
+      // Safari can still report a stale hidden visibility state while restoring
+      // a page. pageshow is authoritative: replace the socket now and let a
+      // genuine offline failure enter the environment-gated retry scheduler.
       this.#resumeAndReplace();
       return;
     }

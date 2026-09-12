@@ -8,7 +8,14 @@ export const lokiResources = [
     text: [
       "# Loki integration",
       "Use @lokiplay/sdk and a host-authoritative room.",
-      "Prefer createSynchronizedRoom for shared state.",
+      "Prefer createSynchronizedRoom for shared state. Keep synchronized state compact and JSON-compatible; reducers must be synchronous, deterministic, and free of rendering, timers, networking, or other I/O.",
+      "Let the SDK own page lifecycle, socket replacement, retries, snapshots, and pending-action replay. Keep the same client and room while interrupted. Never leave, close, disconnect, reload, or replace a room because of visibility, page, focus, or network lifecycle events.",
+      "Dispatch only while connected. During suspended, reconnecting, or resynchronizing, lock authoritative input, preserve rendered state, show a temporary reconnecting message, and wait for an authoritative snapshot. Do not assume host authority survives reconnect.",
+      "Do not repeat unresolved actions under new IDs. Treat indeterminate confirmation as an unknown outcome, room_closed as terminal, and leave_failed as requiring resolution before another room.",
+      "Use a mobile viewport with viewport-fit=cover without globally disabling zoom. Fill 100dvh with a 100vh fallback, account for safe areas, recalculate container layout on viewport changes, and avoid document scrolling during play.",
+      "Use Pointer Events across touch and desktop input, scoped touch-action, pointer capture and cancellation handling, 44x44 CSS-pixel primary targets, and no hover-only controls.",
+      "For canvas games, separate CSS and backing size, cap devicePixelRatio reasonably, and resize and redraw without replacing the canvas. Use one controlled requestAnimationFrame loop and pause or throttle rendering while hidden without leaving the room.",
+      "Report mobile Safari and Android Chrome coverage without claiming real-device testing unless it actually occurred.",
       "Production multiplayer requires a Loki-hosted build.",
       "Never include backend source, secrets, localhost URLs, or creator ad scripts.",
     ].join("\n\n"),
@@ -110,7 +117,7 @@ export async function callLokiTool(
       rankedIntegrity: false,
       synchronizedRooms: true,
       guidance:
-        "Prefer createSynchronizedRoom for shared state. Low-level sendAction and sendHostState remain supported.",
+        "Prefer createSynchronizedRoom for shared state. Let Loki own lifecycle reconnect and pending-action replay; never leave or replace a room on browser visibility, page, focus, or network events. Dispatch only while connected and preserve authoritative state while suspended, reconnecting, or resynchronizing. Use responsive safe-area-aware viewport sizing, Pointer Events for touch and desktop, and bounded canvas resolution and rendering. Low-level sendAction and sendHostState remain supported.",
     };
   }
   if (name === "diagnose_multiplayer") {

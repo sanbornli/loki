@@ -300,6 +300,10 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
   assert.match(creator, /createSynchronizedRoom\(\)/);
+  assert.match(creator, /Let the SDK own lifecycle detection/);
+  assert.match(creator, /viewport-fit=cover/);
+  assert.match(creator, /Pointer Events/);
+  assert.match(creator, /requestAnimationFrame/);
   assert.match(creator, /Google Fonts/);
   assert.match(creator, /inline <script>/);
   assert.match(creator, /<form> submissions/);
@@ -582,6 +586,10 @@ test("CLI initializes, validates and archives finished builds", async () => {
     assert.match(agents, /inline `<script>`/);
     assert.match(agents, /Google Fonts/);
     assert.match(agents, /<form>/);
+    assert.match(agents, /Let Loki own lifecycle detection/);
+    assert.match(agents, /viewport-fit=cover/);
+    assert.match(agents, /Pointer Events/);
+    assert.match(agents, /requestAnimationFrame/);
     assert.ok((await archiveBuild(directory)).byteLength > 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -833,6 +841,25 @@ test("pageshow replaces the socket without a preceding visibility event", async 
   controller.notify("pageshow");
   await Promise.resolve();
   assert.deepEqual(events, ["resumed"]);
+  assert.equal(replacements, 1);
+});
+
+test("pageshow replaces the socket when Safari visibility state is stale", async () => {
+  const events: string[] = [];
+  let replacements = 0;
+  const controller = new ForegroundController({
+    isActive: () => true,
+    environment: () => ({ visible: false, online: true }),
+    onEvent: (event) => events.push(event),
+    replaceConnection: async () => {
+      replacements += 1;
+    },
+    scheduleRetry: () => undefined,
+  });
+  controller.notify("pagehide");
+  controller.notify("pageshow");
+  await Promise.resolve();
+  assert.deepEqual(events, ["suspended", "resumed"]);
   assert.equal(replacements, 1);
 });
 
