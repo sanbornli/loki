@@ -679,29 +679,6 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
   assert.ok(recovered.members.includes(a2.session.user_id!));
   assert.equal(recovered.membershipRevision, revisionBeforeLeave);
 
-  a2.socket.disconnect(false);
-  await new Promise((resolve) => setTimeout(resolve, 1_000));
-  const interrupted = await rpc<{
-    hostId: string;
-    members: string[];
-    membershipRevision: number;
-  }>(a1, "loki_room_snapshot", { matchId: roomA.matchId });
-  assert.equal(interrupted.hostId, a1.session.user_id);
-  assert.ok(interrupted.members.includes(a2.session.user_id!));
-  const revisionBeforeLeave = interrupted.membershipRevision;
-  a2.socket = client.createSocket(SSL, false);
-  await a2.socket.connect(a2.session, true);
-  attachMatchHandler(a2);
-  await a2.socket.joinMatch(roomA.matchId);
-  const recovered = await rpc<{
-    hostId: string;
-    members: string[];
-    membershipRevision: number;
-  }>(a1, "loki_room_snapshot", { matchId: roomA.matchId });
-  assert.equal(recovered.hostId, a1.session.user_id);
-  assert.ok(recovered.members.includes(a2.session.user_id!));
-  assert.equal(recovered.membershipRevision, revisionBeforeLeave);
-
   const hostChangedPromise = nextMatchData(
     a2,
     roomA.matchId,
