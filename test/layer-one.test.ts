@@ -273,12 +273,39 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(marketing, /The only plugin you need for your vibe-coded games/);
   assert.match(marketing, /Its only a game when there are players/);
   assert.match(marketing, /Just leave it to your Agent/);
-  assert.match(marketing, /loki-vibecoded-game-montage\.png/);
+  assert.match(marketing, /game-stage/);
+  assert.match(marketing, /Battleship/);
+  assert.match(marketing, /Pool/);
+  assert.match(marketing, /Chess/);
+  assert.doesNotMatch(marketing, /Orbital Relay/);
+  assert.doesNotMatch(marketing, /Moss &amp; Match/);
+  assert.doesNotMatch(marketing, /Signal Kitchen/);
+  assert.doesNotMatch(marketing, /montage-play/);
+  assert.doesNotMatch(marketing, /loki-vibecoded-game-montage\.png/);
   assert.match(marketing, /https:\/\/app\.lokiplay\.cc\/login/);
   assert.match(marketing, /https:\/\/app\.lokiplay\.cc\/signup/);
   assert.match(marketing, />Get Started</g);
   assert.doesNotMatch(marketing, />Start free</);
   assert.doesNotMatch(marketing, />Start building</);
+  assert.match(marketing, /href="\/hosting"/);
+  assert.match(marketing, /href="\/pricing"/);
+  assert.match(marketing, /href="\/about"/);
+  assert.match(marketing, /href="\/contact"/);
+  assert.match(marketing, /href="\/terms"/);
+  assert.match(marketing, /href="\/privacy"/);
+  assert.match(marketing, /href="\/aup"/);
+  assert.doesNotMatch(marketing, /href="\/blog"/);
+  assert.doesNotMatch(marketing, /href="\/changelog"/);
+  assert.doesNotMatch(marketing, /href="\/dmca"/);
+  assert.doesNotMatch(marketing, /href="\/showcase"/);
+  assert.doesNotMatch(marketing, /href="\/community"/);
+  assert.doesNotMatch(marketing, /href="\/cookies"/);
+  assert.doesNotMatch(marketing, /href="\/monetization"/);
+  const terms = renderMarketingPage(config, "/terms");
+  assert.match(terms, /Placeholder text/);
+  assert.match(terms, /Terms of Service/);
+  assert.match(renderMarketingPage(config, "/hosting"), /A home for every build/);
+  assert.match(renderMarketingPage(config, "/pricing"), /Start free/);
   assert.match(creator, /window\.location\.pathname === "\/signup"/);
   assert.doesNotMatch(creator, /Editorial Studio \/ 03/);
   assert.match(creator, /\.auth-panel \.form-actions \{[\s\S]*display: grid/);
@@ -709,6 +736,15 @@ test("release workflow retries npm smoke and generates a Swift 5.9 manifest", as
   assert.match(workflow, /sleep 30/);
   assert.match(workflow, /package-install-smoke\.ts --registry/);
   assert.match(workflow, /waiting for npm propagation/);
+  assert.match(workflow, /verify-swift:/);
+  assert.match(workflow, /verify-unity:/);
+  assert.match(workflow, /verify-kotlin:/);
+  assert.match(workflow, /--ecosystem swift/);
+  assert.match(workflow, /--ecosystem unity/);
+  assert.match(workflow, /--ecosystem kotlin/);
+  assert.match(workflow, /needs: \[publish-npm, verify-swift, verify-unity\]/);
+  assert.doesNotMatch(workflow, /needs: \[verify-native-installs\]/);
+  assert.doesNotMatch(workflow, /needs: \[publish-npm, publish-kotlin\]/);
 
   const swift = await readFile(
     path.join(process.cwd(), "scripts/verify-native-registry-install.ts"),

@@ -1,11 +1,12 @@
 name: Release
 
-# Runtime-first 0.2.0 rollout (do not skip or reorder):
+# Runtime-first rollout:
 # 1. Deploy Nakama config/runtime (infra/nakama) to the live environment.
 # 2. Pass live integration and recovery (nakama-live below).
-# 3. Publish and tag 0.2.0 packages (publish-npm, publish-kotlin).
-# 4. Wait for Maven Central, then verify public Maven/SPM/Unity installs.
-# 5. Only then create the GitHub release and final release evidence.
+# 3. Publish npm packages and the Kotlin Maven artifact in parallel.
+# 4. Verify Swift and Unity from the public tag without waiting for Maven.
+# 5. Create the GitHub release after npm + Swift + Unity.
+# 6. Kotlin/Maven Central verification continues independently after publish.
 
 on:
   push:
@@ -164,9 +165,45 @@ jobs:
             -H "Content-Type: application/json" \
             "https://ossrh-staging-api.central.sonatype.com/manual/upload/repository/${key}?publishing_type=automatic"
 
-  verify-native-installs:
-    needs: [publish-npm, publish-kotlin]
+  verify-swift:
+    needs: [nakama-live]
     runs-on: macos-latest
+    environment: release
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Verify Swift package from the public tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          export LOKI_PACKAGE_VERSION="$version"
+          npx tsx scripts/verify-native-registry-install.ts --ecosystem swift
+
+  verify-unity:
+    needs: [nakama-live]
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Verify Unity package from the public tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          export LOKI_PACKAGE_VERSION="$version"
+          npx tsx scripts/verify-native-registry-install.ts --ecosystem unity
+
+  verify-kotlin:
+    needs: [publish-kotlin]
+    runs-on: ubuntu-latest
     environment: release
     timeout-minutes: 90
     steps:
@@ -182,7 +219,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.10.2"
-      - name: Wait for Maven Central and verify public native installs
+      - run: npm ci
+      - name: Wait for Maven Central and verify the Kotlin package
         run: |
           version="${GITHUB_REF_NAME#v}"
           export LOKI_PACKAGE_VERSION="$version"
@@ -196,10 +234,10 @@ jobs:
             fi
             sleep 90
           done
-          npx tsx scripts/verify-native-registry-install.ts
+          npx tsx scripts/verify-native-registry-install.ts --ecosystem kotlin
 
   github-release:
-    needs: [verify-native-installs]
+    needs: [publish-npm, verify-swift, verify-unity]
     runs-on: ubuntu-latest
     environment: release
     steps:
