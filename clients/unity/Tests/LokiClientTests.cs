@@ -77,5 +77,21 @@ namespace Loki.Play.SDK.Tests
                 new[] { "auth.authenticate", "rooms.join" },
                 transport.Requests.ConvertAll(request => request.operation));
         }
+
+        [Test]
+        public void NotifyLifecycleEmitsSuspendedThenResumed()
+        {
+            var transport = new RecordingTransport();
+            var client = new LokiClient(transport);
+            string last = null;
+            client.OnConnection(eventName => last = eventName);
+            client.NotifyLifecycle(false, true);
+            Assert.AreEqual("suspended", last);
+            client.NotifyLifecycle(true, true);
+            Assert.AreEqual("resumed", last);
+            last = null;
+            client.NotifyLifecycle(true, true);
+            Assert.AreEqual("resumed", last);
+        }
     }
 }

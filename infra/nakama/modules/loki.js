@@ -20,7 +20,9 @@ var CHAT_RATE_WINDOW_MS = 10000;
 var INVITE_FAIL_LIMIT = 10;
 var INVITE_FAIL_WINDOW_MS = 60000;
 var EMPTY_ROOM_GRACE_SECONDS = 30;
-var DISCONNECT_GRACE_SECONDS = 20;
+var HOST_AUTHORITY_GRACE_SECONDS = 20;
+var MEMBERSHIP_GRACE_SECONDS = 90;
+var MEMBERSHIP_GRACE_SECONDS = 90;
 var MAX_RECENT_ACTIONS = 64;
 var RECENT_ACTION_TTL_MS = 600000;
 
@@ -808,9 +810,19 @@ var orderedMemberIds = function (members) {
   });
   return userIds;
 };
-
-var electHost = function (members) {
+var electHost = function (members, excludeUserId, disconnectGraces) {
   var users = orderedMemberIds(members);
+  var fallback = "";
+  for (var index = 0; index < users.length; index += 1) {
+    var userId = users[index];
+    if (userId === excludeUserId) continue;
+    if (disconnectGraces && disconnectGraces[userId]) {
+      if (!fallback) fallback = userId;
+      continue;
+    }
+    return userId;
+  }
+  return fallback;
   return users.length ? users[0] : "";
 };
 
@@ -1121,10 +1133,48 @@ var applyLeaves = function (dispatcher, state, userIds) {
   }
   updateLabel(dispatcher, state);
 };
+var migrateHostAuthority = function (dispatcher, state, previousHostId) {
+  if (!state.members[previousHostId] || state.hostId !== previousHostId) return;
+  var nextHost = electHost(state.members, previousHostId, state.disconnectGraces);
+  if (!nextHost || nextHost === previousHostId) return;
+  state.hostId = nextHost;
+  broadcastEnvelope(
+    dispatcher,
+    state,
+    OP_SNAPSHOT,
+    "host_changed",
+    {
+      previousHostId: previousHostId,
+      hostId: state.hostId,
+      stateVersion: state.version,
+    },
+    null,
+    null,
+    true,
+  );
+  broadcastEnvelope(
+    dispatcher,
+    state,
+    OP_SNAPSHOT,
+    "presence",
+    {
+      joins: [],
+      leaves: [],
+      members: presenceList(state.members, state.hostId),
+      membersComplete: true,
+      membershipRevision: state.membershipRevision || 0,
+    },
+    null,
+    null,
+    true,
+  );
+  updateLabel(dispatcher, state);
+};
 
 var expireDisconnectGraces = function (dispatcher, state) {
   if (!state.disconnectGraces) state.disconnectGraces = {};
   var expired = [];
+  var migrate = [];
   for (var userId in state.disconnectGraces) {
     if (!Object.prototype.hasOwnProperty.call(state.disconnectGraces, userId)) {
       continue;
@@ -1135,7 +1185,19 @@ var expireDisconnectGraces = function (dispatcher, state) {
       delete state.disconnectGraces[userId];
       continue;
     }
-    grace.ticks -= 1;
+    if (grace.authorityTicks > 0) {
+      grace.authorityTicks -= 1;
+      if (grace.authorityTicks <= 0 && state.hostId === userId) {
+        migrate.push(userId);
+      }
+    }
+    grace.membershipTicks -= 1;
+    if (grace.membershipTicks <= 0) expired.push(userId);
+  }
+  for (var index = 0; index < migrate.length; index += 1) {
+    if (expired.indexOf(migrate[index]) === -1) {
+      migrateHostAuthority(dispatcher, state, migrate[index]);
+    }
     if (grace.ticks <= 0) expired.push(userId);
   }
   if (expired.length) applyLeaves(dispatcher, state, expired);
@@ -1227,7 +1289,11 @@ var matchLeave = function (ctx, logger, nk, dispatcher, tick, state, presences) 
     // Ignore a delayed leave from the socket which a reconnect replaced.
     if (member && member.sessionId === presence.sessionId) {
       state.disconnectGraces[presence.userId] = {
-        sessionId: presence.sessionId,
+        membershipTicks: Math.max(1, state.tickRate * MEMBERSHIP_GRACE_SECONDS),
+        authorityTicks:
+          presence.userId === state.hostId
+            ? Math.max(1, state.tickRate * HOST_AUTHORITY_GRACE_SECONDS)
+            : 0,
         ticks: Math.max(1, state.tickRate * DISCONNECT_GRACE_SECONDS),
       };
     }

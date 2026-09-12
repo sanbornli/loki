@@ -5,7 +5,14 @@ export type LifecycleState = {
   online: boolean;
 };
 
-export type LifecycleListener = () => void;
+export type LifecycleCause =
+  | "visibilitychange"
+  | "pageshow"
+  | "pagehide"
+  | "online"
+  | "offline";
+
+export type LifecycleListener = (cause?: LifecycleCause) => void;
 
 export interface PageLifecycle {
   getState(): LifecycleState;
@@ -30,16 +37,22 @@ export const createBrowserPageLifecycle = (): PageLifecycle | undefined => {
       online: navigator.onLine !== false,
     }),
     subscribe: (listener) => {
-      const onChange = () => listener();
-      document.addEventListener("visibilitychange", onChange);
-      window.addEventListener("pageshow", onChange);
-      window.addEventListener("online", onChange);
-      window.addEventListener("offline", onChange);
+      const onVisibility = () => listener("visibilitychange");
+      const onPageShow = () => listener("pageshow");
+      const onPageHide = () => listener("pagehide");
+      const onOnline = () => listener("online");
+      const onOffline = () => listener("offline");
+      document.addEventListener("visibilitychange", onVisibility);
+      window.addEventListener("pageshow", onPageShow);
+      window.addEventListener("pagehide", onPageHide);
+      window.addEventListener("online", onOnline);
+      window.addEventListener("offline", onOffline);
       return () => {
-        document.removeEventListener("visibilitychange", onChange);
-        window.removeEventListener("pageshow", onChange);
-        window.removeEventListener("online", onChange);
-        window.removeEventListener("offline", onChange);
+        document.removeEventListener("visibilitychange", onVisibility);
+        window.removeEventListener("pageshow", onPageShow);
+        window.removeEventListener("pagehide", onPageHide);
+        window.removeEventListener("online", onOnline);
+        window.removeEventListener("offline", onOffline);
       };
     },
   };
@@ -122,5 +135,82 @@ export class ReconnectScheduler {
       this.#inflight = false;
     }
     if (this.#wanted) this.#arm();
+  }
+}
+
+export type ForegroundEvent = "suspended" | "resumed";
+
+export class ForegroundController {
+  #suspended = false;
+  #replacePromise?: Promise<void>;
+  readonly #isActive: () => boolean;
+  readonly #environment: () => LifecycleState | undefined;
+  readonly #onEvent: (event: ForegroundEvent) => void;
+  readonly #replaceConnection: () => Promise<void>;
+  readonly #scheduleRetry: () => void;
+
+  constructor(options: {
+    isActive(): boolean;
+    environment(): LifecycleState | undefined;
+    onEvent(event: ForegroundEvent): void;
+    replaceConnection(): Promise<void>;
+    scheduleRetry(): void;
+  }) {
+    this.#isActive = options.isActive;
+    this.#environment = options.environment;
+    this.#onEvent = options.onEvent;
+    this.#replaceConnection = options.replaceConnection;
+    this.#scheduleRetry = options.scheduleRetry;
+  }
+
+  notify(cause?: LifecycleCause): void {
+    const state = this.#environment();
+    if (!state) return;
+    const background = !state.visible || !state.online;
+    if (!this.#isActive()) {
+      if (!background && cause !== "pagehide") this.#suspended = false;
+      return;
+    }
+    if (cause === "pagehide") {
+      this.#suspend();
+      return;
+    }
+    if (cause === "pageshow") {
+      if (background) {
+        this.#suspend();
+        return;
+      }
+      this.#resumeAndReplace();
+      return;
+    }
+    if (background) {
+      this.#suspend();
+      return;
+    }
+    if (!this.#suspended) return;
+    this.#resumeAndReplace();
+  }
+
+  #suspend(): void {
+    if (this.#suspended) return;
+    this.#suspended = true;
+    this.#onEvent("suspended");
+  }
+
+  #resumeAndReplace(): void {
+    this.#suspended = false;
+    this.#onEvent("resumed");
+    this.#replace();
+  }
+
+  #replace(): void {
+    if (this.#replacePromise) return;
+    this.#replacePromise = this.#replaceConnection()
+      .catch(() => {
+        this.#scheduleRetry();
+      })
+      .finally(() => {
+        this.#replacePromise = undefined;
+      });
   }
 }

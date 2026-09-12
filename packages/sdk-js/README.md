@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.2.2
+npm install @lokiplay/sdk@0.2.3
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -51,14 +51,32 @@ be synchronous, deterministic, and JSON-compatible. Only the current host runs
 `(senderId, actionId)`.
 
 `create()`, `join({ inviteCode })`, `dispatch(action)`, `leave()`, and
-`reconnect()` are the shared synchronized-room API. A failed `leave()` retains
-the room identity in `leave_failed` and blocks a new join until `leave()`
-succeeds or `close()` abandons the handle. 0.2.0 clients fail fast when a
-snapshot does not advertise `capabilities.synchronized_rooms`.
+`reconnect()` are the shared synchronized-room API. Call `dispatch()` only
+while the snapshot `connection` is `connected`. Hidden or offline pages enter
+`suspended`, pause confirmation timers, and keep pending actions and room
+identity. Returning to the foreground replaces the socket, requests a snapshot,
+and replays unresolved actions with the same `(senderId, actionId)`. A missed
+confirmation starts recovery instead of immediately failing `dispatch()`. If
+recovery cannot determine the outcome before the recovery deadline, the
+promise rejects as `indeterminate`. A failed `leave()` retains the room
+identity in `leave_failed` and blocks a new join until `leave()` succeeds or
+`close()` abandons the handle. Only `leave()` sends an immediate membership
+leave. Connection loss is an interruption and uses reconnect grace. 0.2.0
+clients fail fast when a snapshot does not advertise
+`capabilities.synchronized_rooms`.
+and replays unresolved actions with the same `(senderId, actionId)`. A missed
+confirmation starts recovery instead of immediately failing `dispatch()`. If
+recovery cannot determine the outcome before the recovery deadline, the
+promise rejects as `indeterminate`. A failed `leave()` retains the room
+identity in `leave_failed` and blocks a new join until `leave()` succeeds or
+`close()` abandons the handle. Only `leave()` sends an immediate membership
+leave. Connection loss is an interruption and uses reconnect grace. 0.2.0
+clients fail fast when a snapshot does not advertise
+`capabilities.synchronized_rooms`.
 
 Protocol numbers must be finite safe integers. Encode fractional values with
-`quantize` / `dequantize` before they enter synchronized state (for example
-`quantize(3.35, 100)` is `335`). An omitted or empty `members` list is not a
+stylesheets, or `<form>` submissions. On mobile, the SDK suspends while the page is hidden or offline, then replaces
+the socket when the page is visible and online again, retries with backoff, and
 leave. Clients replace the roster only when `membersComplete` is true, or when
 that flag is omitted and `members` is non-empty. `snapshot.membership` is
 `ready` only when the local player is present on a complete roster; otherwise

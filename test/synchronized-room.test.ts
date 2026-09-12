@@ -4,6 +4,10 @@ import {
   LokiClient,
   SynchronizedRoomError,
   SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
+  SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS,
+  requireLeaveRoomSuccess,
+  type ConnectionEvent,
+  type ConnectionEvent,
   type LokiTransport,
   type JoinedRoom,
 } from "../packages/sdk-js/src/index.js";
@@ -70,7 +74,7 @@ class MemoryTransport implements LokiTransport {
   #playerId?: string;
   #projectId?: string;
   #room?: RoomRecord;
-  #listeners = new Set<(message: unknown) => void>();
+  #connection = new Set<(event: ConnectionEvent) => void>();
   #connection = new Set<(event: "disconnected" | "connected" | "reconnect_failed") => void>();
   #closed = false;
   #paused = false;
@@ -83,6 +87,9 @@ class MemoryTransport implements LokiTransport {
   #failLeave = false;
   #failJoinSnapshot = false;
   #omitCapabilities = false;
+  #failReconnectSticky = false;
+  #failSend = false;
+  #rejectLeave = false;
   #failReconnect = false;
   #staleSnapshotOnce = false;
   #enterHold?: Promise<void>;
@@ -142,6 +149,10 @@ class MemoryTransport implements LokiTransport {
     return this.#enter(room);
   }
 
+    if (this.#failSend) {
+      this.#failSend = false;
+      throw new Error("send failed");
+    }
   async send(message: ClientEnvelope): Promise<void> {
     const room = this.#room;
     const playerId = this.#requirePlayer();
@@ -439,12 +450,25 @@ class MemoryTransport implements LokiTransport {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
-
+  subscribeConnection(listener: (event: ConnectionEvent) => void): () => void {
   subscribeConnection(listener: (event: "disconnected" | "connected" | "reconnect_failed") => void): () => void {
     this.#connection.add(listener);
     return () => this.#connection.delete(listener);
   }
+  failNextSend(): void {
+    this.#failSend = true;
+  }
 
+  rejectNextLeave(): void {
+    this.#rejectLeave = true;
+  }
+
+  async leaveRoom(roomId: string): Promise<void> {
+    if (this.#rejectLeave) {
+      this.#rejectLeave = false;
+      this.leaveCount += 1;
+      throw new Error("tenant mismatch");
+    }
   async leaveRoom(roomId: string): Promise<void> {
     const shouldFail = this.#failLeave;
     this.#failLeave = false;
@@ -494,69 +518,26 @@ class MemoryTransport implements LokiTransport {
   }
 
   async reconnect(): Promise<void> {
-    if (this.#failReconnect) {
-      this.#failReconnect = false;
+      if (!this.#failReconnectSticky) this.#failReconnect = false;
+      for (const listener of this.#connection) listener("reconnect_failed");
       for (const listener of this.#connection) listener("reconnect_failed");
       throw new Error("reconnect failed");
     }
     for (const listener of this.#connection) listener("disconnected");
     const room = this.#room;
-    const playerId = this.#playerId;
-    if (room && playerId) {
-      room.transports.delete(this);
-      const wasHost = room.hostId === playerId;
-      const left = room.members.get(playerId);
-      room.members.delete(playerId);
-      if (wasHost) {
-        room.hostId = [...room.members.keys()][0] ?? "";
-        this.#broadcast(
-          room,
-          envelope(room, {
-            type: "host_changed",
-            previousHostId: playerId,
-            hostId: room.hostId,
-            stateVersion: room.version,
-          }),
-        );
-      }
-      this.#broadcast(
-        room,
-        envelope(room, {
-          type: "presence",
-          joins: [],
-          leaves: left
-            ? [
-                {
-                  playerId,
-                  sessionId: left.sessionId,
-                  joinedAt: left.joinedAt,
-                  host: wasHost,
-                },
-              ]
-            : [],
-          members: this.#members(room),
-        }),
-      );
-      room.members.set(playerId, { sessionId: crypto.randomUUID(), joinedAt: Date.now() });
-      room.transports.add(this);
-      this.#room = room;
-      this.#broadcast(
-        room,
-        envelope(room, {
-          type: "presence",
-          joins: [
-            {
-              playerId,
-              sessionId: room.members.get(playerId)!.sessionId,
-              joinedAt: room.members.get(playerId)!.joinedAt,
-              host: playerId === room.hostId,
-            },
-          ],
-          leaves: [],
-          members: this.#members(room),
-        }),
-      );
+    if (room && playerId && room.members.has(playerId)) {
+      const member = room.members.get(playerId);
+      if (member) member.sessionId = crypto.randomUUID();
     }
+    for (const listener of this.#connection) listener("connected");
+  }
+
+  emitSuspended(): void {
+    for (const listener of this.#connection) listener("suspended");
+  }
+
+  emitResumed(): void {
+    for (const listener of this.#connection) listener("resumed");
     for (const listener of this.#connection) listener("connected");
   }
 
@@ -614,6 +595,11 @@ class MemoryTransport implements LokiTransport {
   failNextReconnect(): void {
     this.#failReconnect = true;
   }
+  failAllReconnects(): void {
+    this.#failReconnect = true;
+    this.#failReconnectSticky = true;
+  }
+
 
   emitReconnectFailed(): void {
     for (const listener of this.#connection) listener("reconnect_failed");
@@ -630,6 +616,22 @@ class MemoryTransport implements LokiTransport {
     this.#enterHold = undefined;
     this.#releaseEnter = undefined;
   }
+  injectForeignState(actionId: string, state: unknown): void {
+    const room = this.#room;
+    if (!room) return;
+    this.#deliver(
+      this,
+      envelope(room, {
+        type: "state",
+        hostId: room.hostId,
+        state,
+        stateVersion: room.version + 1,
+        actionId,
+        senderId: "other-player",
+      }),
+    );
+  }
+
 
   injectStaleSnapshot(): void {
     const room = this.#room;
@@ -1205,13 +1207,25 @@ test("reconnect with an in-flight host commit does not deadlock", { timeout: 200
   assert.equal(hostRoom.getSnapshot().connection, "connected");
   assert.equal(hostRoom.isHost, true);
 });
-
-test("failed snapshot recovery rejects pending dispatch", async () => {
+test("failed snapshot recovery keeps the pending action", async () => {
   const { hostRoom, hostTransport } = await pair();
   hostTransport.failNextSnapshot();
   hostTransport.staleNextHostState();
-  await assert.rejects(hostRoom.dispatch({ d: 1 }), SynchronizedRoomError);
-  assert.equal(hostRoom.getSnapshot().connection, "failed");
+  const pending = hostRoom.dispatch({ d: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await Promise.resolve();
+  assert.equal(hostRoom.getSnapshot().connection !== "failed", true);
+  if (!settled) await hostRoom.reconnect();
+  assert.deepEqual((await pending).state, { n: 1 });
   assert.equal(hostRoom.getSnapshot().lastError?.outcome, "state_conflict");
 });
 
@@ -1233,20 +1247,73 @@ test("create and join failures leave the room failed and detached", async () => 
   await room.dispatch({ d: 2 });
   assert.deepEqual(room.getSnapshot().state, { n: 2 });
 });
-
-test("dispatch times out without authoritative confirmation", async (t) => {
-  const { hostRoom, memberRoom, hostTransport } = await pair();
+test("dispatch timeout recovers instead of failing immediately", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { hostRoom, hostTransport } = await pair();
   hostTransport.suppressStateEcho();
-  const hostPending = hostRoom.dispatch({ d: 1 });
+  const pending = hostRoom.dispatch({ d: 1 });
   t.mock.timers.tick(SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS);
-  await assert.rejects(hostPending, /confirmation timed out/);
-  assert.equal(hostRoom.getSnapshot().lastError?.outcome, "indeterminate");
+  await Promise.resolve();
+  await Promise.resolve();
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.notEqual(hostRoom.getSnapshot().connection, "failed");
+  hostTransport.suppressStateEcho(false);
+  await hostRoom.reconnect();
+  assert.deepEqual((await pending).state, { n: 1 });
+  assert.ok(
+    ["connected", "resynchronizing"].includes(hostRoom.getSnapshot().connection),
+  );
+});
 
-  hostTransport.pauseInbound();
-  const memberPending = memberRoom.dispatch({ d: 3 });
-  t.mock.timers.tick(SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS);
-  await assert.rejects(memberPending, /confirmation timed out/);
+test("recovery deadline eventually settles dispatch", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const projectId = crypto.randomUUID();
+  const transport = new MemoryTransport();
+  const client = new LokiClient({ projectId, transport });
+  await client.authenticate("token");
+  const room = client.createSynchronizedRoom<OpaqueState, OpaqueAction>({
+    initialState: { n: 0 },
+    reduce: (state, action) => ({ n: state.n + action.d }),
+    commitTimeoutMs: 5_000,
+    recoveryDeadlineMs: SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS,
+  });
+  await room.create();
+  transport.suppressStateEcho();
+  transport.failAllReconnects();
+  const pending = room.dispatch({ d: 1 });
+  await Promise.resolve();
+  t.mock.timers.tick(5_000);
+  await Promise.resolve();
+  await Promise.resolve();
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.notEqual(room.getSnapshot().connection, "failed");
+  t.mock.timers.tick(SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS);
+  await Promise.resolve();
+  await Promise.resolve();
+  t.mock.timers.tick(0);
+  await Promise.resolve();
+  await assert.rejects(pending, /confirmation timed out/);
+  assert.equal(room.getSnapshot().lastError?.outcome, "indeterminate");
   assert.equal(memberRoom.getSnapshot().lastError?.outcome, "indeterminate");
 });
 
@@ -1533,6 +1600,267 @@ test("explicit leaves still remove members", async () => {
   assert.equal(hostRoom.members[0]?.playerId, hostId);
   assert.equal(hostRoom.getSnapshot().membership, "ready");
 });
+test("hidden environment pauses confirmation and rejects new dispatch", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { hostRoom, hostTransport } = await pair();
+  hostTransport.suppressStateEcho();
+  const pending = hostRoom.dispatch({ d: 1 });
+  hostTransport.emitSuspended();
+  assert.equal(hostRoom.getSnapshot().connection, "suspended");
+  await assert.rejects(hostRoom.dispatch({ d: 2 }), /not connected/);
+  t.mock.timers.tick(SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS);
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(hostRoom.getSnapshot().connection, "suspended");
+});
+
+test("foreground resume replaces a live-looking connection and keeps pending actions", async () => {
+  const { hostRoom, hostTransport } = await pair();
+  hostTransport.suppressStateEcho();
+  const pending = hostRoom.dispatch({ d: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  hostTransport.emitSuspended();
+  assert.equal(hostRoom.getSnapshot().connection, "suspended");
+  hostTransport.suppressStateEcho(false);
+  hostTransport.emitResumed();
+  await hostTransport.reconnect();
+  assert.deepEqual((await pending).state, { n: 1 });
+  assert.equal(hostRoom.getSnapshot().connection, "connected");
+});
+
+test("pending member action is replayed with the same action id", async () => {
+  const { memberRoom, memberTransport, hostTransport } = await pair();
+  hostTransport.pauseInbound();
+  const pending = memberRoom.dispatch({ d: 4 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const actionId = memberTransport.lastActionId;
+  assert.ok(actionId);
+  memberTransport.emitSuspended();
+  memberTransport.emitResumed();
+  await memberTransport.reconnect();
+  hostTransport.resumeInbound();
+  assert.deepEqual((await pending).state, { n: 4 });
+  assert.equal(memberTransport.lastActionId, actionId);
+});
+
+test("socket interruption does not leave or bump membership", async () => {
+  const { hostRoom, memberRoom, memberTransport } = await pair();
+  const revision = hostRoom.getSnapshot().membershipRevision;
+  const hostId = hostRoom.getSnapshot().playerId;
+  const memberId = memberRoom.getSnapshot().playerId;
+  memberTransport.disconnectPeer();
+  assert.equal(memberRoom.getSnapshot().connection, "reconnecting");
+  assert.equal(hostRoom.members.length, 2);
+  assert.deepEqual(
+    hostRoom.members.map((member) => member.playerId).sort(),
+    [hostId, memberId].sort(),
+  );
+  assert.equal(hostRoom.getSnapshot().membershipRevision, revision);
+  assert.equal(hostRoom.getSnapshot().hostId, hostId);
+});
+
+test("pageshow-equivalent resume is covered by transport lifecycle tests", async () => {
+  const { hostRoom, hostTransport } = await pair();
+  hostTransport.suppressStateEcho();
+  const pending = hostRoom.dispatch({ d: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  hostTransport.emitResumed();
+  hostTransport.suppressStateEcho(false);
+  await hostTransport.reconnect();
+  assert.deepEqual((await pending).state, { n: 1 });
+  assert.equal(hostRoom.getSnapshot().connection, "connected");
+});
+
+test("send failure keeps the pending action and recovers", async () => {
+  const { memberRoom, memberTransport, hostTransport } = await pair();
+  hostTransport.pauseInbound();
+  memberTransport.failNextSend();
+  const pending = memberRoom.dispatch({ d: 3 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await Promise.resolve();
+  assert.equal(settled, false);
+  hostTransport.resumeInbound();
+  await memberTransport.reconnect();
+  assert.deepEqual((await pending).state, { n: 3 });
+});
+
+test("multiple pending actions keep independent recovery deadlines", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const projectId = crypto.randomUUID();
+  const transport = new MemoryTransport();
+  const client = new LokiClient({ projectId, transport });
+  await client.authenticate("token");
+  const hostRoom = client.createSynchronizedRoom<OpaqueState, OpaqueAction>({
+    initialState: { n: 0 },
+    reduce: (state, action) => ({ n: state.n + action.d }),
+    commitTimeoutMs: SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
+    recoveryDeadlineMs: SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS,
+  });
+  await hostRoom.create();
+  transport.suppressStateEcho();
+  transport.failAllReconnects();
+  const first = hostRoom.dispatch({ d: 1 });
+  t.mock.timers.tick(2_000);
+  const second = hostRoom.dispatch({ d: 2 });
+  t.mock.timers.tick(SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS - 2_000);
+  await Promise.resolve();
+  await Promise.resolve();
+  let firstSettled = false;
+  let secondSettled = false;
+  void first.then(
+    () => {
+      firstSettled = true;
+    },
+    () => {
+      firstSettled = true;
+    },
+  );
+  void second.then(
+    () => {
+      secondSettled = true;
+    },
+    () => {
+      secondSettled = true;
+    },
+  );
+  await Promise.resolve();
+  assert.equal(firstSettled, false);
+  assert.equal(secondSettled, false);
+  t.mock.timers.tick(SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS);
+  await Promise.resolve();
+  await Promise.resolve();
+  await assert.rejects(first, /confirmation timed out/);
+  assert.equal(secondSettled, false);
+  t.mock.timers.tick(2_000);
+  await Promise.resolve();
+  await Promise.resolve();
+  await assert.rejects(second, /confirmation timed out/);
+});
+
+test("suspension preserves remaining confirmation time", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const projectId = crypto.randomUUID();
+  const hostTransport = new MemoryTransport();
+  const host = new LokiClient({ projectId, transport: hostTransport });
+  await host.authenticate("token");
+  const hostRoom = host.createSynchronizedRoom<OpaqueState, OpaqueAction>({
+    initialState: { n: 0 },
+    reduce: (state, action) => ({ n: state.n + action.d }),
+    commitTimeoutMs: SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
+    recoveryDeadlineMs: SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS,
+  });
+  await hostRoom.create();
+  hostTransport.suppressStateEcho();
+  hostTransport.failAllReconnects();
+  const pending = hostRoom.dispatch({ d: 1 });
+  t.mock.timers.tick(3_000);
+  hostTransport.emitSuspended();
+  t.mock.timers.tick(SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS);
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await Promise.resolve();
+  assert.equal(settled, false);
+  hostTransport.emitResumed();
+  t.mock.timers.tick(SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS - 3_000 - 1);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(settled, false);
+  t.mock.timers.tick(2);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(settled, false);
+  t.mock.timers.tick(SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS);
+  await Promise.resolve();
+  await Promise.resolve();
+  await assert.rejects(pending, /confirmation timed out/);
+});
+
+test("rejected leave payload stays leave_failed without clearing identity", async () => {
+  const { host, hostRoom, hostTransport } = await pair();
+  hostTransport.rejectNextLeave();
+  await assert.rejects(hostRoom.leave(), /tenant mismatch/);
+  assert.equal(hostRoom.getSnapshot().connection, "leave_failed");
+  assert.ok(host.roomId);
+  await hostRoom.leave();
+  assert.equal(hostRoom.getSnapshot().connection, "closed");
+  assert.equal(host.roomId, undefined);
+});
+
+test("leave room payload requires an authoritative ok", () => {
+  assert.throws(() => requireLeaveRoomSuccess(undefined), /leave failed/);
+  assert.throws(() => requireLeaveRoomSuccess({}), /leave failed/);
+  assert.throws(() => requireLeaveRoomSuccess({ ok: false, error: "tenant mismatch" }), /tenant mismatch/);
+  assert.throws(() => requireLeaveRoomSuccess('{"ok":false}'), /leave failed/);
+  requireLeaveRoomSuccess({ ok: true });
+  requireLeaveRoomSuccess('{"ok":true}');
+  requireLeaveRoomSuccess({ data: '{"ok":true}' });
+});
+
+test("cross-sender action ids do not settle the local pending dispatch", async () => {
+  const { memberRoom, memberTransport, hostTransport } = await pair();
+  hostTransport.pauseInbound();
+  const pending = memberRoom.dispatch({ d: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const actionId = memberTransport.lastActionId;
+  assert.ok(actionId);
+  memberTransport.injectForeignState(actionId, { n: 99 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await Promise.resolve();
+  assert.equal(settled, false);
+  hostTransport.resumeInbound();
+  assert.deepEqual((await pending).state, { n: 1 });
+  assert.notEqual(memberRoom.getSnapshot().state, { n: 99 });
+});
+
+test("several failed reconnects then a success settle the pending action", async () => {
+  const { hostRoom, hostTransport } = await pair();
+  hostTransport.suppressStateEcho();
+  const pending = hostRoom.dispatch({ d: 2 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  hostTransport.failNextReconnect();
+  await assert.rejects(hostRoom.reconnect(), /reconnect failed/);
+  hostTransport.failNextReconnect();
+  await assert.rejects(hostRoom.reconnect(), /reconnect failed/);
+  hostTransport.suppressStateEcho(false);
+  await hostRoom.reconnect();
+  assert.deepEqual((await pending).state, { n: 2 });
+  assert.equal(hostRoom.getSnapshot().connection, "connected");
+});
+
 
 test("old runtimes without synchronized_rooms capabilities fail fast", async () => {
   const transport = new MemoryTransport();

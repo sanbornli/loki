@@ -5,6 +5,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.startCoroutine
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 
@@ -223,6 +224,33 @@ class LokiClientTest {
         runAwait { isolatedRoom.dispatch(JsonValue.ObjectValue(mapOf("d" to 1L.jsonNumber()))) }
         isolated.notifyConnection("reconnect_failed")
         assertEquals(ConnectionState.Reconnecting, isolatedRoom.getSnapshot().connection)
+        isolated.notifyLifecycle(visible = false, online = true)
+        assertEquals(ConnectionState.Suspended, isolatedRoom.getSnapshot().connection)
+        assertFailsWith<SynchronizedRoomError> {
+            runAwait { isolatedRoom.dispatch(JsonValue.ObjectValue(mapOf("d" to 1L.jsonNumber()))) }
+        }
+
+        val collision = MemoryWorld()
+        val collisionHostTransport = MemoryRoomTransport(collision)
+        val collisionMemberTransport = MemoryRoomTransport(collision)
+        val collisionHost = LokiClient(collisionHostTransport)
+        val collisionMember = LokiClient(collisionMemberTransport)
+        runAwait {
+            collisionHost.authenticate("host")
+            collisionHost.connect()
+            collisionMember.authenticate("member")
+            collisionMember.connect()
+        }
+        val collisionHostRoom = collisionHost.createSynchronizedRoom(counterState()) { state, action, _ -> reduceCounter(state, action) }
+        val collisionMemberRoom = collisionMember.createSynchronizedRoom(counterState()) { state, action, _ -> reduceCounter(state, action) }
+        val collisionCreated = runAwait { collisionHostRoom.create() }
+        runAwait { collisionMemberRoom.join(collisionCreated.inviteCode) }
+        val pending = startAwait { collisionMemberRoom.dispatch(JsonValue.ObjectValue(mapOf("d" to 2L.jsonNumber()))) }
+        Thread.sleep(20)
+        val actionId = collisionMemberTransport.lastActionId ?: "shared-action"
+        collisionMemberTransport.injectForeignState(actionId, 99)
+        assertEquals(2L, counterValue(pending.await().getOrThrow().state))
+        assertEquals(2L, counterValue(collisionMemberRoom.getSnapshot().state))
     }
 }
 
@@ -330,6 +358,8 @@ private class MemoryRoomTransport(private val world: MemoryWorld) : LokiTranspor
     private var holding = false
     private var enterHold: Continuation<Unit>? = null
     private var unseenDuplicate = false
+    var lastActionId: String? = null
+        private set
     @Volatile private var parked = false
 
     override suspend fun request(request: LokiRequest): JsonValue {
@@ -402,6 +432,27 @@ private class MemoryRoomTransport(private val world: MemoryWorld) : LokiTranspor
         enterHold = null
     }
 
+    fun injectForeignState(actionId: String, n: Long) {
+        val current = roomId ?: return
+        val room = world.room(current) ?: return
+        room.sequence += 1
+        listener?.invoke(
+            JsonValue.ObjectValue(
+                mapOf(
+                    "protocolVersion" to 1L.jsonNumber(),
+                    "roomId" to room.roomId.jsonString(),
+                    "sequence" to room.sequence.jsonNumber(),
+                    "type" to "state".jsonString(),
+                    "hostId" to room.hostId.jsonString(),
+                    "state" to JsonValue.ObjectValue(mapOf("n" to n.jsonNumber())),
+                    "stateVersion" to (room.version + 1).jsonNumber(),
+                    "actionId" to actionId.jsonString(),
+                    "senderId" to "other-player".jsonString(),
+                ),
+            ),
+        )
+    }
+
     fun injectStaleSnapshot() {
         val current = roomId ?: return
         val room = world.room(current) ?: return
@@ -469,6 +520,7 @@ private class MemoryRoomTransport(private val world: MemoryWorld) : LokiTranspor
             }
             "action" -> {
                 val actionId = envelope.optionalString("actionId") ?: return
+                lastActionId = actionId
                 val sender = requirePlayer()
                 if (unseenDuplicate) {
                     unseenDuplicate = false

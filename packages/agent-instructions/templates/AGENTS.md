@@ -20,7 +20,11 @@
   synchronous infinite loop without changing the reducer API.
 - Subscribe to synchronized snapshots for state, members, authority, and
   connection status. Handle rejected actions, reconnects, and focus release
-  when the Loki overlay opens.
+  when the Loki overlay opens. Call `dispatch()` only while `connection` is
+  `connected`. Show a generic reconnecting message for `suspended`,
+  `reconnecting`, or `resynchronizing`. Do not treat those as a leave.
+- Call `leave()` only for an explicit user leave. Do not leave on hide,
+  blur, page unload, or a dropped socket.
 - Handle rejected actions from `dispatch()` without inventing a parallel
   protocol. Build and deploy from this repository.
 - Loki-hosted games run in a sandbox iframe with a strict CSP. Do not use

@@ -4,60 +4,141 @@ import {
 } from "./product-theme.js";
 
 const creatorStyles = `
+body.creator-auth {
+  overflow: hidden;
+}
+
+body.creator-auth .site-header {
+  display: none;
+}
+
+body.creator-auth .page-shell {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
 .auth-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(18rem, 0.7fr);
-  gap: clamp(2rem, 4vw, 4rem);
-  align-items: center;
-  min-height: calc(100vh - 5.25rem);
-  padding: clamp(3rem, 7vh, 5.5rem) 0;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 0;
+  align-items: stretch;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 0;
+}
+
+.auth-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding: clamp(1.5rem, 3.5vw, 2.75rem);
+  overflow: hidden;
+  border-right: 1px solid var(--line-strong);
+  background:
+    radial-gradient(ellipse 70% 50% at 12% 88%, color-mix(in srgb, var(--amber) 16%, transparent), transparent 58%),
+    linear-gradient(160deg, #12110d 0%, var(--ink) 46%, #060605 100%);
+}
+
+.auth-hero::before {
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      -28deg,
+      transparent 0 46px,
+      color-mix(in srgb, var(--paper) 4%, transparent) 46px 47px
+    );
+  content: "";
+  pointer-events: none;
+}
+
+.auth-hero::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 42%;
+  height: 2px;
+  background: var(--amber);
+  content: "";
+}
+
+.auth-hero .brand {
+  position: absolute;
+  top: clamp(1.5rem, 3.5vw, 2.75rem);
+  left: clamp(1.5rem, 3.5vw, 2.75rem);
+  z-index: 1;
 }
 
 .auth-copy {
-  align-self: center;
+  position: relative;
+  z-index: 1;
+  max-width: 28rem;
 }
 
 .auth-copy .display {
   max-width: 10ch;
-  font-size: clamp(3rem, 6vw, 6rem);
-  line-height: 1;
+  font-size: clamp(3.1rem, 5.6vw, 5.8rem);
+  line-height: 0.92;
 }
 
-.auth-index {
+.auth-steps {
+  margin: 1.75rem 0 0;
+  color: var(--paper);
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.6;
+}
+
+.auth-stage {
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
-  max-width: 43rem;
-  margin-top: clamp(2rem, 5vh, 4rem);
-  border: 1px solid var(--line);
-  background: var(--line);
+  place-items: center;
+  min-width: 0;
+  padding: clamp(1.5rem, 4vw, 3rem);
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 80% 18%, color-mix(in srgb, var(--amber) 10%, transparent), transparent 36%),
+    linear-gradient(180deg, #16150f 0%, var(--ink-raised) 100%);
 }
 
-.auth-index div {
-  min-height: 6.8rem;
-  padding: 1rem;
-  background: var(--ink);
-}
-
-.auth-index strong {
-  display: block;
-  color: var(--amber);
-  font-family: var(--mono);
-  font-size: 0.67rem;
-  letter-spacing: 0.1em;
-}
-
-.auth-index span {
-  display: block;
-  margin-top: 2rem;
-  color: var(--muted);
-  font-size: 0.76rem;
+.auth-stage::before {
+  position: absolute;
+  inset: 18% 16% auto;
+  height: 42%;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.45), transparent 70%);
+  content: "";
+  pointer-events: none;
 }
 
 .auth-panel {
-  padding: clamp(1.25rem, 3vw, 2.2rem);
-  border: 1px solid var(--line-strong);
-  background: var(--ink-raised);
+  position: relative;
+  z-index: 1;
+  width: min(100%, 24.5rem);
+  padding: clamp(1.6rem, 3vw, 2.3rem);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--paper) 16%, transparent);
+  border-radius: 1.5rem;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--paper) 8%, transparent),
+      color-mix(in srgb, var(--ink-raised) 42%, transparent) 28%,
+      color-mix(in srgb, #0b0b08 68%, transparent)
+    );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--paper) 22%, transparent),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35),
+    0 2px 3px rgba(0, 0, 0, 0.18),
+    0 18px 28px -18px rgba(0, 0, 0, 0.72),
+    0 42px 64px -28px rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(22px) saturate(1.25);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  transform: perspective(1400px) translateY(-0.35rem) rotateX(4deg);
 }
 
 .auth-panel h2 {
@@ -75,6 +156,17 @@ const creatorStyles = `
 
 .auth-panel .notice {
   margin-bottom: 1rem;
+}
+
+.auth-panel .form-actions {
+  display: grid;
+  justify-items: start;
+  gap: 1rem;
+  margin-top: 0.65rem;
+}
+
+.auth-panel .form-actions .button {
+  width: 100%;
 }
 
 .dashboard-hero {
@@ -462,12 +554,26 @@ const creatorStyles = `
 }
 
 @media (max-width: 55rem) {
+  body.creator-auth {
+    overflow: auto;
+  }
+
   .auth-layout {
     grid-template-columns: 1fr;
-    align-items: start;
-    gap: 2.5rem;
     min-height: auto;
-    padding: 3rem 0;
+  }
+
+  .auth-hero {
+    min-height: auto;
+    justify-content: flex-start;
+    padding-top: 5.5rem;
+    padding-bottom: 2rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-strong);
+  }
+
+  .auth-copy {
+    padding: 1.5rem 0 0;
   }
 
   .auth-copy .display {
@@ -475,12 +581,13 @@ const creatorStyles = `
     line-height: 1.02;
   }
 
-  .auth-index {
-    display: none;
+  .auth-stage {
+    padding: 2rem var(--space) 3rem;
   }
 
   .auth-panel {
-    max-width: 34rem;
+    width: min(100%, 26rem);
+    transform: none;
   }
 
   .dashboard-hero,
@@ -502,7 +609,6 @@ const creatorStyles = `
 }
 
 @media (max-width: 43rem) {
-  .auth-index,
   .create-project form,
   .integration-panel {
     grid-template-columns: 1fr;
@@ -516,6 +622,12 @@ const creatorStyles = `
 
   .project-topline {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-panel {
+    transform: none;
   }
 }
 `;
@@ -536,17 +648,19 @@ const pageBody = `
 
   <main class="page-shell" id="main-content">
     <section class="auth-layout" id="auth-view" aria-labelledby="auth-title">
-      <div class="auth-copy">
-        <p class="eyebrow">Editorial Studio / 03</p>
-        <h1 class="display" id="auth-title">Ship the world you made.</h1>
-        <p class="lede">A focused release desk for finished browser games. Create a project, connect your coding agent, and share a playable release.</p>
-        <div class="auth-index" aria-label="Creator workflow">
-          <div><strong>01</strong><span>Create</span></div>
-          <div><strong>02</strong><span>Deploy</span></div>
-          <div><strong>03</strong><span>Release</span></div>
+      <div class="auth-hero">
+        <a class="brand" href="/" aria-label="Loki home">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span>Loki / Creator</span>
+        </a>
+        <div class="auth-copy">
+          <h1 class="display" id="auth-title">Ship the world you made.</h1>
+          <p class="lede">A focused release desk for finished browser games. Create a project, connect your coding agent, and share a playable release.</p>
+          <p class="auth-steps">Create. Deploy. Multiplayer.</p>
         </div>
       </div>
 
+      <div class="auth-stage">
       <section class="auth-panel" aria-labelledby="auth-panel-title">
         <p class="eyebrow" id="auth-mode-label">Creator access</p>
         <h2 id="auth-panel-title">Sign in</h2>
@@ -568,6 +682,7 @@ const pageBody = `
           </div>
         </form>
       </section>
+      </div>
     </section>
 
     <section id="dashboard-view" hidden aria-labelledby="dashboard-title">
@@ -775,6 +890,10 @@ const creatorScript = String.raw`
       return response.json();
     }
 
+    function syncAuthLayout() {
+      document.body.classList.toggle("creator-auth", !authView.hidden);
+    }
+
     function signOut(message) {
       writeToken("");
       state.overview = null;
@@ -784,6 +903,7 @@ const creatorScript = String.raw`
       clear(projectList);
       dashboardView.hidden = true;
       authView.hidden = false;
+      syncAuthLayout();
       logoutButton.hidden = true;
       accountLabel.hidden = true;
       setGlobalStatus("", false);
@@ -825,6 +945,7 @@ const creatorScript = String.raw`
     function renderDashboard() {
       authView.hidden = true;
       dashboardView.hidden = false;
+      syncAuthLayout();
       logoutButton.hidden = false;
       const account = state.overview && state.overview.account;
       const email = text(account && account.email, "Creator account");
@@ -1120,12 +1241,12 @@ const creatorScript = String.raw`
           productConfig.lokiplayVersion ||
           productConfig.packageVersion
         ),
-        "0.2.2"
+        "0.2.3"
       );
     }
 
     function configuredCliVersion() {
-      return text(productConfig && productConfig.cliVersion, "0.2.2");
+      return text(productConfig && productConfig.cliVersion, "0.2.3");
     }
 
     function agentPrompt(project) {
@@ -1187,6 +1308,10 @@ const creatorScript = String.raw`
         "- Clients dispatch actions through the synchronized room. Do not create a parallel authoritative backend or direct Nakama integration.",
         "- Keep replicated state JSON-compatible and use finite safe integers.",
         "- Subscribe to synchronized snapshots for state, members, connection status, and rejected actions. Handle disconnects and focus release when the Loki overlay opens.",
+        "- Call dispatch() only while connection is connected. Treat suspended, reconnecting, and resynchronizing as recoverable connection states, not a leave.",
+        "- Call leave() only for an explicit user leave. Do not leave on hide, blur, page unload, or a dropped socket.",
+        "- Call dispatch() only while connection is connected. Treat suspended, reconnecting, and resynchronizing as recoverable connection states, not a leave.",
+        "- Call leave() only for an explicit user leave. Do not leave on hide, blur, page unload, or a dropped socket.",
         "- Production multiplayer must run from a Loki-hosted finished browser build.",
         "- Hosted games run in a sandbox iframe with a strict CSP. Do not use inline <script> tags, inline event handlers, Google Fonts or other remote stylesheets, or <form> submissions. Bundle JavaScript and fonts as same-origin files and use <button type=\"button\"> for create/join controls.",
         "",
@@ -1592,6 +1717,7 @@ const creatorScript = String.raw`
       authView.hidden = false;
       dashboardView.hidden = true;
     }
+    syncAuthLayout();
 `;
 
 export function renderCreatorPage(config: ProductPageConfig): string {

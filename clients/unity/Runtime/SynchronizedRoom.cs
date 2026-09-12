@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Loki.Play.SDK
 {
     public enum ConnectionState
-    {
+        Idle, Joining, Connected, Suspended, Reconnecting, Resynchronizing, Leaving, LeaveFailed, Closed, Failed
         Idle, Joining, Connected, Reconnecting, Resynchronizing, Leaving, LeaveFailed, Closed, Failed
     }
 
@@ -74,6 +76,12 @@ namespace Loki.Play.SDK
 
     public sealed class SynchronizedRoom
     {
+        public const int CommitTimeoutMs = 10000;
+        public const int RecoveryDeadlineMs = 60000;
+        public const int MinCommitTimeoutMs = 5000;
+        public const int MaxCommitTimeoutMs = 60000;
+        public const int MinRecoveryDeadlineMs = 30000;
+        public const int MaxRecoveryDeadlineMs = 120000;
         public const int MaxPending = 32;
         private readonly LokiClient client;
         private readonly JsonValue initialState;
@@ -99,15 +107,58 @@ namespace Loki.Play.SDK
         private readonly HashSet<string> recent = new HashSet<string>();
         private readonly Dictionary<string, JsonValue> prepared = new Dictionary<string, JsonValue>();
         private int messageListener;
-        private int connectionListener;
+        private readonly Dictionary<string, CancellationTokenSource> watchdogs =
+            new Dictionary<string, CancellationTokenSource>();
+        private readonly Dictionary<string, Watchdog> watchdogState = new Dictionary<string, Watchdog>();
+        private bool timersPaused;
+        private bool recoveringFromTimeout;
+        private readonly Queue<HostItem> hostQueue = new Queue<HostItem>();
+        private bool draining;
+        private readonly long commitTimeoutMs;
+        private readonly long recoveryDeadlineMs;
         public int Reductions { get; private set; }
         public bool IsHost { get { return playerId.Length > 0 && playerId == hostId; } }
 
-        public SynchronizedRoom(LokiClient client, JsonValue initialState, Func<JsonValue, JsonValue, ActionContext, JsonValue> reduce)
+        private sealed class Watchdog
+        {
+            public string Phase;
+            public long ConfirmRemainingMs;
+            public long RecoveryRemainingMs;
+            public DateTime? StartedAt;
+            public Watchdog(string phase, long confirmRemainingMs, long recoveryRemainingMs)
+            {
+                Phase = phase;
+                ConfirmRemainingMs = confirmRemainingMs;
+                RecoveryRemainingMs = recoveryRemainingMs;
+            }
+        }
+
+        private struct HostItem
+        {
+            public string ActionId;
+            public JsonValue Action;
+            public string SenderId;
+            public HostItem(string actionId, JsonValue action, string senderId)
+            {
+                ActionId = actionId; Action = action; SenderId = senderId;
+            }
+        }
+
+        public SynchronizedRoom(
+            LokiClient client,
+            JsonValue initialState,
+            Func<JsonValue, JsonValue, ActionContext, JsonValue> reduce,
+            long commitTimeoutMs = CommitTimeoutMs,
+            long recoveryDeadlineMs = RecoveryDeadlineMs)
         {
             this.client = client;
             this.initialState = initialState;
             this.state = initialState;
+            this.reduce = reduce;
+            this.commitTimeoutMs = Math.Min(MaxCommitTimeoutMs, Math.Max(MinCommitTimeoutMs, commitTimeoutMs));
+            this.recoveryDeadlineMs = Math.Max(
+                this.commitTimeoutMs,
+                Math.Min(MaxRecoveryDeadlineMs, Math.Max(MinRecoveryDeadlineMs, recoveryDeadlineMs)));
             this.reduce = reduce;
         }
 
@@ -133,7 +184,7 @@ namespace Loki.Play.SDK
 
         public async Task<SynchronizedRoomSnapshot> DispatchAsync(JsonValue action)
         {
-            var snapshot = GetSnapshot();
+            if (snapshot.Connection != ConnectionState.Connected)
             if (snapshot.Connection != ConnectionState.Connected && snapshot.Connection != ConnectionState.Resynchronizing)
                 throw new SynchronizedRoomError(SynchronizedRoomOutcome.Rejected, "room is not connected");
             if (pending.Count >= MaxPending)
@@ -148,10 +199,19 @@ namespace Loki.Play.SDK
             {
                 pending[actionId] = waiter;
                 pendingActions[actionId] = new KeyValuePair<JsonValue, string>(action, sender);
+            ArmWatchdog(actionId);
             }
             try { await SubmitAsync(actionId, action, sender); }
             catch (Exception error)
-            {
+                var roomError = error as SynchronizedRoomError;
+                if (roomError != null && (
+                    roomError.Outcome == SynchronizedRoomOutcome.Rejected ||
+                    roomError.Outcome == SynchronizedRoomOutcome.Invalid ||
+                    roomError.Outcome == SynchronizedRoomOutcome.RateLimited))
+                {
+                    FailPending(actionId, roomError);
+                }
+                else RecoverAfterTimeout();
                 FailPending(actionId, new SynchronizedRoomError(SynchronizedRoomOutcome.Indeterminate, error.Message));
             }
             return await waiter.Task;
@@ -201,9 +261,13 @@ namespace Loki.Play.SDK
             {
                 await client.ReconnectCurrentRoomAsync();
                 if (resyncing) lock (gate) { connection = ConnectionState.Resynchronizing; }
-            }
-            catch (Exception error)
+            catch
             {
+                lock (gate)
+                {
+                    resyncing = true;
+                    connection = ConnectionState.Reconnecting;
+                }
                 FailRoom(SynchronizedRoomOutcome.Indeterminate, error.Message);
                 throw;
             }
@@ -253,6 +317,14 @@ namespace Loki.Play.SDK
                 {
                     try { await client.LeaveCurrentRoomAsync(joined.RoomId); } catch { }
                     throw new SynchronizedRoomError(SynchronizedRoomOutcome.Rejected, "join superseded");
+                lock (gate)
+                {
+                    if (!client.IsForeground)
+                    {
+                        timersPaused = true;
+                        connection = ConnectionState.Suspended;
+                    }
+                    else connection = ConnectionState.Connected;
                 }
                 lock (gate) { connection = ConnectionState.Connected; }
                 return GetSnapshot();
@@ -295,9 +367,27 @@ namespace Loki.Play.SDK
 
         private void OnConnection(string eventName)
         {
-            if (IsInactive()) return;
+            if (eventName == "suspended")
+            {
+                timersPaused = true;
+                CancelWatchdogs();
+                lock (gate) { connection = ConnectionState.Suspended; }
+                return;
+            }
+            if (eventName == "resumed")
+            {
+                timersPaused = false;
+                lock (gate)
+                {
+                    resyncing = true;
+                    connection = ConnectionState.Reconnecting;
+                }
+                foreach (var actionId in new List<string>(pending.Keys)) ArmWatchdog(actionId);
+                return;
+            }
             if (eventName == "reconnect_failed")
             {
+                if (connection == ConnectionState.Suspended) return;
                 lock (gate)
                 {
                     resyncing = true;
@@ -306,6 +396,8 @@ namespace Loki.Play.SDK
                 return;
             }
             if (eventName == "disconnected")
+            {
+                if (connection == ConnectionState.Suspended) return;
             {
                 lock (gate)
                 {
@@ -316,8 +408,43 @@ namespace Loki.Play.SDK
         }
 
         private async Task SubmitAsync(string actionId, JsonValue action, string senderId)
+            if (IsHost) EnqueueHost(actionId, action, senderId);
+            else await client.SendSessionActionAsync(action, actionId);
+        }
+
+        private void EnqueueHost(string actionId, JsonValue action, string senderId)
         {
-            if (IsHost) await CommitAsync(actionId, action, senderId);
+            hostQueue.Enqueue(new HostItem(actionId, action, senderId));
+            _ = DrainHostAsync();
+        }
+
+        private async Task DrainHostAsync()
+        {
+            if (draining) return;
+            draining = true;
+            try
+            {
+                while (hostQueue.Count > 0 && IsHost && connection == ConnectionState.Connected && !resyncing)
+                {
+                    var item = hostQueue.Dequeue();
+                    try { await CommitAsync(item.ActionId, item.Action, item.SenderId); }
+                    catch (Exception error)
+                    {
+                        var roomError = error as SynchronizedRoomError;
+                        if (roomError != null && (
+                            roomError.Outcome == SynchronizedRoomOutcome.Rejected ||
+                            roomError.Outcome == SynchronizedRoomOutcome.Invalid ||
+                            roomError.Outcome == SynchronizedRoomOutcome.RateLimited))
+                        {
+                            FailPending(item.ActionId, roomError);
+                            continue;
+                        }
+                        RecoverAfterTimeout();
+                        break;
+                    }
+                }
+            }
+            finally { draining = false; }
             else await client.SendSessionActionAsync(action, actionId);
         }
 
@@ -352,7 +479,7 @@ namespace Loki.Play.SDK
                 if (!IsHost || actionId == null) return;
                 KeyValuePair<JsonValue, string> queued;
                 var action = pendingActions.TryGetValue(actionId, out queued) ? queued.Key : (message.Fields.ContainsKey("payload") ? message.Fields["payload"] : JsonValue.Null);
-                var sender = message.Fields.OptionalString("senderId") ?? "";
+                EnqueueHost(actionId, action, sender);
                 var ignored = CommitAsync(actionId, action, sender);
                 return;
             }
@@ -386,16 +513,22 @@ namespace Loki.Play.SDK
         private void OnError(ServerEnvelope message)
         {
             var text = message.Fields.OptionalString("message") ?? "error";
-            var actionId = message.Fields.OptionalString("actionId");
+            var code = message.Fields.OptionalString("code");
+            if (code == "STALE_VERSION" || code == "HOST_REQUIRED")
+            {
+                resyncing = true;
+                connection = ConnectionState.Resynchronizing;
+                RecoverAfterTimeout();
+                return;
+            }
             if (text.IndexOf("duplicate action", StringComparison.Ordinal) >= 0 && actionId != null)
             {
                 var identity = (message.Fields.OptionalString("senderId") ?? playerId) + "\u001f" + actionId;
-                if (recent.Contains(identity)) Succeed(actionId);
+                if (recent.Contains(identity)) Succeed(actionId, message.Fields.OptionalString("senderId"));
                 return;
             }
             if (actionId != null && pending.ContainsKey(actionId))
             {
-                var code = message.Fields.OptionalString("code");
                 var outcome = code == "RATE_LIMITED" ? SynchronizedRoomOutcome.RateLimited
                     : code == "STALE_VERSION" ? SynchronizedRoomOutcome.StateConflict
                     : message.Fields.OptionalString("actionOutcome") == "invalid" ? SynchronizedRoomOutcome.Invalid
@@ -431,17 +564,22 @@ namespace Loki.Play.SDK
             {
                 var identity = (message.Fields.OptionalString("senderId") ?? playerId) + "\u001f" + actionId;
                 recent.Add(identity);
-                prepared.Remove(identity);
+                if (!stale) Succeed(actionId, message.Fields.OptionalString("senderId"));
                 if (!stale) Succeed(actionId);
             }
             if (resyncing && !stale && (replace || incoming.HasValue))
             {
-                resyncing = false;
-                connection = ConnectionState.Connected;
+                if (connection != ConnectionState.Suspended)
+                {
+                    connection = ConnectionState.Connected;
+                    ReplayPending();
+                }
             }
             else if (connection != ConnectionState.Joining && !resyncing &&
                 connection != ConnectionState.Closed && connection != ConnectionState.Failed &&
                 connection != ConnectionState.Leaving && connection != ConnectionState.LeaveFailed &&
+                connection != ConnectionState.Reconnecting &&
+                connection != ConnectionState.Suspended)
                 connection != ConnectionState.Reconnecting)
             {
                 connection = ConnectionState.Connected;
@@ -545,9 +683,13 @@ namespace Loki.Play.SDK
                 throw new SynchronizedRoomError(SynchronizedRoomOutcome.Invalid, "runtime does not advertise synchronized_rooms");
             }
         }
-
-        private void Succeed(string actionId)
+        private void Succeed(string actionId, string senderId = null)
         {
+            KeyValuePair<JsonValue, string> queued;
+            if (senderId != null && pendingActions.TryGetValue(actionId, out queued) && queued.Value != senderId)
+                return;
+            CancelWatchdog(actionId);
+            watchdogState.Remove(actionId);
             pendingActions.Remove(actionId);
             TaskCompletionSource<SynchronizedRoomSnapshot> waiter;
             if (pending.TryGetValue(actionId, out waiter))
@@ -560,12 +702,122 @@ namespace Loki.Play.SDK
         private void FailPending(string actionId, SynchronizedRoomError error)
         {
             lastError = error;
+            CancelWatchdog(actionId);
+            watchdogState.Remove(actionId);
             pendingActions.Remove(actionId);
             TaskCompletionSource<SynchronizedRoomSnapshot> waiter;
             if (pending.TryGetValue(actionId, out waiter))
             {
                 pending.Remove(actionId);
                 waiter.TrySetException(error);
+            }
+        }
+
+        private void ArmWatchdog(string actionId)
+        {
+            CancelWatchdog(actionId);
+            Watchdog dog;
+            if (!watchdogState.TryGetValue(actionId, out dog))
+            {
+                dog = new Watchdog("confirming", commitTimeoutMs, recoveryDeadlineMs);
+                watchdogState[actionId] = dog;
+            }
+            if (timersPaused || connection == ConnectionState.Suspended) return;
+            var remaining = dog.Phase == "confirming" ? dog.ConfirmRemainingMs : dog.RecoveryRemainingMs;
+            if (remaining <= 0)
+            {
+                HandleWatchdog(actionId);
+                return;
+            }
+            dog.StartedAt = DateTime.UtcNow;
+            var cancel = new CancellationTokenSource();
+            watchdogs[actionId] = cancel;
+            var token = cancel.Token;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay((int)remaining, token);
+                    if (!token.IsCancellationRequested) HandleWatchdog(actionId);
+                }
+                catch (TaskCanceledException) { }
+            }, token);
+        }
+
+        private void HandleWatchdog(string actionId)
+        {
+            if (!pending.ContainsKey(actionId) || IsInactive() || connection == ConnectionState.Suspended || timersPaused)
+                return;
+            Watchdog dog;
+            if (!watchdogState.TryGetValue(actionId, out dog)) return;
+            if (dog.Phase == "confirming")
+            {
+                dog.Phase = "recovering";
+                dog.ConfirmRemainingMs = 0;
+                dog.StartedAt = null;
+                ArmWatchdog(actionId);
+                RecoverAfterTimeout();
+                return;
+            }
+            FailPending(actionId, new SynchronizedRoomError(SynchronizedRoomOutcome.Indeterminate, "authoritative confirmation timed out"));
+        }
+
+        private void RecoverAfterTimeout()
+        {
+            if (IsInactive() || connection == ConnectionState.Suspended || recoveringFromTimeout) return;
+            recoveringFromTimeout = true;
+            lock (gate)
+            {
+                resyncing = true;
+                connection = ConnectionState.Resynchronizing;
+            }
+            _ = RecoverOnceAsync();
+        }
+
+        private async Task RecoverOnceAsync()
+        {
+            try { await client.ReconnectCurrentRoomAsync(); }
+            catch { }
+            finally { recoveringFromTimeout = false; }
+        }
+
+        private void CancelWatchdog(string actionId)
+        {
+            CancellationTokenSource cancel;
+            if (!watchdogs.TryGetValue(actionId, out cancel)) return;
+            watchdogs.Remove(actionId);
+            cancel.Cancel();
+            cancel.Dispose();
+        }
+
+        private void CancelWatchdogs()
+        {
+            var now = DateTime.UtcNow;
+            foreach (var entry in watchdogState)
+            {
+                if (entry.Value.StartedAt.HasValue)
+                {
+                    var elapsed = (long)Math.Max(0, (now - entry.Value.StartedAt.Value).TotalMilliseconds);
+                    if (entry.Value.Phase == "confirming")
+                        entry.Value.ConfirmRemainingMs = Math.Max(0, entry.Value.ConfirmRemainingMs - elapsed);
+                    else
+                        entry.Value.RecoveryRemainingMs = Math.Max(0, entry.Value.RecoveryRemainingMs - elapsed);
+                    entry.Value.StartedAt = null;
+                }
+            }
+            foreach (var actionId in new List<string>(watchdogs.Keys)) CancelWatchdog(actionId);
+        }
+
+        private void ReplayPending()
+        {
+            if (IsHost)
+            {
+                foreach (var entry in new List<KeyValuePair<string, KeyValuePair<JsonValue, string>>>(pendingActions))
+                    EnqueueHost(entry.Key, entry.Value.Key, entry.Value.Value);
+                return;
+            }
+            foreach (var entry in new List<KeyValuePair<string, KeyValuePair<JsonValue, string>>>(pendingActions))
+                _ = SubmitAsync(entry.Key, entry.Value.Key, entry.Value.Value);
             }
         }
 

@@ -23,6 +23,22 @@ private actor RecordingTransport: LokiTransport {
 }
 
 final class LokiSDKTests: XCTestCase {
+    func testJSONValueDecodesProtocolNumbersBeforeBooleans() throws {
+        let data = Data(#"{"synchronized_rooms":true,"minimumProtocolVersion":1}"#.utf8)
+        let value = try JSONDecoder().decode(JSONValue.self, from: data)
+        guard case let .object(fields) = value else { return XCTFail("expected object") }
+        XCTAssertEqual(fields["synchronized_rooms"], .bool(true))
+        XCTAssertEqual(fields["minimumProtocolVersion"], .number(1))
+        let envelope = try JSONDecoder().decode(ServerEnvelope.self, from: try JSONEncoder().encode(JSONValue.object([
+            "protocolVersion": .number(1),
+            "roomId": .string("room"),
+            "sequence": .number(0),
+            "type": .string("snapshot"),
+            "capabilities": value,
+        ])))
+        XCTAssertEqual(envelope.capabilities, value)
+    }
+
     func testQuantizeRoundsAndRejectsNonFinite() throws {
         XCTAssertEqual(try LokiQuantize.quantize(3.35, scale: 100), 335)
         XCTAssertEqual(try LokiQuantize.dequantize(335, scale: 100), 3.35, accuracy: 0.0001)
@@ -210,6 +226,20 @@ final class LokiSDKTests: XCTestCase {
             snapshot = await room.getSnapshot()
         }
         XCTAssertEqual(snapshot.connection, .reconnecting)
+
+        await client.notifyLifecycle(visible: false, online: true)
+        snapshot = await room.getSnapshot()
+        for _ in 0..<20 where snapshot.connection != .suspended {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            snapshot = await room.getSnapshot()
+        }
+        XCTAssertEqual(snapshot.connection, .suspended)
+        do {
+            _ = try await room.dispatch(.object(["d": .number(1)]))
+            XCTFail("dispatch should be rejected while suspended")
+        } catch {
+            XCTAssertTrue(error is SynchronizedRoomError)
+        }
     }
 
     func testAuthorityMigrationAndDuplicateSettlement() async throws {
@@ -241,6 +271,31 @@ final class LokiSDKTests: XCTestCase {
         XCTAssertEqual(migrated.state, .object(["n": .number(3)]))
         let memberBecameHost = await memberRoom.isHost
         XCTAssertTrue(memberBecameHost)
+
+        let collisionWorld = MemoryWorld()
+        let collisionHostTransport = MemoryRoomTransport(world: collisionWorld)
+        let collisionMemberTransport = MemoryRoomTransport(world: collisionWorld)
+        let collisionHost = LokiClient(transport: collisionHostTransport)
+        let collisionMember = LokiClient(transport: collisionMemberTransport)
+        _ = try await collisionHost.authenticate(token: "host")
+        try await collisionHost.connect()
+        _ = try await collisionMember.authenticate(token: "member")
+        try await collisionMember.connect()
+        let collisionHostRoom = await collisionHost.createSynchronizedRoom(initialState: .object(["n": .number(0)]), reduce: reduce)
+        let collisionMemberRoom = await collisionMember.createSynchronizedRoom(initialState: .object(["n": .number(0)]), reduce: reduce)
+        let collisionCreated = try await collisionHostRoom.create()
+        _ = try await collisionMemberRoom.join(inviteCode: collisionCreated.inviteCode)
+        await collisionHostTransport.pauseInbound()
+        let pending = Task { try await collisionMemberRoom.dispatch(.object(["d": .number(2)])) }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let actionId = await collisionMemberTransport.lastActionId ?? "shared-action"
+        await collisionMemberTransport.injectForeignState(actionId: actionId, n: 99)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let collisionSnapshot = await collisionMemberRoom.getSnapshot()
+        XCTAssertNotEqual(collisionSnapshot.state, .object(["n": .number(2)]))
+        await collisionHostTransport.resumeInbound()
+        let settled = try await pending.value
+        XCTAssertEqual(settled.state, .object(["n": .number(2)]))
     }
 }
 
@@ -283,11 +338,15 @@ private actor MemoryRoomTransport: LokiTransport {
     private var playerId: String?
     private var roomId: String?
     private var listener: (@Sendable (Data) -> Void)?
+    private var sink: (@Sendable (Data) -> Void)?
     private var failLeave = false
     private var enterHold: CheckedContinuation<Void, Never>?
     private var holding = false
     private var parked = false
     private var unseenDuplicate = false
+    private var inboundPaused = false
+    private var held: [Data] = []
+    private(set) var lastActionId: String?
 
     init(world: MemoryWorld) { self.world = world }
 
@@ -313,7 +372,7 @@ private actor MemoryRoomTransport: LokiTransport {
             room.members[player] = Presence(playerId: player, sessionId: player, joinedAt: 0, team: nil, host: true)
             await world.set(room)
             roomId = id
-            if let listener { await world.register(roomId: id, listener: listener) }
+            if sink != nil { await world.register(roomId: id, listener: { data in Task { await self.inbound(data) } }) }
             return try encodeJoined(room)
         case "rooms.join":
             if holding {
@@ -329,7 +388,7 @@ private actor MemoryRoomTransport: LokiTransport {
             room.members[player] = Presence(playerId: player, sessionId: player, joinedAt: 0, team: nil, host: false)
             await world.set(room)
             roomId = room.roomId
-            if let listener { await world.register(roomId: room.roomId, listener: listener) }
+            if sink != nil { await world.register(roomId: room.roomId, listener: { data in Task { await self.inbound(data) } }) }
             return try encodeJoined(room)
         case "rooms.leave":
             if failLeave {
@@ -350,11 +409,43 @@ private actor MemoryRoomTransport: LokiTransport {
         }
     }
 
-    func connect(onMessage: @escaping @Sendable (Data) -> Void) async throws { listener = onMessage }
-    func disconnect() async { listener = nil }
+    func connect(onMessage: @escaping @Sendable (Data) -> Void) async throws {
+        sink = onMessage
+        listener = { data in Task { await self.inbound(data) } }
+    }
+    func disconnect() async { listener = nil; sink = nil }
     func failNextLeave() { failLeave = true }
     func holdNextEnter() { holding = true; parked = false }
     func emitUnseenDuplicateOnce() { unseenDuplicate = true }
+    func pauseInbound() { inboundPaused = true }
+    func resumeInbound() {
+        inboundPaused = false
+        for data in held { sink?(data) }
+        held.removeAll()
+    }
+    private func inbound(_ data: Data) {
+        if inboundPaused {
+            held.append(data)
+            return
+        }
+        sink?(data)
+    }
+    func injectForeignState(actionId: String, n: Int64) async {
+        guard let roomId, var room = await world.room(id: roomId) else { return }
+        room.sequence += 1
+        let data = try! JSONEncoder().encode(JSONValue.object([
+            "protocolVersion": .number(1),
+            "roomId": .string(room.roomId),
+            "sequence": .number(room.sequence),
+            "type": .string("state"),
+            "hostId": .string(room.hostId),
+            "state": .object(["n": .number(n)]),
+            "stateVersion": .number(room.version + 1),
+            "actionId": .string(actionId),
+            "senderId": .string("other-player"),
+        ]))
+        sink?(data)
+    }
     func waitUntilHeld() async {
         while holding && !parked {
             await Task.yield()
@@ -420,6 +511,7 @@ private actor MemoryRoomTransport: LokiTransport {
             )
         }
         if type == "action", case let .string(actionId) = envelope["actionId"] {
+            lastActionId = actionId
             let sender = try requirePlayer()
             if unseenDuplicate {
                 unseenDuplicate = false

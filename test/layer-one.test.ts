@@ -35,10 +35,16 @@ import {
 } from "../packages/cli/src/index.js";
 import {
   LokiClient,
+  FirstPartyTransport,
+  ForegroundController,
   ReconnectScheduler,
+  createBrowserPageLifecycle,
   encodeMatchStateBytes,
   lokiErrorFromUnknown,
   reconnectDelayMs,
+  type LifecycleCause,
+  type LokiTransport,
+  type PageLifecycle,
   type LokiTransport,
 } from "../packages/sdk-js/src/index.js";
 import type {
@@ -271,8 +277,19 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(marketing, /loki-vibecoded-game-montage\.png/);
   assert.match(marketing, /https:\/\/app\.lokiplay\.cc\/login/);
   assert.match(marketing, /https:\/\/app\.lokiplay\.cc\/signup/);
+  assert.match(marketing, />Get Started</g);
+  assert.doesNotMatch(marketing, />Start free</);
+  assert.doesNotMatch(marketing, />Start building</);
   assert.match(creator, /window\.location\.pathname === "\/signup"/);
-  assert.match(creator, /Editorial Studio \/ 03/);
+  assert.doesNotMatch(creator, /Editorial Studio \/ 03/);
+  assert.match(creator, /\.auth-panel \.form-actions \{[\s\S]*display: grid/);
+  assert.match(creator, /class="auth-hero"/);
+  assert.match(creator, /class="auth-stage"/);
+  assert.match(creator, /Create\. Deploy\. Multiplayer\./);
+  assert.match(creator, /grid-template-columns: minmax\(0, 1\.5fr\) minmax\(0, 1fr\)/);
+  assert.match(creator, /border-radius: 1\.5rem/);
+  assert.match(creator, /backdrop-filter: blur\(22px\)/);
+  assert.match(creator, /function syncAuthLayout\(\)/);
   assert.match(creator, /Copy agent prompt/);
   assert.match(creator, /Full agent prompt/);
   assert.match(creator, /className: "integration-prompt"/);
@@ -306,6 +323,8 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(operator, /Operator console/);
   assert.match(operator, /Audit events/);
   assert.match(device, /Connect this terminal/);
+  assert.match(device, /min-height: 100dvh/);
+  assert.match(device, /signin-form:not\(\[hidden\]\)/);
   assert.match(device, /ABCD-EFGH/);
   assert.match(device, /\/v1\/cli\/device\/approve/);
   assert.match(creator, /\\u003c\/script\\u003e/);
@@ -711,11 +730,150 @@ test("Nakama defers disconnect leaves through a reconnect grace period", async (
   const runtime = await readFile(
     path.join(process.cwd(), "infra/nakama/modules/loki.js"),
     "utf8",
+  assert.match(runtime, /HOST_AUTHORITY_GRACE_SECONDS = 20/);
+  assert.match(runtime, /MEMBERSHIP_GRACE_SECONDS = 90/);
+  const graceTests = await readFile(
+    path.join(process.cwd(), "test/nakama-grace.test.ts"),
+    "utf8",
   );
-  assert.match(runtime, /DISCONNECT_GRACE_SECONDS = 20/);
+  assert.match(graceTests, /HOST_AUTHORITY_GRACE_SECONDS = 20/);
+  assert.match(graceTests, /MEMBERSHIP_GRACE_SECONDS = 90/);
   assert.match(runtime, /disconnectGraces/);
   assert.match(runtime, /expireDisconnectGraces/);
+  assert.match(runtime, /migrateHostAuthority/);
   assert.match(runtime, /state\.disconnectGraces\[presence\.userId\] = \{/);
   assert.match(runtime, /loki_leave_room/);
+  assert.match(runtime, /operation === "depart"/);
+});
+
+test("foreground controller suspends then replaces the connection on resume", async () => {
+  const events: string[] = [];
+  let visible = true;
+  let online = true;
+  let active = true;
+  let replacements = 0;
+  const controller = new ForegroundController({
+    isActive: () => active,
+    environment: () => ({ visible, online }),
+    onEvent: (event) => events.push(event),
+    replaceConnection: async () => {
+      replacements += 1;
+    },
+    scheduleRetry: () => undefined,
+  });
+  visible = false;
+  controller.notify("visibilitychange");
+  assert.deepEqual(events, ["suspended"]);
+  visible = true;
+  controller.notify("visibilitychange");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(events, ["suspended", "resumed"]);
+  assert.equal(replacements, 1);
+  online = false;
+  controller.notify("offline");
+  visible = true;
+  online = true;
+  controller.notify("online");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(replacements, 2);
+  active = false;
+  visible = false;
+  controller.notify("visibilitychange");
+  assert.equal(events.filter((event) => event === "suspended").length, 2);
+});
+
+test("pagehide suspends and pageshow replaces a live-looking socket", async () => {
+  const events: string[] = [];
+  let visible = true;
+  let online = true;
+  let replacements = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const controller = new ForegroundController({
+    isActive: () => true,
+    environment: () => ({ visible, online }),
+    onEvent: (event) => events.push(event),
+    replaceConnection: async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      replacements += 1;
+      await Promise.resolve();
+      inFlight -= 1;
+    },
+    scheduleRetry: () => undefined,
+  });
+  controller.notify("pagehide");
+  assert.deepEqual(events, ["suspended"]);
+  assert.equal(replacements, 0);
+  visible = true;
+  controller.notify("pageshow");
+  controller.notify("visibilitychange");
+  controller.notify("online");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(events, ["suspended", "resumed"]);
+  assert.equal(replacements, 1);
+  assert.equal(maxInFlight, 1);
+});
+
+test("pageshow replaces the socket without a preceding visibility event", async () => {
+  const events: string[] = [];
+  let replacements = 0;
+  const controller = new ForegroundController({
+    isActive: () => true,
+    environment: () => ({ visible: true, online: true }),
+    onEvent: (event) => events.push(event),
+    replaceConnection: async () => {
+      replacements += 1;
+    },
+    scheduleRetry: () => undefined,
+  });
+  controller.notify("pageshow");
+  await Promise.resolve();
+  assert.deepEqual(events, ["resumed"]);
+  assert.equal(replacements, 1);
+});
+
+test("first-party transport pageshow replaces a live-looking socket", async () => {
+  const causes: LifecycleCause[] = [];
+  let fire: (cause?: LifecycleCause) => void = () => undefined;
+  let visible = true;
+  const lifecycle: PageLifecycle = {
+    getState: () => ({ visible, online: true }),
+    subscribe(listener) {
+      fire = (cause) => {
+        causes.push(cause!);
+        listener(cause);
+      };
+      return () => undefined;
+    },
+  };
+  let replacements = 0;
+  const controller = new ForegroundController({
+    isActive: () => true,
+    environment: () => lifecycle.getState(),
+    onEvent: () => undefined,
+    replaceConnection: async () => {
+      replacements += 1;
+    },
+    scheduleRetry: () => undefined,
+  });
+  lifecycle.subscribe((cause) => {
+    controller.notify(cause);
+  });
+  fire("pageshow");
+  await Promise.resolve();
+  assert.deepEqual(causes, ["pageshow"]);
+  assert.equal(replacements, 1);
+  const transport = new FirstPartyTransport({
+    lifecycle,
+    nakamaHost: "127.0.0.1",
+    nakamaPort: "7350",
+    secure: false,
+  });
+  await transport.close();
+  assert.equal(typeof createBrowserPageLifecycle, "function");
   assert.match(runtime, /operation === "depart"/);
 });

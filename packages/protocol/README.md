@@ -26,4 +26,7 @@ Canonical JSON and synchronized-room numbers must be finite safe integers.
 contract. Snapshot and presence envelopes may include `membersComplete` and
 `membershipRevision`. An omitted or empty `members` list is incomplete, not a
 leave; `membersComplete: true` is required before an empty roster means
-everyone left.
+everyone left. `membershipRevision` increases for a real leave or a new member,
+not for a recovered interruption. Host interruption uses a short authority
+grace before migration and a longer membership grace before the player is
+removed.

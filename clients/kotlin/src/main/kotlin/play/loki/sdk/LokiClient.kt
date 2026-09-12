@@ -1,5 +1,9 @@
 package play.loki.sdk
 
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
+
 const val LOKI_PROTOCOL_VERSION: Long = 1
 
 sealed class JsonValue {
@@ -82,6 +86,8 @@ class LokiClient(private val transport: LokiTransport) {
         private set
     private var sendSequence = 0L
     private var lifecycleGeneration = 0
+    private var lifecycleVisible = true
+    private var lifecycleOnline = true
     private var leaveFailed = false
     private var reconnecting = false
     private val messageListeners = mutableMapOf<Int, (ServerEnvelope) -> Unit>()
@@ -90,6 +96,7 @@ class LokiClient(private val transport: LokiTransport) {
     private val lock = Any()
 
     val playerId: String? get() = session?.playerId
+    val isForeground: Boolean get() = lifecycleVisible && lifecycleOnline
 
     suspend fun connect() = transport.connect(::receive)
 
@@ -342,6 +349,40 @@ class LokiClient(private val transport: LokiTransport) {
         }
     }
 
+    fun notifyLifecycle(visible: Boolean, online: Boolean) {
+        val background = !visible || !online
+        lifecycleVisible = visible
+        lifecycleOnline = online
+        if (background) {
+            notifyConnection("suspended")
+            return
+        }
+        notifyConnection("resumed")
+        if (currentRoomId != null) {
+            suspend { reconnectWithBackoff() }.startCoroutine(
+                object : Continuation<Unit> {
+                    override val context = EmptyCoroutineContext
+                    override fun resumeWith(value: Result<Unit>) {}
+                },
+            )
+        }
+    }
+
+    private suspend fun reconnectWithBackoff() {
+        var attempt = 0
+        while (currentRoomId != null && isForeground && !leaveFailed) {
+            try {
+                reconnectCurrentRoom()
+                return
+            } catch (_: Throwable) {
+                val shift = minOf(attempt, 5)
+                val delay = minOf(15_000L, 500L * (1L shl shift))
+                attempt += 1
+                Thread.sleep(delay)
+            }
+        }
+    }
+
     suspend fun createSessionRoom(): JoinedRoom = enterRoom("rooms.create", emptyMap())
 
     suspend fun joinSessionRoom(inviteCode: String): JoinedRoom =
@@ -413,8 +454,10 @@ class LokiClient(private val transport: LokiTransport) {
 
     fun createSynchronizedRoom(
         initialState: JsonValue,
+        commitTimeoutMs: Long = SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
+        recoveryDeadlineMs: Long = SYNCHRONIZED_ROOM_RECOVERY_DEADLINE_MS,
         reduce: (JsonValue, JsonValue, ActionContext) -> JsonValue,
-    ) = SynchronizedRoom(this, initialState, reduce)
+    ) = SynchronizedRoom(this, initialState, reduce, commitTimeoutMs, recoveryDeadlineMs)
 
     private suspend fun enterRoom(operation: String, payload: Map<String, JsonValue>): JoinedRoom {
         if (leaveFailed) error("resolve the failed leave before joining another room")

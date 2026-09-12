@@ -149,6 +149,8 @@ namespace Loki.Play.SDK
         private string currentInviteCode = "";
         private long sendSequence;
         private int lifecycleGeneration;
+        private bool lifecycleVisible = true;
+        private bool lifecycleOnline = true;
         private bool leaveFailed;
         private bool reconnecting;
         private int nextListenerId = 1;
@@ -386,6 +388,42 @@ namespace Loki.Play.SDK
             }
         }
 
+        public bool IsForeground { get { return lifecycleVisible && lifecycleOnline; } }
+
+        public void NotifyLifecycle(bool visible, bool online)
+        {
+            var background = !visible || !online;
+            lifecycleVisible = visible;
+            lifecycleOnline = online;
+            if (background)
+            {
+                NotifyConnection("suspended");
+                return;
+            }
+            NotifyConnection("resumed");
+            if (currentRoomId != null) _ = ReconnectWithBackoffAsync();
+        }
+
+        private async Task ReconnectWithBackoffAsync()
+        {
+            var attempt = 0;
+            while (currentRoomId != null && IsForeground && !leaveFailed)
+            {
+                try
+                {
+                    await ReconnectCurrentRoomAsync();
+                    return;
+                }
+                catch
+                {
+                    var shift = attempt > 5 ? 5 : attempt;
+                    var delay = Math.Min(15000, 500 * (1 << shift));
+                    attempt += 1;
+                    await Task.Delay(delay);
+                }
+            }
+        }
+
         public Task<JoinedRoom> CreateSessionRoomAsync() { return EnterRoom("rooms.create", new Dictionary<string, JsonValue>()); }
 
         public Task<JoinedRoom> JoinSessionRoomAsync(string inviteCode)
@@ -459,9 +497,13 @@ namespace Loki.Play.SDK
             return RequestSnapshotAsync(currentRoomId, ++sendSequence);
         }
 
-        public SynchronizedRoom CreateSynchronizedRoom(JsonValue initialState, Func<JsonValue, JsonValue, ActionContext, JsonValue> reduce)
+        public SynchronizedRoom CreateSynchronizedRoom(
+            JsonValue initialState,
+            Func<JsonValue, JsonValue, ActionContext, JsonValue> reduce,
+            long commitTimeoutMs = SynchronizedRoom.CommitTimeoutMs,
+            long recoveryDeadlineMs = SynchronizedRoom.RecoveryDeadlineMs)
         {
-            return new SynchronizedRoom(this, initialState, reduce);
+            return new SynchronizedRoom(this, initialState, reduce, commitTimeoutMs, recoveryDeadlineMs);
         }
 
         private async Task<JoinedRoom> EnterRoom(string operation, IDictionary<string, JsonValue> payload)

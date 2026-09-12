@@ -20,11 +20,23 @@ export const SYNCHRONIZED_ROOM_MAX_RECENT_ACTIONS = 64;
 export const SYNCHRONIZED_ROOM_ACTION_TTL_MS = 600_000;
 export const SYNCHRONIZED_ROOM_MAX_REDUCER_MS = 50;
 export const SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS = 10_000;
+export const SYNCHRONIZED_ROOM_RECOVERY_DEADLINE_MS = 60_000;
+export const SYNCHRONIZED_ROOM_MIN_COMMIT_TIMEOUT_MS = 5_000;
+export const SYNCHRONIZED_ROOM_MAX_COMMIT_TIMEOUT_MS = 60_000;
+export const SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS = 30_000;
+export const SYNCHRONIZED_ROOM_MAX_RECOVERY_DEADLINE_MS = 120_000;
 
 export type ConnectionState =
   | "idle"
   | "joining"
   | "connected"
+  | "suspended"
+
+export type ConnectionState =
+  | "idle"
+  | "joining"
+  | "connected"
+  | "suspended"
   | "reconnecting"
   | "resynchronizing"
   | "leaving"
@@ -100,9 +112,16 @@ export type CommittedTransition<State, Action> = {
 export type SynchronizedRoomOptions<State, Action> = {
   initialState: State;
   reduce(
-    state: State,
-    action: Action,
-    context: ActionContext,
+  commitTimeoutMs?: number;
+  recoveryDeadlineMs?: number;
+};
+
+export type ConnectionEvent =
+  | "disconnected"
+  | "connected"
+  | "reconnect_failed"
+  | "suspended"
+  | "resumed";
   ): State;
   stateSchema?: Schema<State>;
   actionSchema?: Schema<Action>;
@@ -155,6 +174,26 @@ type Prepared<State, Action> = {
   item: Queued<Action>;
   next: State;
   expectedVersion: number;
+};
+
+type WatchdogPhase = "confirming" | "recovering";
+
+type PendingWatchdog = {
+  phase: WatchdogPhase;
+  confirmRemainingMs: number;
+  recoveryRemainingMs: number;
+  failRemainingMs: number;
+  confirmStartedAt?: number;
+  failStartedAt?: number;
+};
+
+const isImmediateDispatchFailure = (error: unknown): boolean => {
+  if (!(error instanceof SynchronizedRoomError)) return false;
+  return (
+    error.outcome === "rejected" ||
+    error.outcome === "invalid" ||
+    error.outcome === "rate_limited"
+  );
 };
 
 type CommitResult = "committed" | "aborted" | "timeout";
@@ -245,6 +284,16 @@ const isUncommittedEmptyState = (message: ServerEnvelope): boolean =>
 
 const protocolRejectionMessage = (message: string): string => {
   const text = message.trim() || "action rejected";
+const clampNetworkTimeout = (
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.floor(value)));
+};
+
   return text.length > 200 ? text.slice(0, 200) : text;
 };
 
@@ -259,6 +308,8 @@ export class SynchronizedRoom<State, Action> {
   readonly #options: SynchronizedRoomOptions<State, Action>;
   readonly #listeners = new Set<(snapshot: SynchronizedRoomSnapshot<State>) => void>();
   readonly #committed = new Set<(result: CommittedTransition<State, Action>) => void>();
+  readonly #recoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly #watchdogs = new Map<string, PendingWatchdog>();
   readonly #pending = new Map<string, Pending<Action>>();
   readonly #inflight = new Map<string, Queued<Action>>();
   readonly #recent = new Map<string, number>();
@@ -279,13 +330,32 @@ export class SynchronizedRoom<State, Action> {
   #stateVersion = 0;
   #connection: ConnectionState = "idle";
   #lastError?: SynchronizedRoomError;
-  #epoch = 0;
-  #generation = 0;
-  #processing = false;
-  #resyncing = false;
-  #explicitReconnect = false;
-  #previousState: State;
+  readonly #commitTimeoutMs: number;
+  readonly #recoveryDeadlineMs: number;
+  #timersPaused = false;
+  #recoveringFromTimeout = false;
 
+  constructor(host: SynchronizedRoomHost, options: SynchronizedRoomOptions<State, Action>) {
+    this.#host = host;
+    this.#options = options;
+    this.#state = this.#parseState(options.initialState);
+    assertJsonCompatible(this.#state);
+    this.#previousState = this.#state;
+    this.#commitTimeoutMs = clampNetworkTimeout(
+      options.commitTimeoutMs,
+      SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
+      SYNCHRONIZED_ROOM_MIN_COMMIT_TIMEOUT_MS,
+      SYNCHRONIZED_ROOM_MAX_COMMIT_TIMEOUT_MS,
+    );
+    this.#recoveryDeadlineMs = Math.max(
+      this.#commitTimeoutMs,
+      clampNetworkTimeout(
+        options.recoveryDeadlineMs,
+        SYNCHRONIZED_ROOM_RECOVERY_DEADLINE_MS,
+        SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS,
+        SYNCHRONIZED_ROOM_MAX_RECOVERY_DEADLINE_MS,
+      ),
+    );
   constructor(host: SynchronizedRoomHost, options: SynchronizedRoomOptions<State, Action>) {
     this.#host = host;
     this.#options = options;
@@ -335,10 +405,7 @@ export class SynchronizedRoom<State, Action> {
   async create(): Promise<SynchronizedRoomSnapshot<State>> {
     return this.#enter(() => this.#host.createRoom(), { bootstrap: true });
   }
-
-  async join(input: { inviteCode: string }): Promise<SynchronizedRoomSnapshot<State>> {
-    return this.#enter(() => this.#host.joinRoom(input), { bootstrap: false });
-  }
+    if (this.#connection !== "connected") {
 
   async dispatch(action: Action): Promise<SynchronizedRoomSnapshot<State>> {
     if (
@@ -363,14 +430,19 @@ export class SynchronizedRoom<State, Action> {
     return new Promise((resolve, reject) => {
       this.#pending.set(actionId, {
         actionId,
-        action: parsed,
-        senderId,
-        epoch: this.#epoch,
-        resolve: resolve as Pending<Action>["resolve"],
-        reject,
+      this.#watchdogs.set(actionId, {
+        phase: "confirming",
+        confirmRemainingMs: this.#commitTimeoutMs,
+        recoveryRemainingMs: this.#recoveryDeadlineMs,
+        failRemainingMs: this.#commitTimeoutMs + this.#recoveryDeadlineMs,
       });
-      this.#armCommitTimeout(actionId);
+      this.#armWatchdog(actionId);
       void this.#submit(actionId, parsed, senderId).catch((error) => {
+        if (isImmediateDispatchFailure(error)) {
+          this.#failPending(actionId, error);
+          return;
+        }
+        this.#beginRecovery(actionId);
         this.#failPending(
           actionId,
           error instanceof SynchronizedRoomError
@@ -428,21 +500,16 @@ export class SynchronizedRoom<State, Action> {
       throw new SynchronizedRoomError("rejected", "cannot reconnect from a terminal state");
     }
     this.#explicitReconnect = true;
-    this.#bind();
     this.#setConnection("reconnecting");
     this.#epoch += 1;
-    this.#resyncing = true;
-    this.#queue.length = 0;
-    this.#releaseWaiters();
-    this.#refreshPendingTimers();
-    try {
-      await this.#host.reconnect();
+      if (this.#isInactive()) return;
+      if (this.#resyncing) {
+        this.#setConnection("resynchronizing");
+        await this.#host.requestSnapshot();
       if (
         this.#resyncing &&
-        (this.#connection === "reconnecting" ||
-          this.#connection === "resynchronizing")
-      ) {
-        this.#setConnection("resynchronizing");
+      this.#resyncing = true;
+      this.#setConnection("reconnecting");
       }
     } catch (error) {
       this.#failRoom(
@@ -504,6 +571,8 @@ export class SynchronizedRoom<State, Action> {
       }
       if (options.bootstrap && this.isHost) {
         await this.#bootstrapInitialState();
+      if (this.#connection !== "suspended") {
+        this.#setConnection("connected");
       }
       if (generation !== this.#generation) {
         await this.#host.leaveRoom(joined.roomId).catch(() => undefined);
@@ -565,28 +634,36 @@ export class SynchronizedRoom<State, Action> {
       );
     }
   }
-
-  #bind(): void {
-    if (this.#unsubscribe) return;
-    this.#unsubscribe = this.#host.onMessage((message) => this.#onMessage(message));
-    this.#unsubscribeConnection = this.#host.onConnection?.((event) => {
-      if (this.#isInactive()) return;
+      if (event === "suspended") {
+        this.#suspend();
+        return;
+      }
+      if (event === "resumed") {
+        this.#resumeFromSuspend();
+        return;
+      }
       if (event === "reconnect_failed") {
+        if (this.#connection === "suspended") return;
         this.#resyncing = true;
         this.#setConnection("reconnecting");
         return;
       }
       if (event === "disconnected") {
+        if (this.#connection === "suspended") return;
         this.#epoch += 1;
         this.#resyncing = true;
         this.#queue.length = 0;
         this.#releaseWaiters();
-        this.#refreshPendingTimers();
         this.#setConnection("reconnecting");
         return;
       }
+      if (this.#connection === "suspended") return;
       if (this.#connection === "reconnecting" || this.#connection === "resynchronizing") {
         this.#setConnection("resynchronizing");
+        if (this.#explicitReconnect) return;
+        void this.#host.requestSnapshot().catch(() => {
+          if (this.#isInactive() || this.#connection === "suspended") return;
+          this.#setConnection("reconnecting");
         if (this.#explicitReconnect) return;
         void this.#host.requestSnapshot().catch((error) => {
           this.#failRoom(
@@ -696,13 +773,7 @@ export class SynchronizedRoom<State, Action> {
             expectedStateVersion: this.#stateVersion,
             senderId: item.senderId,
           });
-          if (this.#resyncing || this.#connection !== "connected") {
-            this.#releaseWaiters(item.actionId);
-            continue;
-          }
-          const result = await confirmation;
-          if (result === "timeout") {
-            this.#failPending(
+            this.#beginRecovery(item.actionId);
               item.actionId,
               new SynchronizedRoomError(
                 "indeterminate",
@@ -714,15 +785,12 @@ export class SynchronizedRoom<State, Action> {
           if (
             result === "aborted" ||
             this.#resyncing ||
-            this.#connection !== "connected"
-          ) {
+          if (error instanceof SynchronizedRoomError && isImmediateDispatchFailure(error)) {
+            this.#failPending(item.actionId, error);
             continue;
           }
-        } catch (error) {
-          if (this.#resyncing || this.#connection !== "connected") continue;
-          this.#failPending(
-            item.actionId,
-            error instanceof SynchronizedRoomError
+          this.#beginRecovery(item.actionId);
+          continue;
               ? error
               : new SynchronizedRoomError(
                   "indeterminate",
@@ -818,7 +886,7 @@ export class SynchronizedRoom<State, Action> {
       this.#emit();
       return;
     }
-    if (outcome === "duplicate") {
+          this.#armWatchdog(message.actionId);
       if (message.actionId && this.#pending.has(message.actionId)) {
         const senderId = message.senderId || this.#pending.get(message.actionId)?.senderId;
         if (senderId && this.#seen(senderId, message.actionId)) {
@@ -838,17 +906,17 @@ export class SynchronizedRoom<State, Action> {
     if (message.actionId) this.#releaseWaiters(message.actionId);
     this.#emit();
   }
-
-  #pauseForResync(): void {
-    this.#epoch += 1;
-    this.#queue.length = 0;
-    this.#resyncing = true;
-    this.#releaseWaiters();
-    this.#refreshPendingTimers();
     this.#setConnection("resynchronizing");
   }
 
-  async #recover(outcome: SynchronizedRoomOutcome, message: string): Promise<void> {
+  async #recover(_outcome: SynchronizedRoomOutcome, _message: string): Promise<void> {
+    if (this.#isInactive()) return;
+    try {
+      await this.#host.requestSnapshot();
+    } catch {
+      if (this.#isInactive() || this.#connection === "suspended") return;
+      this.#setConnection("reconnecting");
+      void this.#recoverAfterTimeout();
     if (this.#isInactive()) return;
     this.#refreshPendingTimers();
     try {
@@ -944,17 +1012,21 @@ export class SynchronizedRoom<State, Action> {
       this.#succeed(message.actionId!, senderId);
     } else if (message.actionId) {
       this.#notifyWaiters(message.actionId);
-    }
-    if (committedItem && !stale) {
+      if (this.#connection !== "suspended") {
+        this.#setConnection("connected");
+        this.#requeuePending();
+      }
       this.#notifyCommitted(committedItem);
     }
-    if (this.#resyncing && !stale && (replace || incomingVersion !== undefined)) {
-      this.#resyncing = false;
-      this.#setConnection("connected");
-      this.#requeuePending();
-    } else if (this.#connection === "joining") {
-      // Join completion sets connected after bootstrap or the join snapshot.
+    } else if (this.#connection === "suspended") {
+      // Stay suspended until the environment resumes.
     } else if (
+      !this.#resyncing &&
+      this.#connection !== "closed" &&
+      this.#connection !== "failed" &&
+      this.#connection !== "leaving" &&
+      this.#connection !== "leave_failed" &&
+      this.#connection !== "reconnecting"
       !this.#resyncing &&
       this.#connection !== "closed" &&
       this.#connection !== "failed" &&
@@ -982,14 +1054,8 @@ export class SynchronizedRoom<State, Action> {
       pending.epoch = this.#epoch;
       if (this.isHost) {
         this.#enqueue({
-          actionId: pending.actionId,
-          action: pending.action,
-          senderId: pending.senderId,
-          epoch: this.#epoch,
-        });
-      } else {
-        void this.#host.sendAction(pending.action, { actionId: pending.actionId }).catch((error) => {
-          this.#failPending(
+        void this.#host.sendAction(pending.action, { actionId: pending.actionId }).catch(() => {
+          // Keep the pending action until recovery or the deadline settles it.
             pending.actionId,
             new SynchronizedRoomError(
               "indeterminate",
@@ -1001,13 +1067,7 @@ export class SynchronizedRoom<State, Action> {
     }
     this.#scheduleDrain();
   }
-
-  #succeed(actionId: string, senderId?: string): void {
-    const pending = this.#pending.get(actionId);
-    const identity = this.#identity(senderId || pending?.senderId || this.#playerId, actionId);
-    this.#inflight.delete(identity);
-    this.#prepared.delete(identity);
-    this.#clearCommitTimeout(actionId);
+    this.#clearWatchdog(actionId);
     this.#notifyWaiters(actionId);
     if (!pending) return;
     this.#pending.delete(actionId);
@@ -1019,6 +1079,12 @@ export class SynchronizedRoom<State, Action> {
     const pending = this.#pending.get(actionId);
     const identity = this.#identity(pending?.senderId || this.#playerId, actionId);
     this.#inflight.delete(identity);
+    this.#prepared.delete(identity);
+    this.#clearWatchdog(actionId);
+    this.#releaseWaiters(actionId);
+    if (!pending) return;
+    this.#pending.delete(actionId);
+    this.#lastError = error;
     this.#prepared.delete(identity);
     this.#clearCommitTimeout(actionId);
     this.#releaseWaiters(actionId);
@@ -1036,18 +1102,24 @@ export class SynchronizedRoom<State, Action> {
   }
 
   #awaitCommit(actionId: string): Promise<CommitResult> {
-    if (this.#resyncing || this.#isCommitClosed()) return Promise.resolve("aborted");
-    return new Promise((resolve) => {
-      if (this.#resyncing || this.#isCommitClosed()) {
-        resolve("aborted");
-        return;
-      }
+      let settled = false;
+      const settle = (result: CommitResult) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
       const timer = setTimeout(() => {
         const waiters = this.#waiters.get(actionId);
         if (!waiters) return;
         this.#waiters.delete(actionId);
         for (const waiter of waiters) waiter.resolve("timeout");
-      }, SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS);
+      }, this.#commitTimeoutMs);
+      timer.unref?.();
+      const waiters = this.#waiters.get(actionId) ?? [];
+      waiters.push({
+        resolve: (result) => {
+          if (result !== "timeout") clearTimeout(timer);
+          settle(result);
       timer.unref?.();
       const waiters = this.#waiters.get(actionId) ?? [];
       waiters.push({
@@ -1083,32 +1155,159 @@ export class SynchronizedRoom<State, Action> {
         try {
           waiter.resolve("aborted");
         } catch {
-          // Waiter callbacks must not block recovery.
-        }
+  #armWatchdog(actionId: string): void {
+    this.#clearTimerOnly(actionId);
+    this.#clearRecoveryTimerOnly(actionId);
+    const watchdog = this.#watchdogs.get(actionId);
+    if (!watchdog || !this.#pending.has(actionId)) return;
+    if (this.#timersPaused || this.#connection === "suspended") return;
+    if (watchdog.phase === "confirming") {
+      if (watchdog.confirmRemainingMs <= 0) {
+        this.#beginRecovery(actionId);
+      } else {
+        watchdog.confirmStartedAt = Date.now();
+        const confirmTimer = setTimeout(() => {
+          this.#commitTimers.delete(actionId);
+          watchdog.confirmStartedAt = undefined;
+          watchdog.confirmRemainingMs = 0;
+          this.#beginRecovery(actionId);
+        }, watchdog.confirmRemainingMs);
+        this.#commitTimers.set(actionId, confirmTimer);
       }
+    }
+    if (watchdog.failRemainingMs <= 0) {
+      this.#onRecoveryDeadline(actionId);
+      return;
+    }
+    watchdog.failStartedAt = Date.now();
+    const failTimer = setTimeout(() => {
+      this.#recoveryTimers.delete(actionId);
+      watchdog.failStartedAt = undefined;
+      watchdog.failRemainingMs = 0;
+      watchdog.recoveryRemainingMs = 0;
+      this.#onRecoveryDeadline(actionId);
+    }, watchdog.failRemainingMs);
+    this.#recoveryTimers.set(actionId, failTimer);
+  }
+
+  #onRecoveryDeadline(actionId: string): void {
+    if (this.#isInactive() || this.#connection === "suspended" || this.#timersPaused) {
+      return;
+    }
+    if (!this.#pending.has(actionId)) return;
+    this.#failPending(
+      actionId,
+      new SynchronizedRoomError("indeterminate", "authoritative confirmation timed out"),
+    );
+  }
+
+  #beginRecovery(actionId: string): void {
+    const watchdog = this.#watchdogs.get(actionId);
+    if (watchdog && watchdog.phase === "confirming") {
+      watchdog.phase = "recovering";
+      watchdog.confirmStartedAt = undefined;
+    }
+    void this.#recoverAfterTimeout();
+  }
+
+  async #recoverAfterTimeout(): Promise<void> {
+    if (this.#isInactive() || this.#connection === "suspended") return;
+    if (this.#recoveringFromTimeout) return;
+    this.#recoveringFromTimeout = true;
+    this.#resyncing = true;
+    this.#setConnection("resynchronizing");
+    try {
+      await this.#host.reconnect();
+      const connection = this.getSnapshot().connection;
+      if (this.#isInactive() || connection === "suspended") return;
+      if (this.#resyncing) {
+        this.#setConnection("resynchronizing");
+        await this.#host.requestSnapshot().catch(() => {
+          const next = this.getSnapshot().connection;
+          if (!this.#isInactive() && next !== "suspended") {
+            this.#setConnection("reconnecting");
+          }
+        });
+      }
+    } catch {
+      if (!this.#isInactive() && this.getSnapshot().connection !== "suspended") {
+        this.#setConnection("reconnecting");
+      }
+    } finally {
+      this.#recoveringFromTimeout = false;
     }
   }
 
-  #armCommitTimeout(actionId: string): void {
-    this.#clearCommitTimeout(actionId);
-    const timer = setTimeout(() => {
-      this.#commitTimers.delete(actionId);
-      this.#failPending(
-        actionId,
-        new SynchronizedRoomError(
-          "indeterminate",
-          "authoritative confirmation timed out",
-        ),
-      );
-    }, SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS);
-    timer.unref?.();
-    this.#commitTimers.set(actionId, timer);
+  #suspend(): void {
+    if (this.#isInactive()) return;
+    this.#pauseWatchdogs();
+    this.#releaseWaiters();
+    this.#setConnection("suspended");
   }
 
-  #clearCommitTimeout(actionId: string): void {
+  #resumeFromSuspend(): void {
+    if (this.#isInactive()) return;
+    this.#resyncing = true;
+    this.#setConnection("reconnecting");
+    this.#resumeWatchdogs();
+  }
+
+  #pauseWatchdogs(): void {
+    if (this.#timersPaused) return;
+    this.#timersPaused = true;
+    const now = Date.now();
+    for (const [actionId, watchdog] of this.#watchdogs) {
+      if (watchdog.confirmStartedAt !== undefined) {
+        const elapsed = Math.max(0, now - watchdog.confirmStartedAt);
+        watchdog.confirmRemainingMs = Math.max(0, watchdog.confirmRemainingMs - elapsed);
+        watchdog.confirmStartedAt = undefined;
+      }
+      if (watchdog.failStartedAt !== undefined) {
+        const elapsed = Math.max(0, now - watchdog.failStartedAt);
+        watchdog.failRemainingMs = Math.max(0, watchdog.failRemainingMs - elapsed);
+        watchdog.recoveryRemainingMs = Math.min(
+          watchdog.recoveryRemainingMs,
+          watchdog.failRemainingMs,
+        );
+        watchdog.failStartedAt = undefined;
+      }
+      this.#clearTimerOnly(actionId);
+      this.#clearRecoveryTimerOnly(actionId);
+    }
+  }
+
+  #resumeWatchdogs(): void {
+    if (!this.#timersPaused) return;
+    this.#timersPaused = false;
+    for (const actionId of this.#pending.keys()) this.#armWatchdog(actionId);
+  }
+
+  #clearTimerOnly(actionId: string): void {
     const timer = this.#commitTimers.get(actionId);
     if (timer === undefined) return;
     clearTimeout(timer);
+    this.#commitTimers.delete(actionId);
+  }
+
+  #clearRecoveryTimerOnly(actionId: string): void {
+    const timer = this.#recoveryTimers.get(actionId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.#recoveryTimers.delete(actionId);
+  }
+
+  #clearWatchdog(actionId: string): void {
+    this.#clearTimerOnly(actionId);
+    this.#clearRecoveryTimerOnly(actionId);
+    this.#watchdogs.delete(actionId);
+  }
+
+  #clearAllCommitTimeouts(): void {
+    for (const timer of this.#commitTimers.values()) clearTimeout(timer);
+    for (const timer of this.#recoveryTimers.values()) clearTimeout(timer);
+    this.#commitTimers.clear();
+    this.#recoveryTimers.clear();
+    this.#watchdogs.clear();
     this.#commitTimers.delete(actionId);
   }
 
@@ -1314,17 +1513,14 @@ export class SynchronizedRoom<State, Action> {
       capabilities.minimumProtocolVersion > PROTOCOL_VERSION
     ) {
       throw new SynchronizedRoomError(
-        "invalid",
-        "runtime requires a newer protocol version",
-      );
-    }
-  }
-
-  #refreshPendingTimers(): void {
-    for (const actionId of this.#pending.keys()) this.#armCommitTimeout(actionId);
-  }
-
   #isCommitClosed(): boolean {
+    return (
+      this.#connection === "closed" ||
+      this.#connection === "failed" ||
+      this.#connection === "leaving" ||
+      this.#connection === "leave_failed" ||
+      this.#connection === "reconnecting" ||
+      this.#connection === "suspended"
     return (
       this.#connection === "closed" ||
       this.#connection === "failed" ||

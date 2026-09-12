@@ -480,7 +480,7 @@ const body = `
     </nav>
     <div class="marketing-actions">
       <a class="button button-quiet" href="https://app.lokiplay.cc/login">Log in</a>
-      <a class="button button-primary" href="https://app.lokiplay.cc/signup">Start free</a>
+      <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started</a>
     </div>
   </header>
 
@@ -491,7 +491,7 @@ const body = `
         <h1 class="display" id="hero-title">The only plugin you need for your vibe-coded games.</h1>
         <p class="lede">Give your game hosting, multiplayer, social features, and a way to get discovered—without wiring together five separate services.</p>
         <div class="hero-actions">
-          <a class="button button-primary" href="https://app.lokiplay.cc/signup">Start building</a>
+          <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started</a>
           <a class="button" href="#workflow">See how it works</a>
         </div>
       </div>

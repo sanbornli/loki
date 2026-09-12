@@ -9,9 +9,20 @@ import kotlin.coroutines.startCoroutine
 import kotlin.coroutines.suspendCoroutine
 
 const val SYNCHRONIZED_ROOM_MAX_PENDING = 32
+const val SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS = 10_000L
+const val SYNCHRONIZED_ROOM_RECOVERY_DEADLINE_MS = 60_000L
+const val SYNCHRONIZED_ROOM_MIN_COMMIT_TIMEOUT_MS = 5_000L
+const val SYNCHRONIZED_ROOM_MAX_COMMIT_TIMEOUT_MS = 60_000L
+const val SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS = 30_000L
+const val SYNCHRONIZED_ROOM_MAX_RECOVERY_DEADLINE_MS = 120_000L
+
+private fun clampTimeout(value: Long, fallback: Long, minimum: Long, maximum: Long): Long =
+    minOf(maximum, maxOf(minimum, value)).let { if (it <= 0) fallback else it }
 
 enum class ConnectionState {
-    Idle, Joining, Connected, Reconnecting, Resynchronizing, Leaving, LeaveFailed, Closed, Failed
+    Idle, Joining, Connected, Suspended, Reconnecting, Resynchronizing, Leaving, LeaveFailed, Closed, Failed
+enum class ConnectionState {
+    Idle, Joining, Connected, Suspended, Reconnecting, Resynchronizing, Leaving, LeaveFailed, Closed, Failed
 }
 
 enum class SynchronizedRoomOutcome {
@@ -51,6 +62,8 @@ data class SynchronizedRoomSnapshot(
 
 class SynchronizedRoom(
     private val client: LokiClient,
+    commitTimeoutMs: Long = SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
+    recoveryDeadlineMs: Long = SYNCHRONIZED_ROOM_RECOVERY_DEADLINE_MS,
     private val initialState: JsonValue,
     private val reduce: (JsonValue, JsonValue, ActionContext) -> JsonValue,
 ) {
@@ -74,6 +87,34 @@ class SynchronizedRoom(
     private val prepared = mutableMapOf<String, JsonValue>()
     var reductions = 0
         private set
+    private val watchdogs = mutableMapOf<String, Thread>()
+    private val watchdogState = mutableMapOf<String, Watchdog>()
+    private var timersPaused = false
+    private var recoveringFromTimeout = false
+    private val hostQueue = ArrayDeque<Triple<String, JsonValue, String>>()
+    private var draining = false
+    private val commitTimeoutMs = clampTimeout(
+        commitTimeoutMs,
+        SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
+        SYNCHRONIZED_ROOM_MIN_COMMIT_TIMEOUT_MS,
+        SYNCHRONIZED_ROOM_MAX_COMMIT_TIMEOUT_MS,
+    )
+    private val recoveryDeadlineMs = maxOf(
+        this.commitTimeoutMs,
+        clampTimeout(
+            recoveryDeadlineMs,
+            SYNCHRONIZED_ROOM_RECOVERY_DEADLINE_MS,
+            SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS,
+            SYNCHRONIZED_ROOM_MAX_RECOVERY_DEADLINE_MS,
+        ),
+    )
+
+    private data class Watchdog(
+        var phase: String,
+        var confirmRemainingMs: Long,
+        var recoveryRemainingMs: Long,
+        var startedAt: Long? = null,
+    )
     private var messageListener: Int? = null
     private var connectionListener: Int? = null
 
@@ -100,9 +141,7 @@ class SynchronizedRoom(
     suspend fun join(inviteCode: String): SynchronizedRoomSnapshot =
         enter(false) { client.joinSessionRoom(inviteCode) }
 
-    suspend fun dispatch(action: JsonValue): SynchronizedRoomSnapshot {
-        val snapshot = getSnapshot()
-        if (snapshot.connection != ConnectionState.Connected && snapshot.connection != ConnectionState.Resynchronizing) {
+        if (snapshot.connection != ConnectionState.Connected) {
             throw SynchronizedRoomError(SynchronizedRoomOutcome.Rejected, "room is not connected")
         }
         if (pending.size >= SYNCHRONIZED_ROOM_MAX_PENDING) {
@@ -116,12 +155,21 @@ class SynchronizedRoom(
                 pending[actionId] = continuation
                 pendingActions[actionId] = action to sender
             }
+            armWatchdog(actionId)
+                pendingActions[actionId] = action to sender
+            }
             launch {
                 try {
-                    submit(actionId, action, sender)
-                } catch (error: Throwable) {
-                    failPending(
-                        actionId,
+                    if (error is SynchronizedRoomError && (
+                            error.outcome == SynchronizedRoomOutcome.Rejected ||
+                                error.outcome == SynchronizedRoomOutcome.Invalid ||
+                                error.outcome == SynchronizedRoomOutcome.RateLimited
+                            )
+                    ) {
+                        failPending(actionId, error)
+                    } else {
+                        recoverAfterTimeout()
+                    }
                         SynchronizedRoomError(SynchronizedRoomOutcome.Indeterminate, error.message ?: "submit failed"),
                     )
                 }
@@ -165,7 +213,10 @@ class SynchronizedRoom(
         }
         try {
             client.reconnectCurrentRoom()
-            if (resyncing) lock.withLock { connection = ConnectionState.Resynchronizing }
+            lock.withLock {
+                resyncing = true
+                connection = ConnectionState.Reconnecting
+            }
         } catch (error: Throwable) {
             failRoom(SynchronizedRoomOutcome.Indeterminate, error.message ?: "reconnect failed")
             throw error
@@ -205,7 +256,14 @@ class SynchronizedRoom(
             }
             if (current != generation) {
                 runCatching { client.leaveCurrentRoom(joined.roomId) }
-                throw SynchronizedRoomError(SynchronizedRoomOutcome.Rejected, "join superseded")
+            lock.withLock {
+                connection = if (!client.isForeground) {
+                    timersPaused = true
+                    ConnectionState.Suspended
+                } else {
+                    ConnectionState.Connected
+                }
+            }
             }
             lock.withLock { connection = ConnectionState.Connected }
             return getSnapshot()
@@ -237,14 +295,31 @@ class SynchronizedRoom(
         connectionListener = null
     }
 
-    private fun onConnection(event: String) {
-        if (isInactive) return
+        if (event == "suspended") {
+            timersPaused = true
+            cancelWatchdogs()
+            lock.withLock { connection = ConnectionState.Suspended }
+            return
+        }
+        if (event == "resumed") {
+            timersPaused = false
+            lock.withLock {
+                resyncing = true
+                connection = ConnectionState.Reconnecting
+            }
+            pending.keys.toList().forEach { armWatchdog(it) }
+            return
+        }
         if (event == "reconnect_failed") {
+            if (connection == ConnectionState.Suspended) return
             lock.withLock {
                 resyncing = true
                 connection = ConnectionState.Reconnecting
             }
             return
+        }
+        if (event == "disconnected") {
+            if (connection == ConnectionState.Suspended) return
         }
         if (event == "disconnected") {
             lock.withLock {
@@ -253,7 +328,39 @@ class SynchronizedRoom(
             }
         }
     }
+        if (isHost) enqueueHost(actionId, action, senderId) else client.sendSessionAction(action, actionId)
+    }
 
+    private fun enqueueHost(actionId: String, action: JsonValue, senderId: String) {
+        hostQueue.addLast(Triple(actionId, action, senderId))
+        launch { drainHost() }
+    }
+
+    private suspend fun drainHost() {
+        if (draining) return
+        draining = true
+        try {
+            while (hostQueue.isNotEmpty() && isHost && connection == ConnectionState.Connected && !resyncing) {
+                val item = hostQueue.removeFirst()
+                try {
+                    commit(item.first, item.second, item.third)
+                } catch (error: Throwable) {
+                    if (error is SynchronizedRoomError && (
+                            error.outcome == SynchronizedRoomOutcome.Rejected ||
+                                error.outcome == SynchronizedRoomOutcome.Invalid ||
+                                error.outcome == SynchronizedRoomOutcome.RateLimited
+                            )
+                    ) {
+                        failPending(item.first, error)
+                        continue
+                    }
+                    recoverAfterTimeout()
+                    break
+                }
+            }
+        } finally {
+            draining = false
+        }
     private suspend fun submit(actionId: String, action: JsonValue, senderId: String) {
         if (isHost) commit(actionId, action, senderId) else client.sendSessionAction(action, actionId)
     }
@@ -282,9 +389,7 @@ class SynchronizedRoom(
             "action" -> {
                 val actionId = message.fields.optionalString("actionId") ?: return
                 if (!isHost) return
-                val action = pendingActions[actionId]?.first ?: message.fields["payload"] ?: JsonValue.Null
-                val sender = message.fields.optionalString("senderId") ?: ""
-                launch {
+                enqueueHost(actionId, action, sender)
                     runCatching { commit(actionId, action, sender) }
                 }
             }
@@ -310,15 +415,21 @@ class SynchronizedRoom(
     }
 
     private fun onError(message: ServerEnvelope) {
-        val text = message.fields.optionalString("message") ?: "error"
-        val actionId = message.fields.optionalString("actionId")
+        val code = message.fields.optionalString("code")
+        if (code == "STALE_VERSION" || code == "HOST_REQUIRED") {
+            resyncing = true
+            connection = ConnectionState.Resynchronizing
+            launch { recoverAfterTimeout() }
+            return
+        }
         if (text.contains("duplicate action") && actionId != null) {
             val identity = "${message.fields.optionalString("senderId") ?: playerId}\u001f$actionId"
-            if (identity in recent) succeed(actionId)
+            if (identity in recent) succeed(actionId, message.fields.optionalString("senderId"))
             return
         }
         if (actionId != null && pending.containsKey(actionId)) {
             val outcome = when {
+                code == "RATE_LIMITED" -> SynchronizedRoomOutcome.RateLimited
                 message.fields.optionalString("code") == "RATE_LIMITED" -> SynchronizedRoomOutcome.RateLimited
                 message.fields.optionalString("code") == "STALE_VERSION" -> SynchronizedRoomOutcome.StateConflict
                 message.fields.optionalString("actionOutcome") == "invalid" -> SynchronizedRoomOutcome.Invalid
@@ -349,15 +460,19 @@ class SynchronizedRoom(
         val actionId = message.fields.optionalString("actionId")
         if (actionId != null) {
             val identity = "${message.fields.optionalString("senderId") ?: playerId}\u001f$actionId"
-            recent += identity
+            if (!stale) succeed(actionId, message.fields.optionalString("senderId"))
             prepared.remove(identity)
             if (!stale) succeed(actionId)
         }
-        if (resyncing && !stale && (replace || incoming != null)) {
-            resyncing = false
-            connection = ConnectionState.Connected
+            if (connection != ConnectionState.Suspended) {
+                connection = ConnectionState.Connected
+                replayPending()
+            }
         } else if (connection != ConnectionState.Joining && !resyncing &&
             connection != ConnectionState.Closed && connection != ConnectionState.Failed &&
+            connection != ConnectionState.Leaving && connection != ConnectionState.LeaveFailed &&
+            connection != ConnectionState.Reconnecting &&
+            connection != ConnectionState.Suspended
             connection != ConnectionState.Leaving && connection != ConnectionState.LeaveFailed &&
             connection != ConnectionState.Reconnecting
         ) {
@@ -371,15 +486,113 @@ class SynchronizedRoom(
         if (caps?.value?.get("synchronized_rooms") != JsonValue.Bool(true)) {
             throw SynchronizedRoomError(SynchronizedRoomOutcome.Invalid, "runtime does not advertise synchronized_rooms")
         }
-    }
-
-    private fun succeed(actionId: String) {
+    private fun succeed(actionId: String, senderId: String? = null) {
+        val pendingSender = pendingActions[actionId]?.second
+        if (senderId != null && pendingSender != null && pendingSender != senderId) return
+        cancelWatchdog(actionId)
+        watchdogState.remove(actionId)
         pendingActions.remove(actionId)
         pending.remove(actionId)?.resumeWith(Result.success(getSnapshot()))
     }
 
     private fun failPending(actionId: String, error: SynchronizedRoomError) {
         lastError = error
+        cancelWatchdog(actionId)
+        watchdogState.remove(actionId)
+        pendingActions.remove(actionId)
+        pending.remove(actionId)?.resumeWith(Result.failure(error))
+    }
+
+    private fun armWatchdog(actionId: String) {
+        cancelWatchdog(actionId)
+        val dog = watchdogState.getOrPut(actionId) {
+            Watchdog("confirming", commitTimeoutMs, recoveryDeadlineMs)
+        }
+        if (timersPaused || connection == ConnectionState.Suspended) return
+        val remaining = if (dog.phase == "confirming") dog.confirmRemainingMs else dog.recoveryRemainingMs
+        if (remaining <= 0) {
+            handleWatchdog(actionId)
+            return
+        }
+        dog.startedAt = System.currentTimeMillis()
+        val thread = Thread {
+            try {
+                Thread.sleep(remaining)
+                handleWatchdog(actionId)
+            } catch (_: InterruptedException) {
+            }
+        }
+        thread.isDaemon = true
+        watchdogs[actionId] = thread
+        thread.start()
+    }
+
+    private fun handleWatchdog(actionId: String) {
+        if (pending[actionId] == null || isInactive || connection == ConnectionState.Suspended || timersPaused) {
+            return
+        }
+        val dog = watchdogState[actionId] ?: return
+        if (dog.phase == "confirming") {
+            dog.phase = "recovering"
+            dog.confirmRemainingMs = 0
+            dog.startedAt = null
+            armWatchdog(actionId)
+            recoverAfterTimeout()
+            return
+        }
+        failPending(
+            actionId,
+            SynchronizedRoomError(SynchronizedRoomOutcome.Indeterminate, "authoritative confirmation timed out"),
+        )
+    }
+
+    private fun recoverAfterTimeout() {
+        if (isInactive || connection == ConnectionState.Suspended || recoveringFromTimeout) return
+        recoveringFromTimeout = true
+        lock.withLock {
+            resyncing = true
+            connection = ConnectionState.Resynchronizing
+        }
+        launch {
+            try {
+                runCatching { client.reconnectCurrentRoom() }
+            } finally {
+                recoveringFromTimeout = false
+            }
+        }
+    }
+
+    private fun cancelWatchdog(actionId: String) {
+        watchdogs.remove(actionId)?.interrupt()
+    }
+
+    private fun cancelWatchdogs() {
+        val now = System.currentTimeMillis()
+        watchdogState.forEach { (_, dog) ->
+            val started = dog.startedAt
+            if (started != null) {
+                val elapsed = maxOf(0, now - started)
+                if (dog.phase == "confirming") {
+                    dog.confirmRemainingMs = maxOf(0, dog.confirmRemainingMs - elapsed)
+                } else {
+                    dog.recoveryRemainingMs = maxOf(0, dog.recoveryRemainingMs - elapsed)
+                }
+                dog.startedAt = null
+            }
+        }
+        watchdogs.keys.toList().forEach { cancelWatchdog(it) }
+    }
+
+    private fun replayPending() {
+        if (isHost) {
+            for ((actionId, item) in pendingActions) {
+                enqueueHost(actionId, item.first, item.second)
+            }
+            return
+        }
+        for ((actionId, item) in pendingActions) {
+            launch { runCatching { submit(actionId, item.first, item.second) } }
+        }
         pendingActions.remove(actionId)
         pending.remove(actionId)?.resumeWith(Result.failure(error))
     }

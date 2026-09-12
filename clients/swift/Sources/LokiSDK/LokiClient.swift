@@ -13,8 +13,8 @@ public enum JSONValue: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer()
         if value.decodeNil() { self = .null }
-        else if let decoded = try? value.decode(Bool.self) { self = .bool(decoded) }
         else if let decoded = try? value.decode(Int64.self) { self = .number(decoded) }
+        else if let decoded = try? value.decode(Bool.self) { self = .bool(decoded) }
         else if let decoded = try? value.decode(String.self) { self = .string(decoded) }
         else if let decoded = try? value.decode([JSONValue].self) { self = .array(decoded) }
         else if let decoded = try? value.decode([String: JSONValue].self) { self = .object(decoded) }
@@ -158,6 +158,8 @@ public actor LokiClient {
     private var connectionListeners: [Int: @Sendable (String) -> Void] = [:]
     private var nextListenerId = 1
     private var lifecycleGeneration = 0
+    private var lifecycleVisible = true
+    private var lifecycleOnline = true
     private var reconnectTask: Task<Void, Error>?
     private var leaveFailed = false
     private var operationTail: Task<Void, Never> = Task {}
@@ -165,6 +167,7 @@ public actor LokiClient {
     public var playerId: String? { session?.playerId }
     public var currentRoomId: String? { roomId }
     public var currentInviteCode: String { inviteCode }
+    public var isForeground: Bool { lifecycleVisible && lifecycleOnline }
 
     public init(transport: LokiTransport) { self.transport = transport }
 
@@ -185,6 +188,52 @@ public actor LokiClient {
     public func notifyConnection(_ event: String) {
         callbacks.onConnection(event)
         for listener in connectionListeners.values { listener(event) }
+    }
+
+    public func notifyLifecycle(visible: Bool, online: Bool) {
+        let background = !visible || !online
+        lifecycleVisible = visible
+        lifecycleOnline = online
+        if background {
+            notifyConnection("suspended")
+            return
+        }
+        notifyConnection("resumed")
+        if roomId != nil {
+            Task { await self.reconnectWithBackoff() }
+        }
+    }
+
+    private func reconnectWithBackoff() async {
+        var attempt = 0
+        while roomId != nil && isForeground && !leaveFailed {
+            do {
+                try await reconnectCurrentRoom()
+                return
+            } catch {
+                let shift = min(attempt, 5)
+                let base = min(15_000, 500 * (1 << shift))
+                attempt += 1
+                try? await Task.sleep(nanoseconds: UInt64(base) * 1_000_000)
+            }
+        }
+    }
+
+    public func notifyLifecycle(visible: Bool, online: Bool) {
+        let background = !visible || !online
+        let wasBackground = !lifecycleVisible || !lifecycleOnline
+        lifecycleVisible = visible
+        lifecycleOnline = online
+        if background && !wasBackground {
+            notifyConnection("suspended")
+            return
+        }
+        if !background && wasBackground {
+            notifyConnection("resumed")
+            if roomId != nil {
+                Task { try? await reconnectCurrentRoom() }
+            }
+        }
     }
 
     @discardableResult
@@ -391,11 +440,15 @@ public actor LokiClient {
         guard let roomId else { throw LokiClientError.missingRoom }
         sendSequence += 1
         try await sendActionReject(
-            roomId: roomId,
-            sequence: sendSequence,
-            actionId: actionId,
-            outcome: outcome,
-            message: message,
+        commitTimeoutMs: UInt64? = nil,
+        recoveryDeadlineMs: UInt64? = nil,
+        reduce: @escaping @Sendable (JSONValue, JSONValue, ActionContext) throws -> JSONValue
+    ) -> SynchronizedRoom {
+        SynchronizedRoom(
+            host: self,
+            initialState: initialState,
+            commitTimeoutMs: commitTimeoutMs,
+            recoveryDeadlineMs: recoveryDeadlineMs,
             senderId: senderId
         )
     }

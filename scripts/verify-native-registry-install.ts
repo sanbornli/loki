@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 const outputPosition = process.argv.indexOf("--output");
 const output =
   outputPosition === -1 ? undefined : process.argv[outputPosition + 1];
-const version = process.env.LOKI_PACKAGE_VERSION ?? "0.2.2";
+const version = process.env.LOKI_PACKAGE_VERSION ?? "0.2.3";
 const tag = `v${version}`;
 
 async function run(
