@@ -245,10 +245,14 @@ class LokiClientTest {
         val collisionMemberRoom = collisionMember.createSynchronizedRoom(counterState()) { state, action, _ -> reduceCounter(state, action) }
         val collisionCreated = runAwait { collisionHostRoom.create() }
         runAwait { collisionMemberRoom.join(collisionCreated.inviteCode) }
+        collisionHostTransport.pauseInbound()
         val pending = startAwait { collisionMemberRoom.dispatch(JsonValue.ObjectValue(mapOf("d" to 2L.jsonNumber()))) }
         Thread.sleep(20)
         val actionId = collisionMemberTransport.lastActionId ?: "shared-action"
         collisionMemberTransport.injectForeignState(actionId, 99)
+        Thread.sleep(20)
+        assertEquals(false, counterValue(collisionMemberRoom.getSnapshot().state) == 2L)
+        collisionHostTransport.resumeInbound()
         assertEquals(2L, counterValue(pending.await().getOrThrow().state))
         assertEquals(2L, counterValue(collisionMemberRoom.getSnapshot().state))
     }
@@ -358,6 +362,9 @@ private class MemoryRoomTransport(private val world: MemoryWorld) : LokiTranspor
     private var holding = false
     private var enterHold: Continuation<Unit>? = null
     private var unseenDuplicate = false
+    private var inboundPaused = false
+    private val held = mutableListOf<JsonValue.ObjectValue>()
+    private var sink: ((JsonValue.ObjectValue) -> Unit)? = null
     var lastActionId: String? = null
         private set
     @Volatile private var parked = false
@@ -416,8 +423,29 @@ private class MemoryRoomTransport(private val world: MemoryWorld) : LokiTranspor
         }
     }
 
-    override suspend fun connect(onMessage: (JsonValue.ObjectValue) -> Unit) { listener = onMessage }
-    override suspend fun disconnect() { listener = null }
+    override suspend fun connect(onMessage: (JsonValue.ObjectValue) -> Unit) {
+        sink = onMessage
+        listener = { message -> inbound(message) }
+    }
+    override suspend fun disconnect() {
+        listener = null
+        sink = null
+    }
+
+    fun pauseInbound() { inboundPaused = true }
+    fun resumeInbound() {
+        inboundPaused = false
+        held.toList().forEach { sink?.invoke(it) }
+        held.clear()
+    }
+
+    private fun inbound(message: JsonValue.ObjectValue) {
+        if (inboundPaused) {
+            held.add(message)
+            return
+        }
+        sink?.invoke(message)
+    }
 
     fun failNextLeave() { failLeave = true }
     fun holdNextEnter() { holding = true; parked = false }

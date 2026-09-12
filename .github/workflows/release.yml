@@ -69,11 +69,23 @@ jobs:
           }
           EOF
       - run: npm run check
-      - run: npm publish --workspace @lokiplay/protocol --access public --provenance
-      - run: npm publish --workspace @lokiplay/sdk --access public --provenance
-      - run: npm publish --workspace @lokiplay/ui-web --access public --provenance
-      - run: npm publish --workspace @lokiplay/mcp --access public --provenance
-      - run: npm publish --workspace lokiplay --access public --provenance
+      - name: Publish npm packages
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          publish_ws() {
+            local workspace="$1"
+            local name="$2"
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already published"
+              return 0
+            fi
+            npm publish --workspace "$workspace" --access public --provenance
+          }
+          publish_ws @lokiplay/protocol @lokiplay/protocol
+          publish_ws @lokiplay/sdk @lokiplay/sdk
+          publish_ws @lokiplay/ui-web @lokiplay/ui-web
+          publish_ws @lokiplay/mcp @lokiplay/mcp
+          publish_ws lokiplay lokiplay
       - name: Verify public registry installation
         run: |
           version="${GITHUB_REF_NAME#v}"

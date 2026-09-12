@@ -492,8 +492,8 @@ class SynchronizedRoom(
     }
 
     private fun succeed(actionId: String, senderId: String? = null) {
-        val pendingSender = pendingActions[actionId]?.second
-        if (senderId != null && pendingSender != null && pendingSender != senderId) return
+        val pendingSender = pendingActions[actionId]?.second ?: return
+        if (!senderId.isNullOrEmpty() && pendingSender != senderId) return
         cancelWatchdog(actionId)
         watchdogState.remove(actionId)
         pendingActions.remove(actionId)
