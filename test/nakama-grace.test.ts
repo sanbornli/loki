@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const HOST_AUTHORITY_GRACE_SECONDS = 20;
@@ -97,7 +98,9 @@ const applyLeaves = (state: RoomState, userIds: string[]): void => {
     state.events.push({ type: "leave", leaves, revision: state.membershipRevision });
     return;
   }
-  if (!state.members[state.hostId]) state.hostId = electHost(state.members);
+  if (!state.members[state.hostId]) {
+    state.hostId = electHost(state.members, undefined, state.disconnectGraces);
+  }
   state.events.push({ type: "leave", leaves, revision: state.membershipRevision });
   if (previousHostId !== state.hostId) {
     state.events.push({ type: "host_changed", hostId: state.hostId });
@@ -232,6 +235,15 @@ test("explicit leave removes the member immediately", () => {
   assert.equal(state.members.member, undefined);
   assert.equal(state.disconnectGraces.member, undefined);
   assert.equal(state.events[0]?.type, "leave");
+});
+
+test("runtime two-stage grace keeps session identity and drops the old timer", async () => {
+  const source = await readFile(new URL("../infra/nakama/modules/loki.js", import.meta.url), "utf8");
+  assert.equal(source.includes("DISCONNECT_GRACE_SECONDS"), false);
+  assert.equal(source.includes("grace.ticks"), false);
+  assert.match(source, /sessionId: presence\.sessionId/);
+  assert.match(source, /membershipTicks: Math\.max\(1, state\.tickRate \* MEMBERSHIP_GRACE_SECONDS\)/);
+  assert.match(source, /HOST_AUTHORITY_GRACE_SECONDS/);
 });
 
 test("replayed actions are applied at most once", () => {

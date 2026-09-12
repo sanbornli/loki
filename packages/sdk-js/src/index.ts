@@ -11,7 +11,6 @@ import { Client, Session, type Socket } from "@heroiclabs/nakama-js";
 import {
   createBrowserPageLifecycle,
   ForegroundController,
-  ForegroundController,
   ReconnectScheduler,
   type PageLifecycle,
 } from "./reconnect.js";
@@ -27,12 +26,12 @@ export {
   SYNCHRONIZED_ROOM_MAX_MESSAGE_BYTES,
   SYNCHRONIZED_ROOM_MAX_PENDING,
   SYNCHRONIZED_ROOM_MAX_RECENT_ACTIONS,
+  SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
   SYNCHRONIZED_ROOM_MAX_RECOVERY_DEADLINE_MS,
   SYNCHRONIZED_ROOM_MAX_REDUCER_MS,
   SYNCHRONIZED_ROOM_MIN_COMMIT_TIMEOUT_MS,
   SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS,
   SYNCHRONIZED_ROOM_RECOVERY_DEADLINE_MS,
-  SYNCHRONIZED_ROOM_MAX_REDUCER_MS,
   SynchronizedRoom,
   SynchronizedRoomError,
 } from "./synchronized-room.js";
@@ -55,8 +54,8 @@ export {
   ReconnectScheduler,
   reconnectDelayMs,
   RECONNECT_MAX_DELAY_MS,
+} from "./reconnect.js";
 export type { LifecycleCause, LifecycleState, PageLifecycle } from "./reconnect.js";
-export type { LifecycleState, PageLifecycle } from "./reconnect.js";
 
 export const LOKI_API_ORIGIN = "https://api.lokiplay.cc";
 
@@ -505,7 +504,6 @@ export class LokiClient {
       if (this.#leaveFailed) throw new Error("resolve the failed leave before reconnecting");
       await this.#transport.reconnect();
       await this.requestSnapshot();
-      await this.requestSnapshot();
     }).finally(() => {
       this.#reconnectPromise = undefined;
     });
@@ -589,6 +587,7 @@ export class FirstPartyTransport implements LokiTransport {
   #connectionListeners = new Set<(event: ConnectionEvent) => void>();
   #ignoreDisconnect = false;
   #reconnectPromise?: Promise<void>;
+  #scheduler: ReconnectScheduler;
   #foreground: ForegroundController;
   #unsubscribeLifecycle?: () => void;
 
@@ -615,7 +614,6 @@ export class FirstPartyTransport implements LokiTransport {
     });
     this.#unsubscribeLifecycle = lifecycle?.subscribe((cause) => {
       this.#foreground.notify(cause);
-    this.#unsubscribeLifecycle = lifecycle?.subscribe(() => {
       this.#scheduler.notifyEnvironmentChanged();
     });
     this.#client = new Client(
@@ -811,6 +809,7 @@ export class FirstPartyTransport implements LokiTransport {
     return () => this.#connectionListeners.delete(listener);
   }
 
+  async leaveRoom(roomId: string): Promise<void> {
     if (!this.#session) throw new Error("authenticate first");
     const result = payload<unknown>(
       await wrapLokiCall(() =>
@@ -826,7 +825,6 @@ export class FirstPartyTransport implements LokiTransport {
     if (this.#roomId === roomId) {
       this.#roomId = undefined;
       this.#roomKey = undefined;
-      }
     }
   }
 
@@ -841,10 +839,10 @@ export class FirstPartyTransport implements LokiTransport {
       .then(() => {
         this.#scheduler.reset();
         notifyListeners(this.#connectionListeners, "connected");
+      })
       .catch((error) => {
         notifyListeners(this.#connectionListeners, "reconnect_failed");
         throw error;
-      })
       })
       .finally(() => {
         this.#reconnectPromise = undefined;

@@ -219,23 +219,6 @@ public actor LokiClient {
         }
     }
 
-    public func notifyLifecycle(visible: Bool, online: Bool) {
-        let background = !visible || !online
-        let wasBackground = !lifecycleVisible || !lifecycleOnline
-        lifecycleVisible = visible
-        lifecycleOnline = online
-        if background && !wasBackground {
-            notifyConnection("suspended")
-            return
-        }
-        if !background && wasBackground {
-            notifyConnection("resumed")
-            if roomId != nil {
-                Task { try? await reconnectCurrentRoom() }
-            }
-        }
-    }
-
     @discardableResult
     public func authenticate(token: String) async throws -> AuthSession {
         let result: AuthSession = try await call("auth.authenticate", ["token": .string(token)])
@@ -440,15 +423,11 @@ public actor LokiClient {
         guard let roomId else { throw LokiClientError.missingRoom }
         sendSequence += 1
         try await sendActionReject(
-        commitTimeoutMs: UInt64? = nil,
-        recoveryDeadlineMs: UInt64? = nil,
-        reduce: @escaping @Sendable (JSONValue, JSONValue, ActionContext) throws -> JSONValue
-    ) -> SynchronizedRoom {
-        SynchronizedRoom(
-            host: self,
-            initialState: initialState,
-            commitTimeoutMs: commitTimeoutMs,
-            recoveryDeadlineMs: recoveryDeadlineMs,
+            roomId: roomId,
+            sequence: sendSequence,
+            actionId: actionId,
+            outcome: outcome,
+            message: message,
             senderId: senderId
         )
     }
@@ -461,11 +440,15 @@ public actor LokiClient {
 
     public func createSynchronizedRoom(
         initialState: JSONValue,
+        commitTimeoutMs: UInt64? = nil,
+        recoveryDeadlineMs: UInt64? = nil,
         reduce: @escaping @Sendable (JSONValue, JSONValue, ActionContext) throws -> JSONValue
     ) -> SynchronizedRoom {
         SynchronizedRoom(
             host: self,
             initialState: initialState,
+            commitTimeoutMs: commitTimeoutMs,
+            recoveryDeadlineMs: recoveryDeadlineMs,
             reduce: reduce
         )
     }

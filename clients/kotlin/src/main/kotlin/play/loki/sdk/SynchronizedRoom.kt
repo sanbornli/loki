@@ -21,8 +21,6 @@ private fun clampTimeout(value: Long, fallback: Long, minimum: Long, maximum: Lo
 
 enum class ConnectionState {
     Idle, Joining, Connected, Suspended, Reconnecting, Resynchronizing, Leaving, LeaveFailed, Closed, Failed
-enum class ConnectionState {
-    Idle, Joining, Connected, Suspended, Reconnecting, Resynchronizing, Leaving, LeaveFailed, Closed, Failed
 }
 
 enum class SynchronizedRoomOutcome {
@@ -62,10 +60,10 @@ data class SynchronizedRoomSnapshot(
 
 class SynchronizedRoom(
     private val client: LokiClient,
-    commitTimeoutMs: Long = SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
-    recoveryDeadlineMs: Long = SYNCHRONIZED_ROOM_RECOVERY_DEADLINE_MS,
     private val initialState: JsonValue,
     private val reduce: (JsonValue, JsonValue, ActionContext) -> JsonValue,
+    commitTimeoutMs: Long = SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
+    recoveryDeadlineMs: Long = SYNCHRONIZED_ROOM_RECOVERY_DEADLINE_MS,
 ) {
     private val lock = ReentrantLock()
     private var state = initialState
@@ -141,7 +139,9 @@ class SynchronizedRoom(
     suspend fun join(inviteCode: String): SynchronizedRoomSnapshot =
         enter(false) { client.joinSessionRoom(inviteCode) }
 
-        if (snapshot.connection != ConnectionState.Connected) {
+    suspend fun dispatch(action: JsonValue): SynchronizedRoomSnapshot {
+        val snapshot = getSnapshot()
+        if (snapshot.connection != ConnectionState.Connected && snapshot.connection != ConnectionState.Resynchronizing) {
             throw SynchronizedRoomError(SynchronizedRoomOutcome.Rejected, "room is not connected")
         }
         if (pending.size >= SYNCHRONIZED_ROOM_MAX_PENDING) {
@@ -156,10 +156,10 @@ class SynchronizedRoom(
                 pendingActions[actionId] = action to sender
             }
             armWatchdog(actionId)
-                pendingActions[actionId] = action to sender
-            }
             launch {
                 try {
+                    submit(actionId, action, sender)
+                } catch (error: Throwable) {
                     if (error is SynchronizedRoomError && (
                             error.outcome == SynchronizedRoomOutcome.Rejected ||
                                 error.outcome == SynchronizedRoomOutcome.Invalid ||
@@ -170,8 +170,6 @@ class SynchronizedRoom(
                     } else {
                         recoverAfterTimeout()
                     }
-                        SynchronizedRoomError(SynchronizedRoomOutcome.Indeterminate, error.message ?: "submit failed"),
-                    )
                 }
             }
         }
@@ -214,11 +212,10 @@ class SynchronizedRoom(
         try {
             client.reconnectCurrentRoom()
             lock.withLock {
-                resyncing = true
-                connection = ConnectionState.Reconnecting
+                if (resyncing) connection = ConnectionState.Resynchronizing
             }
         } catch (error: Throwable) {
-            failRoom(SynchronizedRoomOutcome.Indeterminate, error.message ?: "reconnect failed")
+            lock.withLock { connection = ConnectionState.Reconnecting }
             throw error
         }
     }
@@ -256,6 +253,8 @@ class SynchronizedRoom(
             }
             if (current != generation) {
                 runCatching { client.leaveCurrentRoom(joined.roomId) }
+                throw SynchronizedRoomError(SynchronizedRoomOutcome.Rejected, "join superseded")
+            }
             lock.withLock {
                 connection = if (!client.isForeground) {
                     timersPaused = true
@@ -264,8 +263,6 @@ class SynchronizedRoom(
                     ConnectionState.Connected
                 }
             }
-            }
-            lock.withLock { connection = ConnectionState.Connected }
             return getSnapshot()
         } catch (error: Throwable) {
             if (joinedId.isNotEmpty()) runCatching { client.leaveCurrentRoom(joinedId) }
@@ -295,6 +292,7 @@ class SynchronizedRoom(
         connectionListener = null
     }
 
+    private fun onConnection(event: String) {
         if (event == "suspended") {
             timersPaused = true
             cancelWatchdogs()
@@ -320,15 +318,16 @@ class SynchronizedRoom(
         }
         if (event == "disconnected") {
             if (connection == ConnectionState.Suspended) return
-        }
-        if (event == "disconnected") {
             lock.withLock {
                 resyncing = true
                 connection = ConnectionState.Reconnecting
             }
+            return
         }
-    }
-        if (isHost) enqueueHost(actionId, action, senderId) else client.sendSessionAction(action, actionId)
+        if (connection == ConnectionState.Reconnecting || connection == ConnectionState.Resynchronizing) {
+            lock.withLock { connection = ConnectionState.Resynchronizing }
+            launch { runCatching { client.requestSessionSnapshot() } }
+        }
     }
 
     private fun enqueueHost(actionId: String, action: JsonValue, senderId: String) {
@@ -361,8 +360,10 @@ class SynchronizedRoom(
         } finally {
             draining = false
         }
+    }
+
     private suspend fun submit(actionId: String, action: JsonValue, senderId: String) {
-        if (isHost) commit(actionId, action, senderId) else client.sendSessionAction(action, actionId)
+        if (isHost) enqueueHost(actionId, action, senderId) else client.sendSessionAction(action, actionId)
     }
 
     private suspend fun commit(actionId: String, action: JsonValue, senderId: String) {
@@ -389,9 +390,9 @@ class SynchronizedRoom(
             "action" -> {
                 val actionId = message.fields.optionalString("actionId") ?: return
                 if (!isHost) return
+                val action = pendingActions[actionId]?.first ?: message.fields["payload"] ?: JsonValue.Null
+                val sender = message.fields.optionalString("senderId") ?: ""
                 enqueueHost(actionId, action, sender)
-                    runCatching { commit(actionId, action, sender) }
-                }
             }
             "presence" -> {
                 message.fields.optionalString("hostId")?.let { hostId = it }
@@ -422,6 +423,8 @@ class SynchronizedRoom(
             launch { recoverAfterTimeout() }
             return
         }
+        val text = message.fields.optionalString("message") ?: "error"
+        val actionId = message.fields.optionalString("actionId")
         if (text.contains("duplicate action") && actionId != null) {
             val identity = "${message.fields.optionalString("senderId") ?: playerId}\u001f$actionId"
             if (identity in recent) succeed(actionId, message.fields.optionalString("senderId"))
@@ -460,11 +463,13 @@ class SynchronizedRoom(
         val actionId = message.fields.optionalString("actionId")
         if (actionId != null) {
             val identity = "${message.fields.optionalString("senderId") ?: playerId}\u001f$actionId"
-            if (!stale) succeed(actionId, message.fields.optionalString("senderId"))
+            recent.add(identity)
             prepared.remove(identity)
-            if (!stale) succeed(actionId)
+            if (!stale) succeed(actionId, message.fields.optionalString("senderId"))
         }
-            if (connection != ConnectionState.Suspended) {
+        if (resyncing && !stale && (replace || incoming != null)) {
+            resyncing = false
+            if (connection != ConnectionState.Suspended && connection != ConnectionState.Reconnecting) {
                 connection = ConnectionState.Connected
                 replayPending()
             }
@@ -473,8 +478,6 @@ class SynchronizedRoom(
             connection != ConnectionState.Leaving && connection != ConnectionState.LeaveFailed &&
             connection != ConnectionState.Reconnecting &&
             connection != ConnectionState.Suspended
-            connection != ConnectionState.Leaving && connection != ConnectionState.LeaveFailed &&
-            connection != ConnectionState.Reconnecting
         ) {
             connection = ConnectionState.Connected
         }
@@ -486,6 +489,8 @@ class SynchronizedRoom(
         if (caps?.value?.get("synchronized_rooms") != JsonValue.Bool(true)) {
             throw SynchronizedRoomError(SynchronizedRoomOutcome.Invalid, "runtime does not advertise synchronized_rooms")
         }
+    }
+
     private fun succeed(actionId: String, senderId: String? = null) {
         val pendingSender = pendingActions[actionId]?.second
         if (senderId != null && pendingSender != null && pendingSender != senderId) return
@@ -593,8 +598,6 @@ class SynchronizedRoom(
         for ((actionId, item) in pendingActions) {
             launch { runCatching { submit(actionId, item.first, item.second) } }
         }
-        pendingActions.remove(actionId)
-        pending.remove(actionId)?.resumeWith(Result.failure(error))
     }
 
     private fun failAll(outcome: SynchronizedRoomOutcome, message: String) {

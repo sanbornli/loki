@@ -11,7 +11,7 @@
     "test": "tsx --test test/*.test.ts",
     "nakama:up": "sh -c 'if docker compose version >/dev/null 2>&1; then docker compose -f infra/compose.yaml up -d --wait; else docker-compose -f infra/compose.yaml up -d --wait; fi'",
     "nakama:down": "sh -c 'if docker compose version >/dev/null 2>&1; then docker compose -f infra/compose.yaml down; else docker-compose -f infra/compose.yaml down; fi'",
-    "test:nakama": "node -e \"require('node:fs').rmSync('artifacts/nakama-integration.json', { force: true })\" && tsx --test test/nakama.integration.ts",
+    "test:nakama": "node -e \"require('node:fs').rmSync('artifacts/nakama-integration.json', { force: true })\" && tsx --test --test-concurrency=1 test/nakama.integration.ts",
     "validate:nakama": "npm run nakama:up && npm run test:nakama",
     "evaluate": "tsx src/evaluate.ts",
     "check": "tsc --noEmit && npm test && npm run evaluate",

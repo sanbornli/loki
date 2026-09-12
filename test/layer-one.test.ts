@@ -45,7 +45,6 @@ import {
   type LifecycleCause,
   type LokiTransport,
   type PageLifecycle,
-  type LokiTransport,
 } from "../packages/sdk-js/src/index.js";
 import type {
   ClientEnvelope,
@@ -296,7 +295,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.2\.2"/);
+  assert.match(creator, /"0\.2\.3"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
@@ -730,6 +729,7 @@ test("Nakama defers disconnect leaves through a reconnect grace period", async (
   const runtime = await readFile(
     path.join(process.cwd(), "infra/nakama/modules/loki.js"),
     "utf8",
+  );
   assert.match(runtime, /HOST_AUTHORITY_GRACE_SECONDS = 20/);
   assert.match(runtime, /MEMBERSHIP_GRACE_SECONDS = 90/);
   const graceTests = await readFile(
@@ -875,5 +875,4 @@ test("first-party transport pageshow replaces a live-looking socket", async () =
   });
   await transport.close();
   assert.equal(typeof createBrowserPageLifecycle, "function");
-  assert.match(runtime, /operation === "depart"/);
 });

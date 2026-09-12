@@ -7,7 +7,6 @@ import {
   SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS,
   requireLeaveRoomSuccess,
   type ConnectionEvent,
-  type ConnectionEvent,
   type LokiTransport,
   type JoinedRoom,
 } from "../packages/sdk-js/src/index.js";
@@ -74,8 +73,8 @@ class MemoryTransport implements LokiTransport {
   #playerId?: string;
   #projectId?: string;
   #room?: RoomRecord;
+  #listeners = new Set<(message: unknown) => void>();
   #connection = new Set<(event: ConnectionEvent) => void>();
-  #connection = new Set<(event: "disconnected" | "connected" | "reconnect_failed") => void>();
   #closed = false;
   #paused = false;
   #held: ServerEnvelope[] = [];
@@ -149,11 +148,11 @@ class MemoryTransport implements LokiTransport {
     return this.#enter(room);
   }
 
+  async send(message: ClientEnvelope): Promise<void> {
     if (this.#failSend) {
       this.#failSend = false;
       throw new Error("send failed");
     }
-  async send(message: ClientEnvelope): Promise<void> {
     const room = this.#room;
     const playerId = this.#requirePlayer();
     if (!room) throw new Error("join a room before sending messages");
@@ -450,8 +449,8 @@ class MemoryTransport implements LokiTransport {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
+
   subscribeConnection(listener: (event: ConnectionEvent) => void): () => void {
-  subscribeConnection(listener: (event: "disconnected" | "connected" | "reconnect_failed") => void): () => void {
     this.#connection.add(listener);
     return () => this.#connection.delete(listener);
   }
@@ -469,7 +468,6 @@ class MemoryTransport implements LokiTransport {
       this.leaveCount += 1;
       throw new Error("tenant mismatch");
     }
-  async leaveRoom(roomId: string): Promise<void> {
     const shouldFail = this.#failLeave;
     this.#failLeave = false;
     this.leaveCount += 1;
@@ -518,13 +516,14 @@ class MemoryTransport implements LokiTransport {
   }
 
   async reconnect(): Promise<void> {
+    if (this.#failReconnect) {
       if (!this.#failReconnectSticky) this.#failReconnect = false;
-      for (const listener of this.#connection) listener("reconnect_failed");
       for (const listener of this.#connection) listener("reconnect_failed");
       throw new Error("reconnect failed");
     }
     for (const listener of this.#connection) listener("disconnected");
     const room = this.#room;
+    const playerId = this.#playerId;
     if (room && playerId && room.members.has(playerId)) {
       const member = room.members.get(playerId);
       if (member) member.sessionId = crypto.randomUUID();
@@ -538,7 +537,6 @@ class MemoryTransport implements LokiTransport {
 
   emitResumed(): void {
     for (const listener of this.#connection) listener("resumed");
-    for (const listener of this.#connection) listener("connected");
   }
 
   async close(): Promise<void> {
@@ -1314,7 +1312,6 @@ test("recovery deadline eventually settles dispatch", async (t) => {
   await Promise.resolve();
   await assert.rejects(pending, /confirmation timed out/);
   assert.equal(room.getSnapshot().lastError?.outcome, "indeterminate");
-  assert.equal(memberRoom.getSnapshot().lastError?.outcome, "indeterminate");
 });
 
 test("remote rejection send failure keeps the host queue running", async () => {

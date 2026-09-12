@@ -1,14 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace Loki.Play.SDK
 {
     public enum ConnectionState
+    {
         Idle, Joining, Connected, Suspended, Reconnecting, Resynchronizing, Leaving, LeaveFailed, Closed, Failed
-        Idle, Joining, Connected, Reconnecting, Resynchronizing, Leaving, LeaveFailed, Closed, Failed
     }
 
     public enum SynchronizedRoomOutcome
@@ -107,6 +106,7 @@ namespace Loki.Play.SDK
         private readonly HashSet<string> recent = new HashSet<string>();
         private readonly Dictionary<string, JsonValue> prepared = new Dictionary<string, JsonValue>();
         private int messageListener;
+        private int connectionListener;
         private readonly Dictionary<string, CancellationTokenSource> watchdogs =
             new Dictionary<string, CancellationTokenSource>();
         private readonly Dictionary<string, Watchdog> watchdogState = new Dictionary<string, Watchdog>();
@@ -184,7 +184,7 @@ namespace Loki.Play.SDK
 
         public async Task<SynchronizedRoomSnapshot> DispatchAsync(JsonValue action)
         {
-            if (snapshot.Connection != ConnectionState.Connected)
+            var snapshot = GetSnapshot();
             if (snapshot.Connection != ConnectionState.Connected && snapshot.Connection != ConnectionState.Resynchronizing)
                 throw new SynchronizedRoomError(SynchronizedRoomOutcome.Rejected, "room is not connected");
             if (pending.Count >= MaxPending)
@@ -199,10 +199,11 @@ namespace Loki.Play.SDK
             {
                 pending[actionId] = waiter;
                 pendingActions[actionId] = new KeyValuePair<JsonValue, string>(action, sender);
-            ArmWatchdog(actionId);
             }
+            ArmWatchdog(actionId);
             try { await SubmitAsync(actionId, action, sender); }
             catch (Exception error)
+            {
                 var roomError = error as SynchronizedRoomError;
                 if (roomError != null && (
                     roomError.Outcome == SynchronizedRoomOutcome.Rejected ||
@@ -212,7 +213,6 @@ namespace Loki.Play.SDK
                     FailPending(actionId, roomError);
                 }
                 else RecoverAfterTimeout();
-                FailPending(actionId, new SynchronizedRoomError(SynchronizedRoomOutcome.Indeterminate, error.Message));
             }
             return await waiter.Task;
         }
@@ -261,14 +261,10 @@ namespace Loki.Play.SDK
             {
                 await client.ReconnectCurrentRoomAsync();
                 if (resyncing) lock (gate) { connection = ConnectionState.Resynchronizing; }
+            }
             catch
             {
-                lock (gate)
-                {
-                    resyncing = true;
-                    connection = ConnectionState.Reconnecting;
-                }
-                FailRoom(SynchronizedRoomOutcome.Indeterminate, error.Message);
+                lock (gate) { connection = ConnectionState.Reconnecting; }
                 throw;
             }
         }
@@ -317,6 +313,7 @@ namespace Loki.Play.SDK
                 {
                     try { await client.LeaveCurrentRoomAsync(joined.RoomId); } catch { }
                     throw new SynchronizedRoomError(SynchronizedRoomOutcome.Rejected, "join superseded");
+                }
                 lock (gate)
                 {
                     if (!client.IsForeground)
@@ -326,7 +323,6 @@ namespace Loki.Play.SDK
                     }
                     else connection = ConnectionState.Connected;
                 }
-                lock (gate) { connection = ConnectionState.Connected; }
                 return GetSnapshot();
             }
             catch (Exception error)
@@ -398,16 +394,22 @@ namespace Loki.Play.SDK
             if (eventName == "disconnected")
             {
                 if (connection == ConnectionState.Suspended) return;
-            {
                 lock (gate)
                 {
                     resyncing = true;
                     connection = ConnectionState.Reconnecting;
                 }
+                return;
+            }
+            if (connection == ConnectionState.Reconnecting || connection == ConnectionState.Resynchronizing)
+            {
+                lock (gate) { connection = ConnectionState.Resynchronizing; }
+                var ignored = client.RequestSessionSnapshotAsync();
             }
         }
 
         private async Task SubmitAsync(string actionId, JsonValue action, string senderId)
+        {
             if (IsHost) EnqueueHost(actionId, action, senderId);
             else await client.SendSessionActionAsync(action, actionId);
         }
@@ -445,7 +447,6 @@ namespace Loki.Play.SDK
                 }
             }
             finally { draining = false; }
-            else await client.SendSessionActionAsync(action, actionId);
         }
 
         private async Task CommitAsync(string actionId, JsonValue action, string senderId)
@@ -479,8 +480,8 @@ namespace Loki.Play.SDK
                 if (!IsHost || actionId == null) return;
                 KeyValuePair<JsonValue, string> queued;
                 var action = pendingActions.TryGetValue(actionId, out queued) ? queued.Key : (message.Fields.ContainsKey("payload") ? message.Fields["payload"] : JsonValue.Null);
+                var sender = message.Fields.OptionalString("senderId") ?? "";
                 EnqueueHost(actionId, action, sender);
-                var ignored = CommitAsync(actionId, action, sender);
                 return;
             }
             if (message.Type == "presence")
@@ -521,6 +522,7 @@ namespace Loki.Play.SDK
                 RecoverAfterTimeout();
                 return;
             }
+            var actionId = message.Fields.OptionalString("actionId");
             if (text.IndexOf("duplicate action", StringComparison.Ordinal) >= 0 && actionId != null)
             {
                 var identity = (message.Fields.OptionalString("senderId") ?? playerId) + "\u001f" + actionId;
@@ -564,12 +566,13 @@ namespace Loki.Play.SDK
             {
                 var identity = (message.Fields.OptionalString("senderId") ?? playerId) + "\u001f" + actionId;
                 recent.Add(identity);
+                prepared.Remove(identity);
                 if (!stale) Succeed(actionId, message.Fields.OptionalString("senderId"));
-                if (!stale) Succeed(actionId);
             }
             if (resyncing && !stale && (replace || incoming.HasValue))
             {
-                if (connection != ConnectionState.Suspended)
+                resyncing = false;
+                if (connection != ConnectionState.Suspended && connection != ConnectionState.Reconnecting)
                 {
                     connection = ConnectionState.Connected;
                     ReplayPending();
@@ -580,7 +583,6 @@ namespace Loki.Play.SDK
                 connection != ConnectionState.Leaving && connection != ConnectionState.LeaveFailed &&
                 connection != ConnectionState.Reconnecting &&
                 connection != ConnectionState.Suspended)
-                connection != ConnectionState.Reconnecting)
             {
                 connection = ConnectionState.Connected;
             }
@@ -818,7 +820,6 @@ namespace Loki.Play.SDK
             }
             foreach (var entry in new List<KeyValuePair<string, KeyValuePair<JsonValue, string>>>(pendingActions))
                 _ = SubmitAsync(entry.Key, entry.Value.Key, entry.Value.Value);
-            }
         }
 
         private void FailAll(SynchronizedRoomOutcome outcome, string message)

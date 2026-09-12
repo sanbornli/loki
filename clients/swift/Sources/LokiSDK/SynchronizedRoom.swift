@@ -15,7 +15,6 @@ private func clampTimeout(_ value: UInt64?, fallback: UInt64, minimum: UInt64, m
 
 public enum ConnectionState: String, Sendable {
     case idle, joining, connected, suspended, reconnecting, resynchronizing, leaving, leaveFailed = "leave_failed", closed, failed
-    case idle, joining, connected, suspended, reconnecting, resynchronizing, leaving, leaveFailed = "leave_failed", closed, failed
 }
 
 public enum SynchronizedRoomOutcome: String, Sendable {
@@ -86,6 +85,7 @@ public actor SynchronizedRoom {
     private var prepared: [String: JSONValue] = [:]
     private var reducerCount = 0
     private var messageListener: Int?
+    private var connectionListener: Int?
     private var watchdogs: [String: Task<Void, Never>] = [:]
     private var watchdogState: [String: (phase: String, confirmRemainingMs: UInt64, recoveryRemainingMs: UInt64, startedAt: Date?)] = [:]
     private var timersPaused = false
@@ -123,7 +123,6 @@ public actor SynchronizedRoom {
                 maximum: synchronizedRoomMaxRecoveryDeadlineMs
             )
         )
-        self.reduce = reduce
     }
 
     public var isHost: Bool { !playerId.isEmpty && playerId == hostId }
@@ -153,7 +152,8 @@ public actor SynchronizedRoom {
         try await enter(bootstrap: false) { try await self.client.joinSessionRoom(inviteCode: inviteCode) }
     }
 
-        guard connection == .connected else {
+    public func dispatch(_ action: JSONValue) async throws -> SynchronizedRoomSnapshot {
+        guard connection == .connected || connection == .resynchronizing else {
             throw SynchronizedRoomError(.rejected, "room is not connected")
         }
         if pending.count >= synchronizedRoomMaxPending {
@@ -165,7 +165,6 @@ public actor SynchronizedRoom {
             pending[actionId] = continuation
             pendingActions[actionId] = (action, sender)
             armWatchdog(actionId: actionId)
-            pendingActions[actionId] = (action, sender)
             Task { await self.submit(actionId: actionId, action: action, senderId: sender) }
         }
     }
@@ -205,9 +204,8 @@ public actor SynchronizedRoom {
         do {
             try await client.reconnectCurrentRoom()
             if resyncing { connection = .resynchronizing }
-            resyncing = true
+        } catch {
             connection = .reconnecting
-            failRoom(.indeterminate, error.localizedDescription)
             throw error
         }
     }
@@ -256,13 +254,13 @@ public actor SynchronizedRoom {
             if current != generation {
                 try? await client.leaveCurrentRoom(joined.roomId)
                 throw SynchronizedRoomError(.rejected, "join superseded")
+            }
             if await !client.isForeground {
                 timersPaused = true
                 connection = .suspended
             } else {
                 connection = .connected
             }
-            connection = .connected
             return getSnapshot()
         } catch {
             if !joinedId.isEmpty { try? await client.leaveCurrentRoom(joinedId) }
@@ -330,8 +328,6 @@ public actor SynchronizedRoom {
             connection = .reconnecting
             return
         }
-        if connection == .suspended { return }
-        }
         if connection == .reconnecting || connection == .resynchronizing {
             connection = .resynchronizing
             Task { try? await client.requestSessionSnapshot() }
@@ -340,6 +336,7 @@ public actor SynchronizedRoom {
 
     private func submit(actionId: String, action: JSONValue, senderId: String) async {
         do {
+            if isHost {
                 enqueueHost(actionId: actionId, action: action, senderId: senderId)
             } else {
                 try await client.sendSessionAction(payload: action, actionId: actionId)
@@ -376,7 +373,6 @@ public actor SynchronizedRoom {
                 await recoverAfterTimeout()
                 break
             }
-            failPending(actionId, SynchronizedRoomError(.indeterminate, String(describing: error)))
         }
     }
 
@@ -417,8 +413,8 @@ public actor SynchronizedRoom {
             apply(message, replace: message.type == "snapshot", preserveLocal: false)
         case "action":
             guard isHost, let actionId = message.actionId else { return }
+            let action = pendingActions[actionId]?.action ?? message.payload ?? .null
             enqueueHost(actionId: actionId, action: action, senderId: message.senderId ?? "")
-            Task { try? await self.commit(actionId: actionId, action: action, senderId: message.senderId ?? "") }
         case "presence":
             hostId = message.members?.first(where: { $0.host })?.playerId ?? hostId
             applyMembership(message, replaceIfComplete: true)
@@ -441,6 +437,7 @@ public actor SynchronizedRoom {
     }
 
     private func onError(_ message: ServerEnvelope) {
+        let text = message.message ?? "error"
         if message.code == "STALE_VERSION" || message.code == "HOST_REQUIRED" {
             resyncing = true
             connection = .resynchronizing
@@ -485,18 +482,18 @@ public actor SynchronizedRoom {
         }
         if let actionId = message.actionId {
             recent["\(message.senderId ?? playerId)\u{1f}\(actionId)"] = Date()
+            prepared.removeValue(forKey: "\(message.senderId ?? playerId)\u{1f}\(actionId)")
             if !stale { succeed(actionId, senderId: message.senderId) }
-            if !stale { succeed(actionId) }
         }
         if resyncing && !stale && (replace || incoming != nil) {
-            if connection != .suspended {
+            resyncing = false
+            if connection != .suspended && connection != .reconnecting {
                 connection = .connected
                 replayPending()
             }
         } else if connection == .joining || connection == .suspended {
             // join completion sets connected; stay suspended until resume
         } else if !resyncing && connection != .closed && connection != .failed && connection != .leaving && connection != .leaveFailed && connection != .reconnecting && connection != .suspended {
-        } else if !resyncing && connection != .closed && connection != .failed && connection != .leaving && connection != .leaveFailed && connection != .reconnecting {
             connection = .connected
         }
     }
@@ -604,7 +601,6 @@ public actor SynchronizedRoom {
         for (actionId, item) in pendingActions {
             Task { await self.submit(actionId: actionId, action: item.action, senderId: item.senderId) }
         }
-        pending.removeValue(forKey: actionId)?.resume(throwing: error)
     }
 
     private func failAll(_ outcome: SynchronizedRoomOutcome, _ message: String) {

@@ -22,7 +22,6 @@ var INVITE_FAIL_WINDOW_MS = 60000;
 var EMPTY_ROOM_GRACE_SECONDS = 30;
 var HOST_AUTHORITY_GRACE_SECONDS = 20;
 var MEMBERSHIP_GRACE_SECONDS = 90;
-var MEMBERSHIP_GRACE_SECONDS = 90;
 var MAX_RECENT_ACTIONS = 64;
 var RECENT_ACTION_TTL_MS = 600000;
 
@@ -823,7 +822,6 @@ var electHost = function (members, excludeUserId, disconnectGraces) {
     return userId;
   }
   return fallback;
-  return users.length ? users[0] : "";
 };
 
 var memberPresence = function (userId, member, hostId) {
@@ -1082,7 +1080,9 @@ var applyLeaves = function (dispatcher, state, userIds) {
     updateLabel(dispatcher, state);
     return;
   }
-  if (!state.members[state.hostId]) state.hostId = electHost(state.members);
+  if (!state.members[state.hostId]) {
+    state.hostId = electHost(state.members, undefined, state.disconnectGraces);
+  }
   broadcastEnvelope(
     dispatcher,
     state,
@@ -1198,7 +1198,6 @@ var expireDisconnectGraces = function (dispatcher, state) {
     if (expired.indexOf(migrate[index]) === -1) {
       migrateHostAuthority(dispatcher, state, migrate[index]);
     }
-    if (grace.ticks <= 0) expired.push(userId);
   }
   if (expired.length) applyLeaves(dispatcher, state, expired);
 };
@@ -1289,12 +1288,12 @@ var matchLeave = function (ctx, logger, nk, dispatcher, tick, state, presences) 
     // Ignore a delayed leave from the socket which a reconnect replaced.
     if (member && member.sessionId === presence.sessionId) {
       state.disconnectGraces[presence.userId] = {
+        sessionId: presence.sessionId,
         membershipTicks: Math.max(1, state.tickRate * MEMBERSHIP_GRACE_SECONDS),
         authorityTicks:
           presence.userId === state.hostId
             ? Math.max(1, state.tickRate * HOST_AUTHORITY_GRACE_SECONDS)
             : 0,
-        ticks: Math.max(1, state.tickRate * DISCONNECT_GRACE_SECONDS),
       };
     }
   }
