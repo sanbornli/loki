@@ -19,31 +19,31 @@ export function renderDevicePage(
         display: grid;
         place-items: center;
         box-sizing: border-box;
-        width: min(100% - 2rem, 42rem);
+        width: min(100% - 2rem, 21rem);
         min-height: 100dvh;
         margin: 0 auto;
-        padding: clamp(1rem, 4vh, 4rem) 0;
+        padding: clamp(.75rem, 3vh, 3rem) 0;
       }
       .device-card {
         width: 100%;
-        padding: clamp(1.25rem, 3.2vh, 2.5rem);
+        padding: clamp(.95rem, 2.4vh, 1.875rem);
         border: 1px solid var(--line);
         background: var(--ink-raised);
       }
-      .device-kicker { color: var(--amber); font: 700 .75rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
-      .device-title { max-width: 12ch; margin: clamp(.5rem, 1.4vh, 1rem) 0 clamp(.4rem, 1vh, .75rem); font-size: clamp(2rem, 6.2vh, 4rem); line-height: .95; letter-spacing: -.05em; }
-      .device-copy { max-width: 34rem; margin: 0 0 clamp(.7rem, 2vh, 2rem); color: var(--muted); }
-      .device-form { display: grid; gap: clamp(.65rem, 1.5vh, 1rem); }
-      .device-label { display: grid; gap: .5rem; color: var(--muted); font-size: .85rem; }
-      .device-input { width: 100%; border: 1px solid var(--line-strong); background: var(--ink); color: var(--paper); padding: .9rem 1rem; }
-      .device-code { font: 700 1.15rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
-      .device-button { border: 1px solid var(--amber); background: var(--amber); color: var(--ink); padding: .9rem 1rem; font-weight: 750; }
+      .device-kicker { color: var(--amber); font: 700 .7rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+      .device-title { max-width: 12ch; margin: clamp(.4rem, 1vh, .75rem) 0 clamp(.3rem, .75vh, .55rem); font-size: clamp(1.5rem, 4.65vh, 3rem); line-height: .95; letter-spacing: -.05em; }
+      .device-copy { max-width: 34rem; margin: 0 0 clamp(.55rem, 1.5vh, 1.5rem); color: var(--muted); font-size: .8rem; }
+      .device-form { display: grid; gap: clamp(.5rem, 1.1vh, .75rem); }
+      .device-label { display: grid; gap: .4rem; color: var(--muted); font-size: .75rem; }
+      .device-input { width: 100%; border: 1px solid var(--line-strong); background: var(--ink); color: var(--paper); padding: .675rem .75rem; }
+      .device-code { font: 700 .86rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+      .device-button { border: 1px solid var(--amber); background: var(--amber); color: var(--ink); padding: .675rem .75rem; font-weight: 750; }
       .device-button:disabled { opacity: .5; }
-      .device-status { min-height: 0; margin: .25rem 0 0; color: var(--muted); }
+      .device-status { min-height: 0; margin: .2rem 0 0; color: var(--muted); font-size: .8rem; }
       .device-status:empty { display: none; }
       .device-status[data-kind="error"] { color: var(--danger); }
       .device-status[data-kind="success"] { color: var(--success); }
-      .device-signin { margin-top: clamp(.85rem, 2vh, 1.5rem); padding-top: clamp(.85rem, 2vh, 1.5rem); border-top: 1px solid var(--line); }
+      .device-signin { margin-top: clamp(.65rem, 1.5vh, 1.125rem); padding-top: clamp(.65rem, 1.5vh, 1.125rem); border-top: 1px solid var(--line); }
       .device-signin[hidden] { display: none; }
       body.device-page:has(#signin-form:not([hidden])) #approve-button { display: none; }
     `,

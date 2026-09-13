@@ -1471,6 +1471,11 @@ test("MCP advertises synchronized rooms and flags manual synchronization", async
   };
   assert.equal(requirements.synchronizedRooms, true);
   assert.match(requirements.guidance, /Let Loki own lifecycle reconnect/);
+  assert.match(requirements.guidance, /usable room-entry flow/);
+  assert.match(requirements.guidance, /minimal lobby/);
+  assert.match(requirements.guidance, /do not infer player counts/);
+  assert.match(requirements.guidance, /stop to ask the creator/);
+  assert.match(requirements.guidance, /Do not invent new game\.json fields/);
   assert.match(requirements.guidance, /Pointer Events/);
   const diagnosis = (await callLokiTool(api, "diagnose_multiplayer", {
     sources: ["client.sendHostState(0, { n: 1 })"],

@@ -13,7 +13,7 @@ import type {
 } from "../../api/src/platform.js";
 import { renderCreatorPage } from "./creator-page.js";
 import { renderDevicePage } from "./device-page.js";
-import { renderMarketingPage } from "./marketing-page.js";
+import { isMarketingRoute, renderMarketingPage } from "./marketing-page.js";
 import { renderOperatorPage } from "./operator-page.js";
 import { gameSecurityHeaders, renderPlayerShell } from "./player.js";
 import { renderPlayerPlatformPage } from "./player-platform-page.js";
@@ -136,6 +136,15 @@ export function createWebHandler(dependencies: WebDependencies) {
               : renderMarketingPage(dependencies.productConfig);
         } else if (url.pathname === "/play") {
           productPage = renderPlayerPlatformPage(dependencies.productConfig);
+        } else if (
+          !playerHost &&
+          !creatorHost &&
+          isMarketingRoute(url.pathname)
+        ) {
+          productPage = renderMarketingPage(
+            dependencies.productConfig,
+            url.pathname,
+          );
         } else if (
           url.pathname === "/creator" ||
           url.pathname === "/login" ||

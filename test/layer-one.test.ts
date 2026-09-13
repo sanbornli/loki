@@ -270,13 +270,14 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   const player = renderPlayerPlatformPage(config);
   const operator = renderOperatorPage(config);
 
-  assert.match(marketing, /The only plugin you need for your vibe-coded games/);
+  assert.match(marketing, /One plugin to let the <span class="hero-keep">world play,<\/span><br>together/);
   assert.match(marketing, /Its only a game when there are players/);
-  assert.match(marketing, /Just leave it to your Agent/);
+  assert.match(marketing, /Launch to the world<br>in minutes/);
+  assert.match(marketing, /Built for the Agentic AI Era\./);
   assert.match(marketing, /game-stage/);
   assert.match(marketing, /Battleship/);
-  assert.match(marketing, /Pool/);
-  assert.match(marketing, /Chess/);
+  assert.match(marketing, />Pool</);
+  assert.match(marketing, />Chess</);
   assert.doesNotMatch(marketing, /Orbital Relay/);
   assert.doesNotMatch(marketing, /Moss &amp; Match/);
   assert.doesNotMatch(marketing, /Signal Kitchen/);
@@ -326,6 +327,13 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
+  assert.match(creator, /usable room-entry flow/);
+  assert.match(creator, /minimal lobby/);
+  assert.match(creator, /Do not infer multiplayer requirements/);
+  assert.match(creator, /stop and ask the creator/);
+  assert.match(creator, /Do not invent new game\.json fields/);
+  assert.doesNotMatch(creator, /Do not redesign the game merely to make it fit/);
+  assert.doesNotMatch(creator, /report that incompatibility instead of implementing a degraded substitute/);
   assert.match(creator, /createSynchronizedRoom\(\)/);
   assert.match(creator, /Let the SDK own lifecycle detection/);
   assert.match(creator, /viewport-fit=cover/);
@@ -614,6 +622,13 @@ test("CLI initializes, validates and archives finished builds", async () => {
     assert.match(agents, /Google Fonts/);
     assert.match(agents, /<form>/);
     assert.match(agents, /Let Loki own lifecycle detection/);
+    assert.match(agents, /usable room-entry flow/);
+    assert.match(agents, /minimal lobby/);
+    assert.match(agents, /Do not infer multiplayer requirements/);
+    assert.match(agents, /stop and ask the\s+creator/);
+    assert.match(agents, /Do not invent new `game\.json` fields/);
+    assert.doesNotMatch(agents, /Do not redesign the game merely to make it fit/);
+    assert.doesNotMatch(agents, /report that incompatibility instead of implementing a degraded substitute/);
     assert.match(agents, /viewport-fit=cover/);
     assert.match(agents, /Pointer Events/);
     assert.match(agents, /requestAnimationFrame/);

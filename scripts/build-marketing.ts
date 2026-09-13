@@ -1,23 +1,33 @@
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderMarketingPage } from "../apps/web/src/marketing-page.js";
+import {
+  marketingRoutes,
+  renderMarketingPage,
+} from "../apps/web/src/marketing-page.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputDirectory = resolve(repositoryRoot, "dist/marketing");
 const assetDirectory = resolve(outputDirectory, "assets");
+const config = {
+  apiOrigin: "https://api.lokiplay.cc",
+  supabaseUrl: "https://auth.lokiplay.cc",
+  supabaseAnonKey: "marketing-site",
+};
+
+function outputPathFor(route: string): string {
+  return route === "/" ? "index.html" : `${route.slice(1)}/index.html`;
+}
 
 await mkdir(assetDirectory, { recursive: true });
 
 await Promise.all([
-  writeFile(
-    resolve(outputDirectory, "index.html"),
-    renderMarketingPage({
-      apiOrigin: "https://api.lokiplay.cc",
-      supabaseUrl: "https://auth.lokiplay.cc",
-      supabaseAnonKey: "marketing-site",
-    }),
-  ),
+  ...marketingRoutes.map(async (route) => {
+    const relative = outputPathFor(route);
+    const filePath = resolve(outputDirectory, relative);
+    await mkdir(dirname(filePath), { recursive: true });
+    await writeFile(filePath, renderMarketingPage(config, route));
+  }),
   writeFile(
     resolve(outputDirectory, "_headers"),
     `/*
@@ -25,8 +35,6 @@ await Promise.all([
   Referrer-Policy: strict-origin-when-cross-origin
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
-
-/
   Cache-Control: public, max-age=60, stale-while-revalidate=300
 
 /assets/*

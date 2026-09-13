@@ -31,6 +31,47 @@ const AGENT_INSTRUCTIONS = `# Loki integration rules
   sequence returned by Loki.
 - Create rooms with \`createRoom()\` and join with \`joinRoom({ inviteCode })\`.
   Games must not invent Loki room keys.
+- Installing the SDK does not add a create/join screen. If the game has no
+  usable room-entry flow, add one before shipping: a minimal lobby (create
+  room, join with invite, copy invite, start when ready) or an automatic
+  flow (plain URL creates a room; invite or deep-link URL joins it). The
+  Loki overlay shows room status, players, invite copy, and chat only; it
+  does not create or join rooms. Players still need loading, waiting, and
+  error states.
+- Before configuring Loki multiplayer, inspect the game's source, existing UI,
+  configuration, documentation, tests, and finished build. Locate its game
+  modes, seats, local-player handling, AI opponents, teams, start conditions,
+  turn or update loop, win conditions, reconnect behavior, and existing
+  networking code.
+- Do not infer multiplayer requirements from the game's name, genre,
+  appearance, or common rules. A chess, pool, racing, or strategy game may
+  support different player and team arrangements.
+- Determine requirements separately for every supported game mode. Do not
+  collapse multiple modes into one profile.
+- Record evidence for each conclusion and distinguish observed facts from
+  creator decisions. If any material field is ambiguous, stop and ask the
+  creator. Never silently choose a player count, team arrangement, simulation
+  model, authority model, update frequency, persistence policy, or
+  matchmaking flow.
+- Determine and confirm for each mode: minimum, recommended, and maximum
+  players; number of teams, team size, and whether players share control;
+  private invite, lobby, matchmaking, or asynchronous entry; whether late
+  joining and spectators are allowed; turn-based, event-driven, continuous
+  realtime, or hybrid simulation; sequential or simultaneous input; required
+  authoritative update frequency and latency sensitivity; session duration
+  and persistence requirements; host-authoritative trust tolerance or
+  server-authority requirement.
+- Classify simulation from how authoritative state progresses, not from
+  visual animation. A game animated at 60 FPS may still be turn-based or
+  event-driven.
+- Preserve existing game modes and rules. Add online settings and entry UI
+  from the confirmed profile, including mode selection, team or seat
+  selection, readiness, player limits, invite and join behavior, waiting
+  states, and start conditions.
+- Do not invent new \`game.json\` fields. Current manifests accept only
+  \`enabled\`, \`authority\`, \`maxPlayers\`, and \`tickRate\`. Report the richer
+  profile in the final report: values, supporting evidence, and
+  creator-confirmed decisions.
 - Prefer \`createSynchronizedRoom()\` for shared state. Keep synchronized state
   JSON-compatible and use finite safe integers. Reducers must be synchronous,
   deterministic, and fast, with no rendering, timers, network calls, or I/O.

@@ -8,6 +8,8 @@ export const lokiResources = [
     text: [
       "# Loki integration",
       "Use @lokiplay/sdk and a host-authoritative room.",
+      "Create rooms with createRoom() and join with joinRoom({ inviteCode }). Installing the SDK does not add a create/join screen. If the game has no usable room-entry flow, add a minimal lobby or an automatic create/join flow before shipping. The Loki overlay does not create or join rooms.",
+      "Inspect the game to establish its multiplayer profile. Do not infer player counts, teams, or simulation type from the game's name or genre. If a material field is ambiguous, stop and ask the creator. Do not invent new game.json fields.",
       "Prefer createSynchronizedRoom for shared state. Keep synchronized state compact and JSON-compatible; reducers must be synchronous, deterministic, and free of rendering, timers, networking, or other I/O.",
       "Let the SDK own page lifecycle, socket replacement, retries, snapshots, and pending-action replay. Keep the same client and room while interrupted. Never leave, close, disconnect, reload, or replace a room because of visibility, page, focus, or network lifecycle events.",
       "Dispatch only while connected. During suspended, reconnecting, or resynchronizing, lock authoritative input, preserve rendered state, show a temporary reconnecting message, and wait for an authoritative snapshot. Do not assume host authority survives reconnect.",
@@ -117,7 +119,7 @@ export async function callLokiTool(
       rankedIntegrity: false,
       synchronizedRooms: true,
       guidance:
-        "Prefer createSynchronizedRoom for shared state. Let Loki own lifecycle reconnect and pending-action replay; never leave or replace a room on browser visibility, page, focus, or network events. Dispatch only while connected and preserve authoritative state while suspended, reconnecting, or resynchronizing. Use responsive safe-area-aware viewport sizing, Pointer Events for touch and desktop, and bounded canvas resolution and rendering. Low-level sendAction and sendHostState remain supported.",
+        "Prefer createSynchronizedRoom for shared state. Installing the SDK does not add a create/join screen; add a usable room-entry flow (minimal lobby or automatic create/join) before shipping. Inspect the game to establish its multiplayer profile; do not infer player counts, teams, or simulation type from name or genre, and stop to ask the creator when a material field is ambiguous. Do not invent new game.json fields. Let Loki own lifecycle reconnect and pending-action replay; never leave or replace a room on browser visibility, page, focus, or network events. Dispatch only while connected and preserve authoritative state while suspended, reconnecting, or resynchronizing. Use responsive safe-area-aware viewport sizing, Pointer Events for touch and desktop, and bounded canvas resolution and rendering. Low-level sendAction and sendHostState remain supported.",
     };
   }
   if (name === "diagnose_multiplayer") {
