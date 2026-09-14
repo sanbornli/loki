@@ -33,6 +33,19 @@ test("protocol validates manifests and canonical state consistently", () => {
     },
   });
   assert.equal(manifest.networkAllowlist.length, 0);
+  assert.equal(
+    GameManifestSchema.parse({
+      ...manifest,
+      multiplayer: { ...manifest.multiplayer!, tickRate: 25 },
+    }).multiplayer?.tickRate,
+    25,
+  );
+  assert.throws(() =>
+    GameManifestSchema.parse({
+      ...manifest,
+      multiplayer: { ...manifest.multiplayer!, tickRate: 26 },
+    }),
+  );
   assert.throws(() =>
     GameManifestSchema.parse({
       ...manifest,
@@ -104,9 +117,9 @@ test("protocol v2 realtime envelopes stay disjoint from v1 and reject cross-vers
   assert.equal(REALTIME_PROTOCOL_VERSION, 2);
   assert.deepEqual(REALTIME_OPCODES, { input: 17, snapshot: 18, sync: 19 });
   assert.deepEqual(DEFAULT_REALTIME_LIMITS, {
-    maxRealtimeSnapshotHz: 10,
+    maxRealtimeSnapshotHz: 25,
     maxRealtimeInputHz: 20,
-    maxRealtimeInFlightSnapshots: 3,
+    maxRealtimeInFlightSnapshots: 8,
   });
   assert.equal(
     RealtimeClientEnvelopeSchema.parse({

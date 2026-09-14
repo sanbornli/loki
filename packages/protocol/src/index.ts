@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
+export const MAX_TICK_RATE = 25;
+
 export const ProjectStateSchema = z.enum([
   "draft",
   "private",
@@ -22,7 +24,7 @@ export const GameManifestSchema = z
         enabled: z.boolean(),
         authority: z.literal("host"),
         maxPlayers: z.number().int().min(1).max(16),
-        tickRate: z.number().int().min(1).max(10),
+        tickRate: z.number().int().min(1).max(MAX_TICK_RATE),
       })
       .optional(),
     networkAllowlist: z.array(z.string().url()).max(10).default([]),
@@ -35,7 +37,7 @@ export const RoomConfigSchema = z
     visibility: z.enum(["private", "unlisted", "matchmaking"]),
     maxPlayers: z.number().int().min(1).max(16),
     teamSize: z.number().int().min(1).max(16).optional(),
-    tickRate: z.number().int().min(1).max(10),
+    tickRate: z.number().int().min(1).max(MAX_TICK_RATE),
   })
   .strict()
   .refine(
@@ -390,9 +392,9 @@ export type RealtimeClientEnvelope = z.infer<typeof RealtimeClientEnvelopeSchema
 export type RealtimeServerEnvelope = z.infer<typeof RealtimeServerEnvelopeSchema>;
 
 export const DEFAULT_REALTIME_LIMITS = {
-  maxRealtimeSnapshotHz: 10,
+  maxRealtimeSnapshotHz: MAX_TICK_RATE,
   maxRealtimeInputHz: 20,
-  maxRealtimeInFlightSnapshots: 3,
+  maxRealtimeInFlightSnapshots: 8,
 } as const;
 
 export const PlayerSessionClaimsSchema = z

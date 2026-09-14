@@ -1241,12 +1241,12 @@ const creatorScript = String.raw`
           productConfig.lokiplayVersion ||
           productConfig.packageVersion
         ),
-        "0.3.2"
+        "0.3.3"
       );
     }
 
     function configuredCliVersion() {
-      return text(productConfig && productConfig.cliVersion, "0.3.2");
+      return text(productConfig && productConfig.cliVersion, "0.3.3");
     }
 
     function agentPrompt(project) {
@@ -1318,7 +1318,7 @@ const creatorScript = String.raw`
         "- Clients dispatch actions through the synchronized room. Do not create a parallel authoritative backend or direct Nakama integration.",
         "- Keep replicated state JSON-compatible and use finite safe integers. Reducers must be synchronous, deterministic, and fast, with no rendering, timers, network calls, or other I/O.",
         "- Subscribe to synchronized snapshots for state, members, authority, connection status, and rejected actions. Keep the same LokiClient and synchronized-room instance while interrupted.",
-        "- createRealtimeRoom(): integrate the game's existing simulation through its predict/interpolate/extrapolate/blendCorrection callbacks instead of writing a parallel input queue, RTT estimator, snapshot pacer, stale-round rejection, input ledger, interpolation buffer, or reconnect netcode; the SDK already owns all of that. Keep one game-owned render loop, keep authoritative snapshots compact and self-contained, and publish at a chosen rate up to the runtime's cap (10 Hz initially). Report the selected snapshot/input rates and observed diagnostics (RTT, jitter, reconnect/migration duration, dropped/coalesced frames) as evidence.",
+        "- createRealtimeRoom(): integrate the game's existing simulation through its predict/interpolate/extrapolate/blendCorrection callbacks instead of writing a parallel input queue, RTT estimator, snapshot pacer, stale-round rejection, input ledger, interpolation buffer, or reconnect netcode; the SDK already owns all of that. Keep one game-owned render loop, keep authoritative snapshots compact and self-contained, and publish at a chosen rate up to the runtime's cap (25 Hz; default 10 Hz). Report the selected snapshot/input rates and observed diagnostics (RTT, jitter, reconnect/migration duration, dropped/coalesced frames) as evidence.",
         "- Do not claim Loki supplies game physics, collision resolution, rendering optimization, or competitive/anti-cheat integrity for createRealtimeRoom() games. Loki owns transport, sequencing, fencing, and delivery only; the game owns simulation and rendering.",
         "- createRealtimeRoom() requires every present room member to be realtime-capable before it activates; a legacy or non-realtime-capable client blocks activation and cannot join an already-active realtime room. Native clients cannot join realtime-mode rooms until a later parity release; do not offer createRealtimeRoom() for cross-client modes yet.",
         "- Let the SDK own lifecycle detection, socket replacement, reconnect retries, snapshot recovery, and pending-action replay. Do not add competing visibilitychange, pagehide, pageshow, blur, focus, online, or offline reconnect logic.",

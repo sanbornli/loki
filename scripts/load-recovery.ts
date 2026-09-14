@@ -684,12 +684,13 @@ async function runRealtimeMode(): Promise<void> {
 
     realtimeCounting = true;
     const deadline = performance.now() + config.durationSeconds * 1_000;
-    // Snapshot cadence is capped at the runtime's 10 Hz limit; the host's
+    // Snapshot cadence is capped at the runtime's 25 Hz limit; the host's
     // own simulation runs at a representative 60 Hz internally (modeled
-    // here by advancing simulationTick six times per published snapshot).
-    const snapshotIntervalMs = 1_000 / Math.min(config.updatesPerSecond, 9);
+    // here by advancing simulationTick several times per published snapshot).
+    const snapshotHz = Math.min(config.updatesPerSecond, 25);
+    const snapshotIntervalMs = 1_000 / snapshotHz;
     const inputIntervalMs = 1_000 / 15; // representative control traffic, under the 20 Hz cap
-    const maxInFlightSnapshots = 3;
+    const maxInFlightSnapshots = Math.max(3, Math.ceil((250 / 1000) * snapshotHz));
     let lastProgress = 0;
     // Force one host migration partway through the run, on a fixed subset
     // of rooms, to validate realtime authority handoff under load.
@@ -706,7 +707,7 @@ async function runRealtimeMode(): Promise<void> {
             coalescedTicks += 1;
             return;
           }
-          room.simulationTick += 6;
+          room.simulationTick += Math.max(1, Math.round(60 / snapshotHz));
           room.hostSnapshotSequence += 1;
           room.inFlightSnapshots += 1;
           snapshotAttempts += 1;
@@ -813,7 +814,7 @@ async function runRealtimeMode(): Promise<void> {
       target: {
         playersPerRoom: config.playersPerRoom,
         rooms: config.rooms,
-        snapshotHz: Math.min(config.updatesPerSecond, 9),
+        snapshotHz,
         inputHz: 15,
         maxInFlightSnapshots,
         durationSeconds: config.durationSeconds,

@@ -17,9 +17,12 @@ type JoinedRoom = {
 };
 
 export const REALTIME_ROOM_MAX_MESSAGE_BYTES = 16_384;
-export const REALTIME_ROOM_MAX_SNAPSHOT_HZ = 10;
+export const REALTIME_ROOM_DEFAULT_SNAPSHOT_HZ = 10;
+export const REALTIME_ROOM_MAX_SNAPSHOT_HZ = 25;
 export const REALTIME_ROOM_MAX_INPUT_HZ = 20;
-export const REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS = 3;
+export const REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS = 3;
+export const REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS = 8;
+export const REALTIME_ROOM_IN_FLIGHT_BUDGET_MS = 250;
 export const REALTIME_ROOM_MAX_ORDERED_INPUTS = 32;
 export const REALTIME_ROOM_MIN_INTERPOLATION_DELAY_MS = 70;
 export const REALTIME_ROOM_DEFAULT_CORRECTION_MS = 280;
@@ -260,6 +263,7 @@ export class RealtimeRoom<State, Input> {
   readonly #simulationHz: number;
   readonly #snapshotIntervalMs: number;
   readonly #inputIntervalMs: number;
+  readonly #maxInFlightSnapshots: number;
   readonly #correctionMs: number;
   readonly #diagnosticsEnabled: boolean;
 
@@ -338,10 +342,19 @@ export class RealtimeRoom<State, Input> {
     this.#host = host;
     this.#options = options;
     this.#simulationHz = clamp(options.simulationHz ?? 60, 1, 240);
-    const snapshotHz = clamp(options.snapshotHz ?? REALTIME_ROOM_MAX_SNAPSHOT_HZ, 1, REALTIME_ROOM_MAX_SNAPSHOT_HZ);
+    const snapshotHz = clamp(
+      options.snapshotHz ?? REALTIME_ROOM_DEFAULT_SNAPSHOT_HZ,
+      1,
+      REALTIME_ROOM_MAX_SNAPSHOT_HZ,
+    );
     const inputHz = clamp(options.inputHz ?? REALTIME_ROOM_MAX_INPUT_HZ, 1, REALTIME_ROOM_MAX_INPUT_HZ);
     this.#snapshotIntervalMs = 1000 / snapshotHz;
     this.#inputIntervalMs = 1000 / inputHz;
+    this.#maxInFlightSnapshots = clamp(
+      Math.ceil((REALTIME_ROOM_IN_FLIGHT_BUDGET_MS / 1000) * snapshotHz),
+      REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS,
+      REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS,
+    );
     this.#correctionMs = Math.max(0, options.correctionMs ?? REALTIME_ROOM_DEFAULT_CORRECTION_MS);
     this.#diagnosticsEnabled = options.diagnostics ?? false;
   }
@@ -1113,7 +1126,7 @@ export class RealtimeRoom<State, Input> {
       this.#snapshotFlushTimer = undefined;
     }
     if (!this.#pendingSnapshot) return;
-    if (this.#inFlightSnapshots >= REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS) return;
+    if (this.#inFlightSnapshots >= this.#maxInFlightSnapshots) return;
     const elapsed = monotonicNow() - this.#lastSnapshotSentAt;
     if (elapsed < this.#snapshotIntervalMs) {
       this.#snapshotFlushTimer = setTimeout(() => this.#attemptFlush(), this.#snapshotIntervalMs - elapsed);

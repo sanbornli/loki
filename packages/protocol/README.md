@@ -60,6 +60,6 @@ Realtime traffic uses two independent fences instead of the single global
 
 Capabilities advertise the realtime contract additively: `realtime_rooms`,
 `realtimeProtocolVersion: 2`, and passthrough limits `maxRealtimeSnapshotHz`
-(10), `maxRealtimeInputHz` (20), and `maxRealtimeInFlightSnapshots` (3). A
+(25), `maxRealtimeInputHz` (20), and `maxRealtimeInFlightSnapshots` (8). A
 client must treat a missing `realtime_rooms` capability as "unsupported" and
 must not fall back to sending v2 envelopes.

@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.3.2"
+npm install @lokiplay/sdk@0.3.3"
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -161,7 +161,7 @@ const created = await room.create();
 // or: await room.join({ inviteCode });
 
 // Host loop: publish the latest simulated state; Loki paces/coalesces sends
-// up to the runtime's snapshot cap (10 Hz initially).
+// up to the runtime's snapshot cap (25 Hz; default 10 Hz).
 room.publishSnapshot(currentState, { simulationTick });
 
 // Every client: continuous latest-wins input (throttle, aim, movement axis).
@@ -191,8 +191,10 @@ from the latest known state instead of a blank one.
 
 ### Tuning defaults and diagnostics
 
-Snapshot publication is capped at 10 Hz initially (`publishSnapshot()` paces
-and coalesces calls faster than that). Input queues are bounded
+Snapshot publication defaults to 10 Hz and is capped at 25 Hz
+(`publishSnapshot()` paces and coalesces calls faster than that). A room
+that opts into a higher `snapshotHz` also gets a larger in-flight snapshot
+budget so RTT does not stall the higher cadence. Input queues are bounded
 (`REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS`, `REALTIME_ROOM_MAX_ORDERED_INPUTS`)
 so a latency spike cannot grow memory unboundedly; oldest-first entries are
 dropped once a bound is hit. `RealtimeRoomError` reports backpressure and

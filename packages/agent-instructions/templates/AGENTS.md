@@ -76,10 +76,12 @@
   netcode; the SDK already owns all of that. Keep one game-owned render loop
   driven by `advanceFrame()`/`getRenderState()`. Keep authoritative snapshots
   compact and self-contained (no references to transient local-only state).
-  Host publishes snapshots at a chosen rate up to the runtime's cap (10 Hz
-  initially); do not exceed it. Report the selected snapshot/input rates and
-  the observed diagnostics (RTT, jitter, reconnect/migration duration,
-  dropped/coalesced frames) as evidence, not assumptions.
+  Host publishes snapshots at a chosen rate up to the runtime's cap (25 Hz;
+  default 10 Hz); do not exceed it. A game that needs the higher cadence must
+  pass `snapshotHz` and set `tickRate` to match; otherwise Loki stays at
+  10 Hz. Report the selected snapshot/input rates and the observed
+  diagnostics (RTT, jitter, reconnect/migration duration, dropped/coalesced
+  frames) as evidence, not assumptions.
 - Do not claim Loki supplies game physics, collision resolution, rendering
   optimization, or competitive/anti-cheat integrity for `createRealtimeRoom()`
   games. Loki owns transport, sequencing, fencing, and delivery only; the game

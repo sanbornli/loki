@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   LokiClient,
   RealtimeRoomError,
+  REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS,
   REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS,
   REALTIME_ROOM_MAX_ORDERED_INPUTS,
+  REALTIME_ROOM_MAX_SNAPSHOT_HZ,
 } from "../packages/sdk-js/src/index.js";
 import { RealtimeBus, FakeRealtimeTransport, connectedClient } from "./helpers/realtime-bus.js";
 
@@ -15,7 +17,7 @@ type RacerInput = { throttle: number } | { action: "boost" };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("host publishSnapshot at 60Hz coalesces to at most 10 sends/sec and bounds in-flight to 3", async () => {
+test("host publishSnapshot at 60Hz coalesces to the default 10 Hz cap and bounds in-flight to 3", async () => {
   const bus = new RealtimeBus();
   const { client } = await connectedClient(bus);
   const room = client.createRealtimeRoom<RacerState, RacerInput>({});
@@ -28,8 +30,36 @@ test("host publishSnapshot at 60Hz coalesces to at most 10 sends/sec and bounds 
   }
   await sleep(5);
   const snapshot = room.getSnapshot();
-  assert.ok(snapshot.pendingSnapshotCount <= REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS + 1);
-  assert.ok((snapshot.diagnostics?.snapshotsSent ?? 0) <= REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS);
+  assert.ok(snapshot.pendingSnapshotCount <= REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS + 1);
+  assert.ok((snapshot.diagnostics?.snapshotsSent ?? 0) <= REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS);
+});
+
+test("snapshotHz 25 paces faster than the default 10 Hz cap and raises in-flight headroom", async () => {
+  const bus = new RealtimeBus();
+  const { client } = await connectedClient(bus);
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({
+    snapshotHz: REALTIME_ROOM_MAX_SNAPSHOT_HZ,
+    diagnostics: true,
+  });
+  await room.create();
+
+  room.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+  room.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
+  await sleep(45);
+  const fast = room.getSnapshot();
+  assert.ok((fast.diagnostics?.snapshotsSent ?? 0) >= 2);
+  assert.ok((fast.pendingSnapshotCount ?? 0) <= REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS + 1);
+
+  const defaultBus = new RealtimeBus();
+  const { client: defaultClient } = await connectedClient(defaultBus);
+  const defaultRoom = defaultClient.createRealtimeRoom<RacerState, RacerInput>({ diagnostics: true });
+  await defaultRoom.create();
+  defaultRoom.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+  defaultRoom.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
+  await sleep(45);
+  assert.equal(defaultRoom.getSnapshot().diagnostics?.snapshotsSent, 1);
 });
 
 test("stale-round and stale-authority snapshots do not roll back stored state", async () => {

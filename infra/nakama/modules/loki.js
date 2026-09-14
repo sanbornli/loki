@@ -10,6 +10,7 @@ var INVITE_FAIL_COLLECTION = "_loki_invite_fails";
 var ROOM_KEY_COLLECTION = "_loki_room_keys";
 var DEFAULT_MAX_PLAYERS = 16;
 var DEFAULT_TICK_RATE = 5;
+var MAX_TICK_RATE = 25;
 var DEFAULT_INVITE_TTL_SECONDS = 900;
 var DEFAULT_ROOM_QUOTA = 20;
 var MAX_MESSAGE_BYTES = 16384;
@@ -41,7 +42,8 @@ var OP_REALTIME_INPUT = 17;
 var OP_REALTIME_SNAPSHOT = 18;
 var OP_REALTIME_SYNC = 19;
 var REALTIME_INPUT_RATE_LIMIT = 20;
-var REALTIME_SNAPSHOT_RATE_LIMIT = 10;
+var REALTIME_SNAPSHOT_RATE_LIMIT = 25;
+var REALTIME_MAX_IN_FLIGHT_SNAPSHOTS = 8;
 var REALTIME_SYNC_RATE_LIMIT = 5;
 var REALTIME_MAX_ORDERED_INPUTS = 32;
 var REALTIME_HOST_AUTHORITY_GRACE_SECONDS = 5;
@@ -326,7 +328,7 @@ var runtimeCapabilities = function (state) {
       messagesPerSecond: MESSAGE_RATE_LIMIT,
       maxRealtimeSnapshotHz: REALTIME_SNAPSHOT_RATE_LIMIT,
       maxRealtimeInputHz: REALTIME_INPUT_RATE_LIMIT,
-      maxRealtimeInFlightSnapshots: 3,
+      maxRealtimeInFlightSnapshots: REALTIME_MAX_IN_FLIGHT_SNAPSHOTS,
     },
   };
 };
@@ -376,8 +378,8 @@ var validateProjectConfig = function (projectId, input, previous) {
   if (!integerInRange(next.maxPlayers, 1, 16)) {
     throw codedError("INVALID_MESSAGE", "maxPlayers must be between 1 and 16");
   }
-  if (!integerInRange(next.tickRate, 1, 10)) {
-    throw codedError("INVALID_MESSAGE", "tickRate must be between 1 and 10");
+  if (!integerInRange(next.tickRate, 1, MAX_TICK_RATE)) {
+    throw codedError("INVALID_MESSAGE", "tickRate must be between 1 and " + MAX_TICK_RATE);
   }
   if (
     next.visibility !== "private" &&
@@ -1010,7 +1012,7 @@ var matchInit = function (ctx, logger, nk, params) {
   var maxPlayers = integerInRange(params.maxPlayers, 1, 16)
     ? params.maxPlayers
     : config.maxPlayers;
-  var tickRate = integerInRange(params.tickRate, 1, 10)
+  var tickRate = integerInRange(params.tickRate, 1, MAX_TICK_RATE)
     ? params.tickRate
     : config.tickRate;
   var teamSize = integerInRange(params.teamSize, 0, maxPlayers)
