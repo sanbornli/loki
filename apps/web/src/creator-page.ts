@@ -1241,12 +1241,12 @@ const creatorScript = String.raw`
           productConfig.lokiplayVersion ||
           productConfig.packageVersion
         ),
-        "0.3.0"
+        "0.3.1"
       );
     }
 
     function configuredCliVersion() {
-      return text(productConfig && productConfig.cliVersion, "0.3.0");
+      return text(productConfig && productConfig.cliVersion, "0.3.1");
     }
 
     function agentPrompt(project) {

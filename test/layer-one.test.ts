@@ -344,7 +344,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.3\.0"/);
+  assert.match(creator, /"0\.3\.1"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);

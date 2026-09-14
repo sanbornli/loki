@@ -224,7 +224,10 @@ type HostInputRecord<Input> = {
  * rejection, prediction/interpolation orchestration, round resets, and
  * reconnect/host-migration sync. The game owns physics, rules, and
  * rendering via the predict/interpolate/extrapolate/blendCorrection
- * callbacks; RealtimeRoom never runs simulation on its own.
+ * callbacks; RealtimeRoom never runs simulation on its own. Held setInput()
+ * controls are predicted on each advanceFrame() step; sendInput() commands
+ * apply one prediction step immediately. Reconciliation restores the latest
+ * snapshot and replays the held control plus unacknowledged ordered inputs.
  */
 export class RealtimeRoom<State, Input> {
   readonly #host: RealtimeRoomHost;
@@ -278,7 +281,7 @@ export class RealtimeRoom<State, Input> {
   #previousSnapshot?: { state: State; simulationTick: number };
   #latestSnapshot?: { state: State; simulationTick: number };
 
-  // Self prediction for dispatched (ordered) commands only.
+  // Presentation-only local prediction: held setInput() plus unacked sendInput().
   #predictedState?: State;
   #pendingCorrection?: { from: State };
   #correctionStartedAt?: number;
@@ -449,7 +452,7 @@ export class RealtimeRoom<State, Input> {
         reject,
       });
     });
-    this.#applyLocalPrediction(parsed);
+    this.#stepPrediction(parsed);
     await this.#sendOrderedInput(inputSequence, parsed, targetTick);
     return promise;
   }
@@ -557,6 +560,7 @@ export class RealtimeRoom<State, Input> {
     while (this.#accumulatorMs >= fixedStepMs && steps < REALTIME_ROOM_MAX_CATCHUP_STEPS) {
       this.#accumulatorMs -= fixedStepMs;
       steps += 1;
+      if (this.#latestInput !== undefined) this.#stepPrediction(this.#latestInput);
     }
     if (steps === REALTIME_ROOM_MAX_CATCHUP_STEPS) {
       this.#accumulatorMs = Math.min(this.#accumulatorMs, fixedStepMs);
@@ -569,16 +573,27 @@ export class RealtimeRoom<State, Input> {
   /** Samples the authoritative timeline for rendering: prediction, interpolation, and correction. */
   getRenderState(now: number): State | undefined {
     const authoritative = this.#sampleAuthoritative(now);
-    if (authoritative === undefined) return undefined;
-    if (!this.#options.blendCorrection || !this.#pendingCorrection) return authoritative;
-    if (this.#correctionStartedAt === undefined) this.#correctionStartedAt = now;
-    const t = this.#correctionMs <= 0 ? 1 : clamp((now - this.#correctionStartedAt) / this.#correctionMs, 0, 1);
-    const blended = this.#options.blendCorrection(this.#pendingCorrection.from, authoritative, t);
-    if (t >= 1) {
-      this.#pendingCorrection = undefined;
-      this.#correctionStartedAt = undefined;
+    const predicted = this.#predictedState;
+    if (authoritative === undefined && predicted === undefined) return undefined;
+    if (predicted !== undefined && this.#options.blendCorrection) {
+      const from = this.#pendingCorrection?.from ?? predicted;
+      if (this.#pendingCorrection && this.#correctionStartedAt === undefined) {
+        this.#correctionStartedAt = now;
+      }
+      const t = !this.#pendingCorrection
+        ? 0
+        : this.#correctionMs <= 0
+          ? 1
+          : clamp((now - (this.#correctionStartedAt ?? now)) / this.#correctionMs, 0, 1);
+      const blended = this.#options.blendCorrection(from, authoritative ?? predicted, t);
+      if (this.#pendingCorrection && t >= 1) {
+        this.#pendingCorrection = undefined;
+        this.#correctionStartedAt = undefined;
+      }
+      return blended;
     }
-    return blended;
+    if (predicted !== undefined) return predicted;
+    return authoritative;
   }
 
   #sampleAuthoritative(now: number): State | undefined {
@@ -791,6 +806,9 @@ export class RealtimeRoom<State, Input> {
         this.#roundSequence = message.roundSequence;
         this.#previousSnapshot = undefined;
         this.#latestSnapshot = undefined;
+        this.#predictedState = undefined;
+        this.#pendingCorrection = undefined;
+        this.#correctionStartedAt = undefined;
         this.#renderClockAnchor = undefined;
       }
       if (this.#latestSnapshot && message.simulationTick <= this.#latestSnapshot.simulationTick) return;
@@ -804,6 +822,7 @@ export class RealtimeRoom<State, Input> {
       }
       const acked = message.processedInputCursors?.[this.#playerId];
       if (acked !== undefined) this.#applyAck(acked);
+      this.#reconcile();
       if (this.#connection === "resynchronizing" && this.#authorityEpoch >= 0) {
         this.#setConnection("connected");
       }
@@ -825,6 +844,7 @@ export class RealtimeRoom<State, Input> {
         this.#previousSnapshot = undefined;
         this.#latestSnapshot = { state: message.state as State, simulationTick: message.simulationTick };
         this.#renderClockAnchor = undefined;
+        this.#reconcile();
       }
       if (this.#reconnectStartedAt !== undefined) {
         this.#diagnostics.reconnectCount += 1;
@@ -883,10 +903,6 @@ export class RealtimeRoom<State, Input> {
       this.#updateRttEstimate(rtt);
       pending.resolve();
     }
-    if (this.#pendingCorrection === undefined && this.#predictedState !== undefined) {
-      // Reconciliation happens on the next authoritative snapshot; nothing to
-      // do here beyond clearing the acknowledged input from the pending set.
-    }
   }
 
   #updateRttEstimate(sampleMs: number): void {
@@ -896,27 +912,31 @@ export class RealtimeRoom<State, Input> {
     this.#jitterMs = this.#jitterMs === 0 ? deviation : this.#jitterMs * 0.8 + deviation * 0.2;
   }
 
-  #applyLocalPrediction(input: Input): void {
+  #stepPrediction(input: Input): void {
     if (!this.#options.predict) return;
     const base = this.#predictedState ?? this.#latestSnapshot?.state;
     if (base === undefined) return;
-    const oldPredicted = this.#predictedState ?? base;
     this.#predictedState = this.#options.predict(cloneJson(base), input, 1 / this.#simulationHz);
-    if (this.#options.blendCorrection) {
-      this.#pendingCorrection = { from: oldPredicted };
-      this.#correctionStartedAt = undefined;
-      this.#diagnostics.correctionCount += 1;
-    }
   }
 
   #reconcile(): void {
     if (!this.#options.predict || !this.#latestSnapshot) return;
     const oldPredicted = this.#predictedState;
-    let next = this.#latestSnapshot.state;
-    for (const pending of [...this.#orderedPending.values()].sort((a, b) => a.inputSequence - b.inputSequence)) {
-      next = this.#options.predict(cloneJson(next), pending.input, 1 / this.#simulationHz);
+    const dtSeconds = 1 / this.#simulationHz;
+    const hasHeld = this.#latestInput !== undefined;
+    const ordered = [...this.#orderedPending.values()].sort((a, b) => a.inputSequence - b.inputSequence);
+    if (!hasHeld && ordered.length === 0) {
+      this.#predictedState = undefined;
+    } else {
+      let next = cloneJson(this.#latestSnapshot.state);
+      for (const pending of ordered) {
+        next = this.#options.predict(cloneJson(next), pending.input, dtSeconds);
+      }
+      if (this.#latestInput !== undefined) {
+        next = this.#options.predict(cloneJson(next), this.#latestInput, dtSeconds);
+      }
+      this.#predictedState = next;
     }
-    this.#predictedState = next;
     if (this.#options.blendCorrection && oldPredicted !== undefined) {
       this.#pendingCorrection = { from: oldPredicted };
       this.#correctionStartedAt = undefined;

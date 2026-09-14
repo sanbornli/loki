@@ -287,6 +287,7 @@ test("prediction and reconciliation replay unacknowledged input with bounded cor
   const created = await hostRoom.create();
   let blendCalls = 0;
   const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
     predict: (state, input) => {
       if ("action" in input && input.action === "boost") {
         return { positions: { ...state.positions, self: (state.positions.self ?? 0) + 1 } };
@@ -307,5 +308,45 @@ test("prediction and reconciliation replay unacknowledged input with bounded cor
   void guestRoom.sendInput({ action: "boost" });
   await sleep(5);
   const rendered = guestRoom.getRenderState(performance.now());
-  assert.ok(rendered !== undefined);
+  assert.equal(rendered?.positions.self, 1);
+  assert.ok(blendCalls >= 1);
+});
+
+test("setInput prediction advances local render state before the next host snapshot", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({});
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
+    simulationHz: 60,
+    predict: (state, input) => {
+      if ("throttle" in input) {
+        return { positions: { ...state.positions, self: (state.positions.self ?? 0) + input.throttle } };
+      }
+      return state;
+    },
+    interpolate: (_from, to) => to,
+    blendCorrection: (predicted, authoritative, t) => (t >= 1 ? authoritative : predicted),
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { self: 0 } }, { simulationTick: 1 });
+  await sleep(5);
+  assert.equal(guestRoom.getSnapshot().state?.positions.self, 0);
+
+  guestRoom.setInput({ throttle: 10 });
+  const t0 = 1_000;
+  guestRoom.advanceFrame(t0);
+  guestRoom.advanceFrame(t0 + 20);
+  const rendered = guestRoom.getRenderState(t0 + 20);
+  assert.equal(rendered?.positions.self, 10);
+  assert.equal(guestRoom.getSnapshot().state?.positions.self, 0);
+
+  hostRoom.publishSnapshot({ positions: { self: 0 } }, { simulationTick: 2 });
+  await sleep(5);
+  const reconciled = guestRoom.getRenderState(t0 + 40);
+  assert.equal(reconciled?.positions.self, 10);
+  assert.equal(guestRoom.getSnapshot().state?.positions.self, 0);
 });

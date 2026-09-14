@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.3.0
+npm install @lokiplay/sdk@0.3.1"
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -135,7 +135,8 @@ await client.authenticate(token);
 // game's own simulation (not the SDK) advances state from inputs each tick.
 const room = client.createRealtimeRoom<RacerState, RacerInput>({
   predict(state, localInput, dtSeconds) {
-    // Optional local-only prediction between snapshots for the owning player.
+    // Local-only prediction: applied each advanceFrame() step for the latest
+    // setInput() control, and once immediately for each sendInput() command.
     return state;
   },
   interpolate(from, to, t) {
