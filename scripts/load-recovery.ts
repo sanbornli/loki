@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Client, type Session, type Socket } from "@heroiclabs/nakama-js";
 import WebSocket from "ws";
+import { REALTIME_OPCODES, REALTIME_PROTOCOL_VERSION } from "../packages/protocol/src/index.js";
 
 globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket;
 // nakama-js heartbeat errors reference `window.console`; Node has no window.
@@ -44,6 +45,7 @@ const config = {
   ssl: process.env.NAKAMA_SSL === "true",
   serverKey: process.env.NAKAMA_SERVER_KEY ?? "defaultkey",
   httpKey: process.env.NAKAMA_HTTP_KEY,
+  mode: stringArg("mode") ?? "synchronized",
   playersPerRoom: numberArg("players", 8),
   rooms: numberArg("rooms", 20),
   updatesPerSecond: numberArg("updates-per-second", 5),
@@ -57,6 +59,9 @@ const config = {
 };
 if (!config.httpKey) {
   throw new Error("NAKAMA_HTTP_KEY is required; the harness will not guess production credentials");
+}
+if (config.mode !== "synchronized" && config.mode !== "realtime") {
+  throw new Error('--mode must be "synchronized" (default) or "realtime"');
 }
 if (
   config.playersPerRoom !== 8 ||
@@ -325,6 +330,9 @@ const writeArtifact = async (
   console.log(JSON.stringify(artifact, null, 2));
 };
 
+if (config.mode === "realtime") {
+  await runRealtimeMode();
+} else {
 try {
   for (let roomIndex = 0; roomIndex < config.rooms; roomIndex += 1) {
     const projectId = `${runId}-game-${roomIndex}`;
@@ -498,4 +506,375 @@ try {
   throw new Error(message);
 } finally {
   users.forEach((user) => user.socket.disconnect(false));
+}
+}
+
+// --- Realtime (RealtimeRoom / protocol-v2) load and recovery mode ---
+//
+// RealtimeRoom's data plane (protocol-v2, opcodes 17-19) is exercised
+// directly over raw nakama-js sockets here (mirroring the low-level
+// synchronized-mode harness above) rather than through the JS SDK, so this
+// stresses the Nakama runtime's realtime input/snapshot/sync handling,
+// authority/round fencing and rate limiting under sustained concurrent load.
+async function runRealtimeMode(): Promise<void> {
+  type RealtimeUser = { session: Session; socket: Socket };
+  type RealtimeRoomState = {
+    matchId: string;
+    users: RealtimeUser[];
+    hostUserId: string;
+    authorityEpoch: number;
+    roundSequence: number;
+    hostSnapshotSequence: number;
+    simulationTick: number;
+    inFlightSnapshots: number;
+    v2Sequence: Map<string, number>;
+    pendingSnapshots: Map<number, number>;
+    pendingInputs: Array<{ playerId: string; inputSequence: number; sentAt: number }>;
+    inputSequence: Map<string, number>;
+    // Highest realtime_input inputSequence the host has observed per sender;
+    // echoed back as processedInputCursors on the next published snapshot,
+    // mirroring how a real RealtimeRoom host acknowledges guest inputs.
+    hostProcessedCursors: Map<string, number>;
+    migration?: { disconnectedAt: number; previousHostId: string; resolved: boolean };
+  };
+
+  const realtimeUsers: RealtimeUser[] = [];
+  const realtimeRooms: RealtimeRoomState[] = [];
+  const snapshotLatencies: number[] = [];
+  const inputLatencies: number[] = [];
+  const migrationDurations: number[] = [];
+  let snapshotAttempts = 0;
+  let snapshotErrors = 0;
+  let inputAttempts = 0;
+  let inputErrors = 0;
+  let bytesSent = 0;
+  let coalescedTicks = 0;
+  let realtimeCounting = false;
+  const startedAt = new Date();
+  let artifactWritten = false;
+
+  const nextV2Sequence = (room: RealtimeRoomState, userId: string): number => {
+    const next = (room.v2Sequence.get(userId) ?? 0) + 1;
+    room.v2Sequence.set(userId, next);
+    return next;
+  };
+
+  const sendRealtimeEnvelope = async (
+    user: RealtimeUser,
+    room: RealtimeRoomState,
+    opCode: number,
+    body: Record<string, unknown>,
+  ): Promise<void> => {
+    const payload = JSON.stringify({
+      protocolVersion: REALTIME_PROTOCOL_VERSION,
+      roomId: room.matchId,
+      sequence: nextV2Sequence(room, user.session.user_id!),
+      ...body,
+    });
+    bytesSent += payload.length;
+    await user.socket.sendMatchState(room.matchId, opCode, payload);
+  };
+
+  const attachRealtimeListener = (room: RealtimeRoomState, user: RealtimeUser): void => {
+    // Each user is only ever attached to one room in this harness, so this
+    // replaces nakama-js's default (window-referencing, Node-incompatible)
+    // no-op handler rather than chaining onto it.
+    user.socket.onmatchdata = (message) => {
+      if (message.match_id !== room.matchId) return;
+      let data: Record<string, unknown>;
+      try {
+        const raw = message.data;
+        data = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
+      } catch {
+        return;
+      }
+      if (message.op_code === REALTIME_OPCODES.input && data.type === "realtime_input") {
+        // Only the host receives routed realtime_input; track the highest
+        // inputSequence per sender so the next published snapshot can echo
+        // real acknowledgement cursors back to guests.
+        const senderId = data.senderId as string;
+        const inputSequence = data.inputSequence as number;
+        const current = room.hostProcessedCursors.get(senderId) ?? -1;
+        if (inputSequence > current) room.hostProcessedCursors.set(senderId, inputSequence);
+        return;
+      }
+      if (message.op_code === REALTIME_OPCODES.snapshot && data.type === "realtime_snapshot") {
+        const tick = data.simulationTick as number;
+        const sentAt = room.pendingSnapshots.get(tick);
+        if (sentAt !== undefined) {
+          room.pendingSnapshots.delete(tick);
+          if (realtimeCounting) snapshotLatencies.push(performance.now() - sentAt);
+          room.inFlightSnapshots = Math.max(0, room.inFlightSnapshots - 1);
+        }
+        const cursors = (data.processedInputCursors as Record<string, number>) ?? {};
+        const acked = cursors[user.session.user_id!];
+        if (acked !== undefined) {
+          room.pendingInputs = room.pendingInputs.filter((pending) => {
+            if (pending.playerId !== user.session.user_id || pending.inputSequence > acked) return true;
+            if (realtimeCounting) inputLatencies.push(performance.now() - pending.sentAt);
+            return false;
+          });
+        }
+        if (room.migration && !room.migration.resolved && data.hostId !== room.migration.previousHostId) {
+          room.migration.resolved = true;
+          migrationDurations.push(performance.now() - room.migration.disconnectedAt);
+        }
+        return;
+      }
+      if (message.op_code === REALTIME_OPCODES.snapshot && data.type === "error") {
+        if (realtimeCounting) snapshotErrors += 1;
+        return;
+      }
+      if (message.op_code === REALTIME_OPCODES.input && data.type === "error") {
+        if (realtimeCounting) inputErrors += 1;
+        return;
+      }
+      if (message.op_code === 13 && data.type === "host_changed") {
+        room.hostUserId = data.hostId as string;
+        room.authorityEpoch += 1;
+        room.hostSnapshotSequence = 0;
+      }
+    };
+  };
+
+  try {
+    for (let roomIndex = 0; roomIndex < config.rooms; roomIndex += 1) {
+      const projectId = `${runId}-realtime-${roomIndex}`;
+      const roomUsers: RealtimeUser[] = [];
+      for (let playerIndex = 0; playerIndex < config.playersPerRoom; playerIndex += 1) {
+        const session = await client.authenticateCustom(
+          `${runId}-rt-r${roomIndex}-p${playerIndex}`,
+          true,
+        );
+        await provision(session.user_id!, projectId);
+        const socket = client.createSocket(config.ssl, false);
+        await socket.connect(session, true);
+        const user = { session, socket };
+        realtimeUsers.push(user);
+        roomUsers.push(user);
+      }
+      const created = await rpc<{ matchId: string }>(roomUsers[0]!, "loki_create_room", {
+        roomKey: `${runId}-rt-room-${roomIndex}`,
+      });
+      await roomUsers[0]!.socket.joinMatch(created.matchId, undefined, { realtimeCapable: "true" });
+      await Promise.all(
+        roomUsers.slice(1).map((user) =>
+          user.socket.joinMatch(created.matchId, undefined, { realtimeCapable: "true" }),
+        ),
+      );
+      const room: RealtimeRoomState = {
+        matchId: created.matchId,
+        users: roomUsers,
+        hostUserId: roomUsers[0]!.session.user_id!,
+        authorityEpoch: 0,
+        roundSequence: 0,
+        hostSnapshotSequence: 0,
+        simulationTick: 0,
+        inFlightSnapshots: 0,
+        v2Sequence: new Map(),
+        pendingSnapshots: new Map(),
+        pendingInputs: [],
+        inputSequence: new Map(),
+        hostProcessedCursors: new Map(),
+      };
+      for (const user of roomUsers) attachRealtimeListener(room, user);
+      realtimeRooms.push(room);
+      console.error(`provisioned realtime room ${roomIndex + 1}/${config.rooms}`);
+    }
+
+    realtimeCounting = true;
+    const deadline = performance.now() + config.durationSeconds * 1_000;
+    // Snapshot cadence is capped at the runtime's 10 Hz limit; the host's
+    // own simulation runs at a representative 60 Hz internally (modeled
+    // here by advancing simulationTick six times per published snapshot).
+    const snapshotIntervalMs = 1_000 / Math.min(config.updatesPerSecond, 9);
+    const inputIntervalMs = 1_000 / 15; // representative control traffic, under the 20 Hz cap
+    const maxInFlightSnapshots = 3;
+    let lastProgress = 0;
+    // Force one host migration partway through the run, on a fixed subset
+    // of rooms, to validate realtime authority handoff under load.
+    const migrationAtMs = config.durationSeconds * 500;
+    const migrationRoomCount = Math.min(3, realtimeRooms.length);
+    let migrationTriggered = false;
+
+    const snapshotLoop = setInterval(() => {
+      void Promise.allSettled(
+        realtimeRooms.map(async (room) => {
+          const host = room.users.find((user) => user.session.user_id === room.hostUserId);
+          if (!host) return;
+          if (room.inFlightSnapshots >= maxInFlightSnapshots) {
+            coalescedTicks += 1;
+            return;
+          }
+          room.simulationTick += 6;
+          room.hostSnapshotSequence += 1;
+          room.inFlightSnapshots += 1;
+          snapshotAttempts += 1;
+          const sentAt = performance.now();
+          room.pendingSnapshots.set(room.simulationTick, sentAt);
+          const processedInputCursors = Object.fromEntries(room.hostProcessedCursors);
+          try {
+            await sendRealtimeEnvelope(host, room, REALTIME_OPCODES.snapshot, {
+              type: "realtime_snapshot",
+              authorityEpoch: room.authorityEpoch,
+              roundSequence: room.roundSequence,
+              simulationTick: room.simulationTick,
+              hostSnapshotSequence: room.hostSnapshotSequence,
+              processedInputCursors,
+              state: { tick: room.simulationTick, sentAt: Date.now() },
+            });
+          } catch {
+            snapshotErrors += 1;
+            room.inFlightSnapshots = Math.max(0, room.inFlightSnapshots - 1);
+            room.pendingSnapshots.delete(room.simulationTick);
+          }
+        }),
+      );
+    }, snapshotIntervalMs);
+
+    const inputLoop = setInterval(() => {
+      void Promise.allSettled(
+        realtimeRooms.map((room) =>
+          Promise.allSettled(
+            room.users.map(async (user) => {
+              const userId = user.session.user_id!;
+              const inputSequence = (room.inputSequence.get(userId) ?? 0) + 1;
+              room.inputSequence.set(userId, inputSequence);
+              inputAttempts += 1;
+              const sentAt = performance.now();
+              room.pendingInputs.push({ playerId: userId, inputSequence, sentAt });
+              try {
+                await sendRealtimeEnvelope(user, room, REALTIME_OPCODES.input, {
+                  type: "realtime_input",
+                  roundSequence: room.roundSequence,
+                  inputSequence,
+                  targetTick: room.simulationTick + 1,
+                  delivery: "latest",
+                  clientSendTime: Date.now(),
+                  payload: { throttle: 50 },
+                });
+              } catch {
+                inputErrors += 1;
+              }
+            }),
+          ),
+        ),
+      );
+    }, inputIntervalMs);
+
+    while (performance.now() < deadline) {
+      const elapsedMs = config.durationSeconds * 1_000 - (deadline - performance.now());
+      if (!migrationTriggered && elapsedMs >= migrationAtMs) {
+        migrationTriggered = true;
+        for (const room of realtimeRooms.slice(0, migrationRoomCount)) {
+          const currentHost = room.users.find((user) => user.session.user_id === room.hostUserId);
+          if (!currentHost) continue;
+          room.migration = {
+            disconnectedAt: performance.now(),
+            previousHostId: room.hostUserId,
+            resolved: false,
+          };
+          currentHost.socket.disconnect(false);
+        }
+      }
+      if (performance.now() - lastProgress >= 30_000) {
+        lastProgress = performance.now();
+        const elapsed = Math.round(elapsedMs / 1_000);
+        console.error(
+          `realtime load elapsed=${elapsed}s snapshots=${snapshotAttempts}/${snapshotErrors} inputs=${inputAttempts}/${inputErrors} coalesced=${coalescedTicks}`,
+        );
+      }
+      await sleep(1_000);
+    }
+    clearInterval(snapshotLoop);
+    clearInterval(inputLoop);
+    // Allow the last in-flight round trips to settle before measuring.
+    await sleep(500);
+
+    const snapshotErrorRatio = snapshotAttempts === 0 ? 1 : snapshotErrors / snapshotAttempts;
+    const inputErrorRatio = inputAttempts === 0 ? 1 : inputErrors / inputAttempts;
+    const combinedErrorRatio =
+      (snapshotAttempts + inputAttempts) === 0
+        ? 1
+        : (snapshotErrors + inputErrors) / (snapshotAttempts + inputAttempts);
+    const p95SnapshotRttMs = percentile(snapshotLatencies, 0.95);
+    const migrationsExpected = migrationTriggered ? migrationRoomCount : 0;
+    const migrationsResolved = migrationDurations.length;
+    const passed =
+      combinedErrorRatio < config.maxErrorRatio &&
+      p95SnapshotRttMs <= config.maxRttMs &&
+      migrationsResolved === migrationsExpected;
+
+    const artifact = {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      startedAt: startedAt.toISOString(),
+      mode: "realtime" as const,
+      target: {
+        playersPerRoom: config.playersPerRoom,
+        rooms: config.rooms,
+        snapshotHz: Math.min(config.updatesPerSecond, 9),
+        inputHz: 15,
+        maxInFlightSnapshots,
+        durationSeconds: config.durationSeconds,
+      },
+      budgets: {
+        maxErrorRatio: config.maxErrorRatio,
+        maxP95SnapshotRttMs: config.maxRttMs,
+      },
+      measurements: {
+        snapshotAttempts,
+        snapshotErrors,
+        snapshotErrorRatio,
+        inputAttempts,
+        inputErrors,
+        inputErrorRatio,
+        combinedErrorRatio,
+        p50SnapshotRttMs: percentile(snapshotLatencies, 0.5),
+        p95SnapshotRttMs,
+        p99SnapshotRttMs: percentile(snapshotLatencies, 0.99),
+        p50InputAckMs: percentile(inputLatencies, 0.5),
+        p95InputAckMs: percentile(inputLatencies, 0.95),
+        rttJitterMs:
+          snapshotLatencies.length < 2
+            ? 0
+            : Math.max(...snapshotLatencies) - Math.min(...snapshotLatencies),
+        bytesSent,
+        bytesPerSecond: bytesSent / config.durationSeconds,
+        coalescedTicks,
+        migration: {
+          expected: migrationsExpected,
+          resolved: migrationsResolved,
+          durationsMs: migrationDurations,
+          p95DurationMs: percentile(migrationDurations, 0.95),
+        },
+      },
+      passed,
+    };
+    await mkdir(resolve(config.output, ".."), { recursive: true });
+    await writeFile(resolve(config.output), `${JSON.stringify(artifact, null, 2)}\n`, { flag: "wx" });
+    artifactWritten = true;
+    console.log(JSON.stringify(artifact, null, 2));
+    if (!passed) throw new Error("realtime load/recovery budgets were not met");
+  } catch (error) {
+    const message = await describeError(error);
+    console.error(message);
+    if (!artifactWritten) {
+      const fallback = {
+        schemaVersion: 1,
+        generatedAt: new Date().toISOString(),
+        startedAt: startedAt.toISOString(),
+        mode: "realtime" as const,
+        error: message,
+        passed: false,
+      };
+      await mkdir(resolve(config.output, ".."), { recursive: true }).catch(() => undefined);
+      await writeFile(resolve(config.output), `${JSON.stringify(fallback, null, 2)}\n`, { flag: "wx" }).catch(
+        (writeError: unknown) => console.error(`failed to write artifact: ${String(writeError)}`),
+      );
+    }
+    throw new Error(message);
+  } finally {
+    realtimeUsers.forEach((user) => user.socket.disconnect(false));
+  }
 }

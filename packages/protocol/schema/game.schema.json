@@ -54,7 +54,8 @@
         "presence",
         "chat",
         "private_leaderboards",
-        "synchronized_rooms"
+        "synchronized_rooms",
+        "realtime_rooms"
       ]
     },
     "actionId": {
@@ -71,6 +72,8 @@
       "additionalProperties": true,
       "properties": {
         "synchronized_rooms": { "type": "boolean" },
+        "realtime_rooms": { "type": "boolean" },
+        "realtimeProtocolVersion": { "type": "integer", "minimum": 1 },
         "minimumProtocolVersion": { "type": "integer", "minimum": 1 },
         "limits": {
           "type": "object",
@@ -79,7 +82,10 @@
             "maxPlayersPerRoom": { "type": "integer", "minimum": 1, "maximum": 16 },
             "maxMessageBytes": { "type": "integer", "minimum": 1 },
             "maxChatBytes": { "type": "integer", "minimum": 1 },
-            "messagesPerSecond": { "type": "integer", "minimum": 1 }
+            "messagesPerSecond": { "type": "integer", "minimum": 1 },
+            "maxRealtimeSnapshotHz": { "type": "integer", "minimum": 1 },
+            "maxRealtimeInputHz": { "type": "integer", "minimum": 1 },
+            "maxRealtimeInFlightSnapshots": { "type": "integer", "minimum": 1 }
           }
         }
       }

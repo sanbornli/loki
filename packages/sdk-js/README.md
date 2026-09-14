@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.2.3
+npm install @lokiplay/sdk@0.3.0
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -87,3 +87,124 @@ as same-origin files. Do not use inline scripts, Google Fonts, remote
 stylesheets, or `<form>` submissions. On mobile, the SDK defers reconnect
 while the page is hidden or offline, then retries with backoff and
 resynchronizes from an authoritative snapshot instead of failing the room.
+
+## RealtimeRoom
+
+`createSynchronizedRoom()` fits turn-based and event-driven games, where state
+changes on discrete actions. `createRealtimeRoom()` is for continuously
+simulated, host-authoritative games (racers, shooters, anything with a
+physics or movement tick) that need smooth remote presentation and cannot
+wait for a round-trip confirmation per input. Pick one room type per game
+mode by how authoritative state actually progresses, not by genre or visual
+frame rate; do not run both for the same mode.
+
+### Responsibility boundary
+
+`RealtimeRoom` owns transport, sequencing, authority/round fencing, snapshot
+pacing and backpressure, input delivery and coalescing, reconnect and host
+migration, and diagnostics. The game owns simulation, physics, collision,
+rendering, and interpolation/extrapolation/reconciliation of remote state.
+Loki does not supply game physics, collision resolution, rendering
+optimization, or competitive/anti-cheat integrity for realtime rooms.
+
+Every room member must be realtime-capable before a room activates; a
+non-realtime-capable (legacy) member blocks activation and cannot join an
+already-active realtime room. Native clients cannot join realtime-mode rooms
+until a later parity release—use `createSynchronizedRoom()` for cross-client
+modes today.
+
+### API example
+
+```ts
+import { LokiClient, FirstPartyTransport } from "@lokiplay/sdk";
+
+interface RacerState {
+  positions: Record<string, number>;
+}
+interface RacerInput {
+  throttle: number; // 0-100, latest-wins
+}
+
+const client = new LokiClient({
+  projectId,
+  transport: new FirstPartyTransport(),
+});
+await client.authenticate(token);
+
+// createRealtimeRoom() marks the room realtimeCapable automatically; the
+// game's own simulation (not the SDK) advances state from inputs each tick.
+const room = client.createRealtimeRoom<RacerState, RacerInput>({
+  predict(state, localInput, dtSeconds) {
+    // Optional local-only prediction between snapshots for the owning player.
+    return state;
+  },
+  interpolate(from, to, t) {
+    // Blend remote state between two received snapshots (t in [0, 1]).
+    return to;
+  },
+  extrapolate(state, dtSeconds) {
+    // Optional: advance state when no newer snapshot has arrived yet.
+    return state;
+  },
+  blendCorrection(predicted, authoritative, t) {
+    // Optional: smooth a misprediction back toward the authoritative state.
+    return authoritative;
+  },
+});
+
+const created = await room.create();
+// or: await room.join({ inviteCode });
+
+// Host loop: publish the latest simulated state; Loki paces/coalesces sends
+// up to the runtime's snapshot cap (10 Hz initially).
+room.publishSnapshot(currentState, { simulationTick });
+
+// Every client: continuous latest-wins input (throttle, aim, movement axis).
+room.setInput({ throttle: 75 });
+
+// Ordered, discrete commands that must not be coalesced (e.g. "place bomb").
+await room.sendInput({ type: "placeBomb", cell: 12 });
+
+// Drive rendering from the game's own requestAnimationFrame loop.
+function frame(now: number) {
+  room.advanceFrame(now);
+  render(room.getRenderState(now));
+}
+```
+
+### Lifecycle and round flow
+
+Rooms use protocol v1 for membership, presence, and host-migration control
+messages, and protocol v2 for realtime input/snapshot/sync data traffic; both
+run over the same connection. `authorityEpoch` increments on host migration;
+`roundSequence` increments when a host calls `beginRound()`. The runtime and
+SDK reject stale-round or stale-authority snapshots and inputs so a
+reconnecting or migrating host cannot roll back state that members already
+rendered. On host migration, `RealtimeRoom` requests a sync from the runtime
+before the newly elected host is allowed to publish, so the new host starts
+from the latest known state instead of a blank one.
+
+### Tuning defaults and diagnostics
+
+Snapshot publication is capped at 10 Hz initially (`publishSnapshot()` paces
+and coalesces calls faster than that). Input queues are bounded
+(`REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS`, `REALTIME_ROOM_MAX_ORDERED_INPUTS`)
+so a latency spike cannot grow memory unboundedly; oldest-first entries are
+dropped once a bound is hit. `RealtimeRoomError` reports backpressure and
+capability failures (e.g. joining a realtime room with a non-realtime-capable
+transport). Use the room's diagnostics to observe RTT, jitter, and
+reconnect/migration duration when tuning simulation and snapshot rates for a
+specific game; report the rates actually used along with this evidence rather
+than assuming defaults are sufficient for every game.
+
+### Migrating from hand-rolled racer networking
+
+If a game already ships its own input queue, RTT estimator, snapshot pacer,
+stale-round rejection, input replay ledger, interpolation buffer, or
+reconnect netcode, replace that code with `RealtimeRoom` rather than running
+both. Keep the game's existing simulation, physics, and rendering code: read
+input from `setInput()`/`sendInput()` on the host to advance simulation each
+tick, publish results with `publishSnapshot()`, and wire remote presentation
+into `predict`/`interpolate`/`extrapolate`/`blendCorrection`, driven by one
+game-owned `requestAnimationFrame` loop calling `advanceFrame()` and
+`getRenderState()`.

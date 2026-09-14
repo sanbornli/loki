@@ -73,6 +73,7 @@ export const CapabilitySchema = z.enum([
   "chat",
   "private_leaderboards",
   "synchronized_rooms",
+  "realtime_rooms",
 ]);
 
 export const ActionIdSchema = z
@@ -87,12 +88,17 @@ export const ProtocolLimitsSchema = z
     maxMessageBytes: z.number().int().positive(),
     maxChatBytes: z.number().int().positive(),
     messagesPerSecond: z.number().int().positive(),
+    maxRealtimeSnapshotHz: z.number().int().positive().optional(),
+    maxRealtimeInputHz: z.number().int().positive().optional(),
+    maxRealtimeInFlightSnapshots: z.number().int().positive().optional(),
   })
   .passthrough();
 
 export const RuntimeCapabilityBlockSchema = z
   .object({
     synchronized_rooms: z.boolean().optional(),
+    realtime_rooms: z.boolean().optional(),
+    realtimeProtocolVersion: z.number().int().positive().optional(),
     limits: ProtocolLimitsSchema.optional(),
     minimumProtocolVersion: z.number().int().positive().optional(),
   })
@@ -266,6 +272,129 @@ export const ServerEnvelopeSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+// Protocol v2 is a dedicated realtime data plane used only by RealtimeRoom.
+// It never reinterprets v1 fields, opcodes, or envelope semantics above; v1
+// clients and rooms are unaffected by anything below this point.
+export const REALTIME_PROTOCOL_VERSION = 2 as const;
+
+// Opcodes 10-16 remain reserved for protocol-v1 envelopes (see EnvelopeBase
+// consumers above). Realtime traffic uses a disjoint opcode range so a
+// runtime can require protocolVersion 1 on 10-16 and protocolVersion 2 on
+// these three without any overlap.
+export const REALTIME_OPCODES = {
+  input: 17,
+  snapshot: 18,
+  sync: 19,
+} as const;
+
+export const RealtimeDeliverySchema = z.enum(["latest", "ordered"]);
+
+export const RealtimeInputSequenceSchema = z.number().int().nonnegative();
+export const RealtimeTickSchema = z.number().int().nonnegative();
+
+const RealtimeEnvelopeBase = {
+  protocolVersion: z.literal(REALTIME_PROTOCOL_VERSION),
+  roomId: z.string().min(1).max(256),
+  sequence: z.number().int().nonnegative(),
+};
+
+export const RealtimeRetainedInputSchema = z
+  .object({
+    playerId: z.string().min(1).max(128),
+    inputSequence: RealtimeInputSequenceSchema,
+    targetTick: RealtimeTickSchema,
+    delivery: RealtimeDeliverySchema,
+    payload: z.unknown(),
+  })
+  .strict();
+
+export const RealtimeClientEnvelopeSchema = z.discriminatedUnion("type", [
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_input"),
+    roundSequence: z.number().int().nonnegative(),
+    inputSequence: RealtimeInputSequenceSchema,
+    targetTick: RealtimeTickSchema,
+    delivery: RealtimeDeliverySchema,
+    clientSendTime: z.number().int().nonnegative(),
+    payload: z.unknown(),
+  }),
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_snapshot"),
+    authorityEpoch: z.number().int().nonnegative(),
+    roundSequence: z.number().int().nonnegative(),
+    simulationTick: RealtimeTickSchema,
+    hostSnapshotSequence: z.number().int().nonnegative(),
+    processedInputCursors: z.record(z.string(), z.number().int().nonnegative()).default({}),
+    state: z.unknown(),
+  }),
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_sync_request"),
+  }),
+]);
+
+export const RealtimeServerEnvelopeSchema = z.discriminatedUnion("type", [
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_input"),
+    senderId: z.string().min(1).max(128),
+    roundSequence: z.number().int().nonnegative(),
+    inputSequence: RealtimeInputSequenceSchema,
+    targetTick: RealtimeTickSchema,
+    delivery: RealtimeDeliverySchema,
+    clientSendTime: z.number().int().nonnegative(),
+    serverReceiveTime: z.number().int().nonnegative(),
+    payload: z.unknown(),
+  }),
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_snapshot"),
+    hostId: z.string().min(1).max(128),
+    authorityEpoch: z.number().int().nonnegative(),
+    roundSequence: z.number().int().nonnegative(),
+    simulationTick: RealtimeTickSchema,
+    runtimeSnapshotSequence: z.number().int().nonnegative(),
+    processedInputCursors: z.record(z.string(), z.number().int().nonnegative()).default({}),
+    serverTime: z.number().int().nonnegative(),
+    state: z.unknown(),
+  }),
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_sync_response"),
+    hostId: z.string().min(1).max(128).optional(),
+    authorityEpoch: z.number().int().nonnegative(),
+    roundSequence: z.number().int().nonnegative(),
+    simulationTick: RealtimeTickSchema.optional(),
+    runtimeSnapshotSequence: z.number().int().nonnegative().optional(),
+    state: z.unknown().optional(),
+    retainedInputs: z.array(RealtimeRetainedInputSchema).default([]),
+    members: z.array(PresenceSchema),
+    membersComplete: z.boolean().optional(),
+    membershipRevision: z.number().int().nonnegative().optional(),
+    serverTime: z.number().int().nonnegative(),
+  }),
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("error"),
+    code: ErrorCodeSchema,
+    message: z.string().max(200),
+    retryAfterMs: z.number().int().positive().optional(),
+  }),
+]);
+
+export type RealtimeDelivery = z.infer<typeof RealtimeDeliverySchema>;
+export type RealtimeRetainedInput = z.infer<typeof RealtimeRetainedInputSchema>;
+export type RealtimeClientEnvelope = z.infer<typeof RealtimeClientEnvelopeSchema>;
+export type RealtimeServerEnvelope = z.infer<typeof RealtimeServerEnvelopeSchema>;
+
+export const DEFAULT_REALTIME_LIMITS = {
+  maxRealtimeSnapshotHz: 10,
+  maxRealtimeInputHz: 20,
+  maxRealtimeInFlightSnapshots: 3,
+} as const;
+
 export const PlayerSessionClaimsSchema = z
   .object({
     issuer: z.literal("lokiplay"),
@@ -301,12 +430,15 @@ export function actionIdentityKey(senderId: string, actionId: string): string {
 
 export const DEFAULT_RUNTIME_CAPABILITIES = {
   synchronized_rooms: true,
+  realtime_rooms: true,
+  realtimeProtocolVersion: REALTIME_PROTOCOL_VERSION,
   minimumProtocolVersion: PROTOCOL_VERSION,
   limits: {
     maxPlayersPerRoom: 16,
     maxMessageBytes: 16_384,
     maxChatBytes: 500,
     messagesPerSecond: 20,
+    ...DEFAULT_REALTIME_LIMITS,
   },
 } as const;
 

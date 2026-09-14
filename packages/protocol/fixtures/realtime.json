@@ -1,0 +1,129 @@
+{
+  "note": "Protocol-v2 realtime replay fixtures. JavaScript RealtimeRoom is the only public API required to honor these; native protocol-v1 clients never receive these envelopes.",
+  "hello": {
+    "protocolVersion": 1,
+    "minimumProtocolVersion": 1,
+    "capabilities": ["rooms", "invites", "matchmaking", "host_migration", "reconnect", "presence", "chat", "private_leaderboards", "synchronized_rooms", "realtime_rooms"],
+    "limits": {
+      "maxPlayersPerRoom": 16,
+      "maxMessageBytes": 16384,
+      "maxChatBytes": 500,
+      "messagesPerSecond": 20,
+      "maxRealtimeSnapshotHz": 10,
+      "maxRealtimeInputHz": 20,
+      "maxRealtimeInFlightSnapshots": 3
+    },
+    "realtime_rooms": true,
+    "realtimeProtocolVersion": 2
+  },
+  "clientMessages": [
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 1,
+      "type": "realtime_input",
+      "roundSequence": 0,
+      "inputSequence": 1,
+      "targetTick": 12,
+      "delivery": "latest",
+      "clientSendTime": 1000,
+      "payload": { "steer": 0.5, "throttle": 1 }
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 2,
+      "type": "realtime_input",
+      "roundSequence": 0,
+      "inputSequence": 1,
+      "targetTick": 13,
+      "delivery": "ordered",
+      "clientSendTime": 1050,
+      "payload": { "action": "fire" }
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 3,
+      "type": "realtime_snapshot",
+      "authorityEpoch": 0,
+      "roundSequence": 0,
+      "simulationTick": 12,
+      "hostSnapshotSequence": 1,
+      "processedInputCursors": { "player-a": 1 },
+      "state": { "positions": { "player-a": [1.5, 0, 2.25] } }
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 4,
+      "type": "realtime_sync_request"
+    }
+  ],
+  "serverReplay": [
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 1,
+      "type": "realtime_input",
+      "senderId": "player-a",
+      "roundSequence": 0,
+      "inputSequence": 1,
+      "targetTick": 12,
+      "delivery": "latest",
+      "clientSendTime": 1000,
+      "serverReceiveTime": 1005,
+      "payload": { "steer": 0.5, "throttle": 1 }
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 2,
+      "type": "realtime_snapshot",
+      "hostId": "player-b",
+      "authorityEpoch": 0,
+      "roundSequence": 0,
+      "simulationTick": 12,
+      "runtimeSnapshotSequence": 1,
+      "processedInputCursors": { "player-a": 1 },
+      "serverTime": 1010,
+      "state": { "positions": { "player-a": [1.5, 0, 2.25] } }
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 3,
+      "type": "realtime_sync_response",
+      "hostId": "player-b",
+      "authorityEpoch": 0,
+      "roundSequence": 0,
+      "simulationTick": 12,
+      "runtimeSnapshotSequence": 1,
+      "state": { "positions": { "player-a": [1.5, 0, 2.25] } },
+      "retainedInputs": [
+        {
+          "playerId": "player-a",
+          "inputSequence": 1,
+          "targetTick": 13,
+          "delivery": "ordered",
+          "payload": { "action": "fire" }
+        }
+      ],
+      "members": [
+        { "playerId": "player-a", "sessionId": "sess-a", "joinedAt": 1, "host": false },
+        { "playerId": "player-b", "sessionId": "sess-b", "joinedAt": 2, "host": true }
+      ],
+      "membersComplete": true,
+      "membershipRevision": 1,
+      "serverTime": 1020
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 4,
+      "type": "error",
+      "code": "STALE_VERSION",
+      "message": "stale round"
+    }
+  ]
+}

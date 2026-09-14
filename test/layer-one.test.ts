@@ -271,10 +271,30 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   const operator = renderOperatorPage(config);
 
   assert.match(marketing, /One plugin to let the <span class="hero-keep">world play,<\/span><br>together/);
-  assert.match(marketing, /Its only a game when there are players/);
+  assert.doesNotMatch(marketing, /Its only a game when there are players/);
+  assert.match(marketing, /editorial-stack/);
+  assert.match(marketing, /workflow-row/);
+  assert.match(marketing, /feature-row feature-row-flip workflow-row/);
   assert.match(marketing, /Launch to the world<br>in minutes/);
+  assert.match(marketing, /Give a finished browser game a host, a room, and a playable URL/);
   assert.match(marketing, /Built for the Agentic AI Era\./);
+  assert.match(marketing, /ide-stage/);
+  assert.match(marketing, /cursor-screen\.jpg/);
+  assert.match(marketing, /cursor-screen-prompt\.jpg/);
+  assert.match(marketing, /CUBE_2D_DARK\.svg/);
+  assert.match(marketing, /agent-logos/);
+  assert.match(marketing, />Cursor</);
+  assert.match(marketing, />Claude Code</);
+  assert.match(marketing, />Codex</);
+  assert.match(marketing, />Replit</);
+  assert.match(marketing, />Lovable</);
   assert.match(marketing, /game-stage/);
+  assert.match(marketing, /feature-stack/);
+  assert.match(marketing, /scene-pipeline/);
+  assert.match(marketing, /scene-lobby/);
+  assert.match(marketing, /scene-catalog/);
+  assert.doesNotMatch(marketing, /class="free-plan"/);
+  assert.doesNotMatch(marketing, /Free to start/);
   assert.match(marketing, /Battleship/);
   assert.match(marketing, />Pool</);
   assert.match(marketing, />Chess</);
@@ -307,6 +327,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(terms, /Terms of Service/);
   assert.match(renderMarketingPage(config, "/hosting"), /A home for every build/);
   assert.match(renderMarketingPage(config, "/pricing"), /Start free/);
+  assert.match(renderMarketingPage(config, "/pricing"), /<p class="price">\$0<\/p>/);
   assert.match(creator, /window\.location\.pathname === "\/signup"/);
   assert.doesNotMatch(creator, /Editorial Studio \/ 03/);
   assert.match(creator, /\.auth-panel \.form-actions \{[\s\S]*display: grid/);
@@ -323,7 +344,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.2\.3"/);
+  assert.match(creator, /"0\.3\.0"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);

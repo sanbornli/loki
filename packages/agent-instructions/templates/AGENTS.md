@@ -53,9 +53,14 @@
   `enabled`, `authority`, `maxPlayers`, and `tickRate`. Report the richer
   profile in the final report: values, supporting evidence, and
   creator-confirmed decisions.
-- Prefer `createSynchronizedRoom()` for shared state. Define project-owned
-  state and actions, then provide a reducer. Do not implement a parallel
-  authority, version, or membership protocol.
+- After inspecting and confirming each game mode's profile, choose
+  `createSynchronizedRoom()` for turn-based or event-driven state, or
+  `createRealtimeRoom()` for continuous host-authoritative simulation. Do not
+  choose by genre or animation smoothness; choose by how authoritative state
+  actually progresses. Do not run both room types for the same mode.
+- `createSynchronizedRoom()`: define project-owned state and actions, then
+  provide a reducer. Do not implement a parallel authority, version, or
+  membership protocol.
 - Keep shared state JSON-compatible and use finite safe integers. Reducers must
   be synchronous, deterministic, and fast. Do not perform rendering, timers,
   network calls, or other I/O inside a reducer. Keep transient visual and
@@ -64,6 +69,26 @@
   connection status. Keep the same `LokiClient` and synchronized-room instance
   while interrupted. Let the SDK own browser lifecycle detection, socket
   replacement, reconnect retries, snapshot recovery, and pending-action replay.
+- `createRealtimeRoom()`: integrate the game's existing simulation through
+  `RealtimeRoom`'s callbacks (predict/interpolate/extrapolate/blendCorrection)
+  rather than writing a parallel input queue, RTT estimator, snapshot pacer,
+  stale-round rejection, input ledger, interpolation buffer, or reconnect
+  netcode; the SDK already owns all of that. Keep one game-owned render loop
+  driven by `advanceFrame()`/`getRenderState()`. Keep authoritative snapshots
+  compact and self-contained (no references to transient local-only state).
+  Host publishes snapshots at a chosen rate up to the runtime's cap (10 Hz
+  initially); do not exceed it. Report the selected snapshot/input rates and
+  the observed diagnostics (RTT, jitter, reconnect/migration duration,
+  dropped/coalesced frames) as evidence, not assumptions.
+- Do not claim Loki supplies game physics, collision resolution, rendering
+  optimization, or competitive/anti-cheat integrity for `createRealtimeRoom()`
+  games. Loki owns transport, sequencing, fencing, and delivery only; the game
+  owns simulation and rendering.
+- `createRealtimeRoom()` requires every present room member to be
+  realtime-capable before it activates; a legacy or non-realtime-capable
+  client blocks activation and cannot join an already-active realtime room.
+  Native clients cannot join realtime-mode rooms until a later parity
+  release; do not offer `createRealtimeRoom()` for cross-client modes yet.
 - Do not implement competing reconnect behavior for `visibilitychange`,
   `pagehide`, `pageshow`, `blur`, `focus`, `online`, or `offline`. Never call
   `leave()`, `close()`, transport disconnect, or create a replacement room

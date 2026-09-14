@@ -223,6 +223,29 @@ async function sendEnvelope(
   );
 }
 
+async function sendRealtimeEnvelope(
+  user: TestUser,
+  matchId: string,
+  opCode: number,
+  sequence: number,
+  body: Record<string, unknown>,
+): Promise<void> {
+  await user.socket.sendMatchState(
+    matchId,
+    opCode,
+    JSON.stringify({
+      protocolVersion: 2,
+      roomId: matchId,
+      sequence,
+      ...body,
+    }),
+  );
+}
+
+const OP_REALTIME_INPUT = 17;
+const OP_REALTIME_SNAPSHOT = 18;
+const OP_REALTIME_SYNC = 19;
+
 test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t) => {
   await waitForNakama();
   const runId = Date.now().toString(36);
@@ -1145,4 +1168,181 @@ test("sender-scoped actions isolate collisions and require host identity", async
     true,
   );
   ServerEnvelopeSchema.parse(liveSnapshot);
+});
+
+test("live Nakama routes protocol-v2 realtime input/snapshots with authority and round fencing, and migrates hosts", async (t) => {
+  await waitForNakama();
+  const runId = crypto.randomUUID();
+  const projectId = `realtime-${runId.slice(0, 8)}`;
+  const host = await createUser("rt-host", projectId, runId);
+  const guest = await createUser("rt-guest", projectId, runId);
+  const legacy = await createUser("rt-legacy", projectId, runId);
+  t.after(async () => {
+    await host.socket.disconnect(false);
+    await guest.socket.disconnect(false);
+    await legacy.socket.disconnect(false);
+  });
+  const created = await rpc<{ matchId: string; inviteCode: string }>(
+    host,
+    "loki_create_room",
+    { projectId },
+  );
+  await host.socket.joinMatch(created.matchId, undefined, { realtimeCapable: "true" });
+  await rpc(guest, "loki_join_room", { inviteCode: created.inviteCode });
+  await guest.socket.joinMatch(created.matchId, undefined, { realtimeCapable: "true" });
+
+  // A non-realtime-capable join is accepted before activation...
+  await rpc(legacy, "loki_join_room", { inviteCode: created.inviteCode });
+  await legacy.socket.joinMatch(created.matchId);
+
+  // ...and blocks activation until every present member is realtime-capable.
+  const blockedError = nextMatchData(
+    host,
+    created.matchId,
+    OP_REALTIME_SNAPSHOT,
+    (message) => message.type === "error",
+  );
+  await sendRealtimeEnvelope(host, created.matchId, OP_REALTIME_SNAPSHOT, 1, {
+    type: "realtime_snapshot",
+    authorityEpoch: 0,
+    roundSequence: 0,
+    simulationTick: 1,
+    hostSnapshotSequence: 1,
+    processedInputCursors: {},
+    state: { positions: {} },
+  });
+  assert.equal((await blockedError).code, "INVALID_MESSAGE");
+
+  await rpc(legacy, "loki_leave_room", { matchId: created.matchId });
+  await legacy.socket.leaveMatch(created.matchId);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  const guestInputPromise = nextMatchData(
+    host,
+    created.matchId,
+    OP_REALTIME_INPUT,
+    (message) => message.type === "realtime_input",
+  );
+  await sendRealtimeEnvelope(guest, created.matchId, OP_REALTIME_INPUT, 1, {
+    type: "realtime_input",
+    roundSequence: 0,
+    inputSequence: 1,
+    targetTick: 1,
+    delivery: "latest",
+    clientSendTime: Date.now(),
+    payload: { throttle: 100 },
+  });
+  const routedInput = await guestInputPromise;
+  assert.equal(routedInput.senderId, guest.session.user_id);
+  assert.deepEqual(routedInput.payload, { throttle: 100 });
+
+  const activationBroadcast = nextMatchData(
+    guest,
+    created.matchId,
+    OP_REALTIME_SNAPSHOT,
+    (message) => message.type === "realtime_snapshot",
+  );
+  await sendRealtimeEnvelope(host, created.matchId, OP_REALTIME_SNAPSHOT, 2, {
+    type: "realtime_snapshot",
+    authorityEpoch: 0,
+    roundSequence: 0,
+    simulationTick: 1,
+    hostSnapshotSequence: 1,
+    processedInputCursors: { [guest.session.user_id!]: 1 },
+    state: { positions: { [host.session.user_id!]: 1 } },
+  });
+  const activated = await activationBroadcast;
+  assert.equal(activated.hostId, host.session.user_id);
+  assert.equal(activated.authorityEpoch, 0);
+  assert.equal(activated.simulationTick, 1);
+
+  // A stale simulation tick must be ignored without rewinding stored state.
+  const secondBroadcast = nextMatchData(
+    guest,
+    created.matchId,
+    OP_REALTIME_SNAPSHOT,
+    (message) => message.type === "realtime_snapshot",
+  );
+  await sendRealtimeEnvelope(host, created.matchId, OP_REALTIME_SNAPSHOT, 3, {
+    type: "realtime_snapshot",
+    authorityEpoch: 0,
+    roundSequence: 0,
+    simulationTick: 2,
+    hostSnapshotSequence: 2,
+    processedInputCursors: {},
+    state: { positions: { [host.session.user_id!]: 2 } },
+  });
+  assert.equal((await secondBroadcast).simulationTick, 2);
+  // A delayed echo of an older tick is silently ignored (no broadcast, no
+  // error); confirm it never rewound the stored state via a sync request.
+  await sendRealtimeEnvelope(host, created.matchId, OP_REALTIME_SNAPSHOT, 4, {
+    type: "realtime_snapshot",
+    authorityEpoch: 0,
+    roundSequence: 0,
+    simulationTick: 1,
+    hostSnapshotSequence: 1,
+    processedInputCursors: {},
+    state: { positions: { [host.session.user_id!]: -1 } },
+  });
+  const syncResponse = nextMatchData(
+    guest,
+    created.matchId,
+    OP_REALTIME_SYNC,
+    (message) => message.type === "realtime_sync_response",
+  );
+  await sendRealtimeEnvelope(guest, created.matchId, OP_REALTIME_SYNC, 2, {
+    type: "realtime_sync_request",
+  });
+  const synced = await syncResponse;
+  assert.equal(synced.simulationTick, 2);
+  assert.deepEqual(synced.state, { positions: { [host.session.user_id!]: 2 } });
+
+  // A wrong authority epoch is rejected outright.
+  const staleEpochError = nextMatchData(
+    host,
+    created.matchId,
+    OP_REALTIME_SNAPSHOT,
+    (message) => message.type === "error",
+  );
+  await sendRealtimeEnvelope(host, created.matchId, OP_REALTIME_SNAPSHOT, 5, {
+    type: "realtime_snapshot",
+    authorityEpoch: 99,
+    roundSequence: 0,
+    simulationTick: 3,
+    hostSnapshotSequence: 3,
+    processedInputCursors: {},
+    state: { positions: {} },
+  });
+  assert.equal((await staleEpochError).code, "STALE_VERSION");
+
+  // Host migration bumps the authority epoch and stalls the old host.
+  const hostChangedPromise = nextMatchData(
+    guest,
+    created.matchId,
+    13,
+    (message) => message.type === "host_changed",
+  );
+  await rpc(host, "loki_leave_room", { matchId: created.matchId });
+  await host.socket.leaveMatch(created.matchId);
+  const hostChanged = await hostChangedPromise;
+  assert.equal(hostChanged.hostId, guest.session.user_id);
+
+  const newHostSnapshot = nextMatchData(
+    guest,
+    created.matchId,
+    OP_REALTIME_SNAPSHOT,
+    (message) => message.type === "realtime_snapshot",
+  );
+  await sendRealtimeEnvelope(guest, created.matchId, OP_REALTIME_SNAPSHOT, 3, {
+    type: "realtime_snapshot",
+    authorityEpoch: 1,
+    roundSequence: 0,
+    simulationTick: 3,
+    hostSnapshotSequence: 1,
+    processedInputCursors: {},
+    state: { positions: { [guest.session.user_id!]: 3 } },
+  });
+  const migratedSnapshot = await newHostSnapshot;
+  assert.equal(migratedSnapshot.hostId, guest.session.user_id);
+  assert.equal(migratedSnapshot.authorityEpoch, 1);
 });

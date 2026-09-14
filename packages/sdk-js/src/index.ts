@@ -1,10 +1,17 @@
 import {
   ClientEnvelopeSchema,
+  RealtimeClientEnvelopeSchema,
+  RealtimeServerEnvelopeSchema,
   ServerEnvelopeSchema,
   PROTOCOL_VERSION,
+  REALTIME_PROTOCOL_VERSION,
+  REALTIME_OPCODES,
   dequantize,
   quantize,
   type ClientEnvelope,
+  type RealtimeClientEnvelope,
+  type RealtimeDelivery,
+  type RealtimeServerEnvelope,
   type ServerEnvelope,
 } from "../../protocol/src/index.js";
 import { Client, Session, type Socket } from "@heroiclabs/nakama-js";
@@ -19,6 +26,7 @@ import {
   type ConnectionEvent,
   type SynchronizedRoomOptions,
 } from "./synchronized-room.js";
+import { RealtimeRoom, type RealtimeRoomOptions } from "./realtime-room.js";
 
 export {
   SYNCHRONIZED_ROOM_ACTION_TTL_MS,
@@ -46,6 +54,29 @@ export type {
   SynchronizedRoomOutcome,
   SynchronizedRoomSnapshot,
 } from "./synchronized-room.js";
+
+export {
+  REALTIME_ROOM_MAX_CATCHUP_STEPS,
+  REALTIME_ROOM_MAX_CLOCK_NUDGE,
+  REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS,
+  REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS,
+  REALTIME_ROOM_MAX_INPUT_HZ,
+  REALTIME_ROOM_MAX_MESSAGE_BYTES,
+  REALTIME_ROOM_MAX_ORDERED_INPUTS,
+  REALTIME_ROOM_MAX_SNAPSHOT_HZ,
+  REALTIME_ROOM_MIN_INTERPOLATION_DELAY_MS,
+  REALTIME_ROOM_DEFAULT_CORRECTION_MS,
+  RealtimeRoom,
+  RealtimeRoomError,
+} from "./realtime-room.js";
+export type {
+  InputsForTick,
+  RealtimeRoomDiagnostics,
+  RealtimeRoomHost,
+  RealtimeRoomOptions,
+  RealtimeRoomOutcome,
+  RealtimeRoomSnapshot,
+} from "./realtime-room.js";
 
 export { dequantize, quantize };
 export {
@@ -171,12 +202,15 @@ const requireInviteCode = (value: string): string => {
 
 export interface LokiTransport {
   authenticate(token: string): Promise<{ playerId: string }>;
-  createRoom(input: { projectId: string }): Promise<JoinedRoom>;
+  createRoom(input: { projectId: string; realtimeCapable?: boolean }): Promise<JoinedRoom>;
   joinRoom(input: {
     projectId: string;
     inviteCode: string;
+    realtimeCapable?: boolean;
   }): Promise<JoinedRoom>;
   send(message: ClientEnvelope): Promise<void>;
+  /** Optional protocol-v2 realtime data plane; only the upgraded JS SDK requires it. */
+  sendRealtime?(message: RealtimeClientEnvelope): Promise<void>;
   subscribe(listener: (message: unknown) => void): () => void;
   resolveInvite?(inviteCode: string): Promise<{ roomId: string; inviteCode: string }>;
   matchmake?(input: { minPlayers: number; maxPlayers: number; teamSize?: number }): Promise<JoinedRoom>;
@@ -196,13 +230,17 @@ export class LokiClient {
   readonly #transport: LokiTransport;
   readonly #projectId: string;
   readonly #listeners = new Set<(message: ServerEnvelope) => void>();
+  readonly #realtimeListeners = new Set<(message: RealtimeServerEnvelope) => void>();
   #unsubscribe?: () => void;
   #playerId?: string;
   #roomId?: string;
   #joining = false;
   #joinBuffer: ServerEnvelope[] = [];
+  #realtimeJoinBuffer: RealtimeServerEnvelope[] = [];
   #sendSequence = 0;
   #receiveSequence = 0;
+  #realtimeSendSequence = 0;
+  #realtimeReceiveSequence = 0;
   #inviteCode = "";
   #connectionListeners = new Set<(event: ConnectionEvent) => void>();
   #unsubscribeConnection?: () => void;
@@ -234,6 +272,16 @@ export class LokiClient {
   initialize(): void {
     if (this.#unsubscribe) return;
     this.#unsubscribe = this.#transport.subscribe((raw) => {
+      const record = raw as { protocolVersion?: number };
+      if (record && record.protocolVersion === REALTIME_PROTOCOL_VERSION) {
+        const message = RealtimeServerEnvelopeSchema.parse(raw);
+        if (this.#joining) {
+          this.#realtimeJoinBuffer.push(message);
+          return;
+        }
+        this.#dispatchRealtime(message);
+        return;
+      }
       const message = ServerEnvelopeSchema.parse(raw);
       if (this.#joining) {
         this.#joinBuffer.push(message);
@@ -270,6 +318,28 @@ export class LokiClient {
     );
   }
 
+  createRealtimeRoom<State, Input>(
+    options: RealtimeRoomOptions<State, Input> = {},
+  ): RealtimeRoom<State, Input> {
+    if (!this.#unsubscribe) this.initialize();
+    return new RealtimeRoom(
+      {
+        playerId: () => this.#playerId,
+        createRoom: () => this.createRoom({ realtimeCapable: true }),
+        joinRoom: (input) => this.joinRoom(input, { realtimeCapable: true }),
+        leaveRoom: (roomId) => this.leaveRoom(roomId),
+        reconnect: () => this.reconnect(),
+        sendRealtimeInput: (payload, extras) => this.sendRealtimeInput(payload, extras),
+        sendRealtimeSnapshot: (state, extras) => this.sendRealtimeSnapshot(state, extras),
+        requestRealtimeSync: () => this.requestRealtimeSync(),
+        onMessage: (listener) => this.onMessage(listener),
+        onRealtimeMessage: (listener) => this.onRealtimeMessage(listener),
+        onConnection: (listener) => this.onConnection(listener),
+      },
+      options,
+    );
+  }
+
   onConnection(listener: (event: ConnectionEvent) => void): () => void {
     this.#connectionListeners.add(listener);
     return () => this.#connectionListeners.delete(listener);
@@ -282,22 +352,29 @@ export class LokiClient {
     return session;
   }
 
-  async createRoom(): Promise<JoinedRoom> {
+  async createRoom(options?: { realtimeCapable?: boolean }): Promise<JoinedRoom> {
     if (!this.#playerId) throw new Error("authenticate before creating a room");
     return this.#serialize(() =>
       this.#enterRoom(() =>
-        this.#transport.createRoom({ projectId: this.#projectId }),
+        this.#transport.createRoom({
+          projectId: this.#projectId,
+          realtimeCapable: options?.realtimeCapable,
+        }),
       ),
     );
   }
 
-  async joinRoom(input: { inviteCode: string }): Promise<JoinedRoom> {
+  async joinRoom(
+    input: { inviteCode: string },
+    options?: { realtimeCapable?: boolean },
+  ): Promise<JoinedRoom> {
     if (!this.#playerId) throw new Error("authenticate before joining a room");
     return this.#serialize(() =>
       this.#enterRoom(() =>
         this.#transport.joinRoom({
           projectId: this.#projectId,
           inviteCode: requireInviteCode(input.inviteCode),
+          realtimeCapable: options?.realtimeCapable,
         }),
       ),
     );
@@ -319,6 +396,7 @@ export class LokiClient {
     const generation = ++this.#lifecycleGeneration;
     this.#joining = true;
     this.#joinBuffer = [];
+    this.#realtimeJoinBuffer = [];
     let joinedRoomId = "";
     try {
       const joined = await join();
@@ -335,10 +413,15 @@ export class LokiClient {
       this.#inviteCode = joined.inviteCode;
       this.#sendSequence = 0;
       this.#receiveSequence = snapshot.sequence;
+      this.#realtimeSendSequence = 0;
+      this.#realtimeReceiveSequence = 0;
       const buffered = this.#joinBuffer;
       this.#joinBuffer = [];
+      const realtimeBuffered = this.#realtimeJoinBuffer;
+      this.#realtimeJoinBuffer = [];
       this.#joining = false;
       for (const message of buffered) this.#dispatch(message);
+      for (const message of realtimeBuffered) this.#dispatchRealtime(message);
       return {
         roomId: joined.roomId,
         inviteCode: joined.inviteCode,
@@ -356,6 +439,7 @@ export class LokiClient {
     } finally {
       this.#joining = false;
       this.#joinBuffer = [];
+      this.#realtimeJoinBuffer = [];
     }
   }
 
@@ -366,6 +450,15 @@ export class LokiClient {
     ) return;
     this.#receiveSequence = message.sequence;
     notifyListeners(this.#listeners, message);
+  }
+
+  #dispatchRealtime(message: RealtimeServerEnvelope): void {
+    if (
+      message.roomId !== this.#roomId ||
+      message.sequence < this.#realtimeReceiveSequence
+    ) return;
+    this.#realtimeReceiveSequence = message.sequence;
+    notifyListeners(this.#realtimeListeners, message);
   }
 
   async sendAction(
@@ -485,6 +578,8 @@ export class LokiClient {
           this.#inviteCode = "";
           this.#sendSequence = 0;
           this.#receiveSequence = 0;
+          this.#realtimeSendSequence = 0;
+          this.#realtimeReceiveSequence = 0;
           this.#leaveFailed = false;
         }
       } catch (error) {
@@ -520,6 +615,77 @@ export class LokiClient {
     return () => this.#listeners.delete(listener);
   }
 
+  onRealtimeMessage(listener: (message: RealtimeServerEnvelope) => void): () => void {
+    this.#realtimeListeners.add(listener);
+    return () => this.#realtimeListeners.delete(listener);
+  }
+
+  async sendRealtimeInput(
+    payload: unknown,
+    options: {
+      roundSequence: number;
+      inputSequence: number;
+      targetTick: number;
+      delivery: RealtimeDelivery;
+      clientSendTime: number;
+    },
+  ): Promise<void> {
+    if (!this.#roomId) throw new Error("join a room before sending realtime input");
+    if (!this.#transport.sendRealtime) throw new Error("realtime rooms are unsupported by this transport");
+    const message = RealtimeClientEnvelopeSchema.parse({
+      protocolVersion: REALTIME_PROTOCOL_VERSION,
+      roomId: this.#roomId,
+      sequence: ++this.#realtimeSendSequence,
+      type: "realtime_input",
+      roundSequence: options.roundSequence,
+      inputSequence: options.inputSequence,
+      targetTick: options.targetTick,
+      delivery: options.delivery,
+      clientSendTime: options.clientSendTime,
+      payload,
+    });
+    await this.#transport.sendRealtime(message);
+  }
+
+  async sendRealtimeSnapshot(
+    state: unknown,
+    options: {
+      authorityEpoch: number;
+      roundSequence: number;
+      simulationTick: number;
+      hostSnapshotSequence: number;
+      processedInputCursors: Record<string, number>;
+    },
+  ): Promise<void> {
+    if (!this.#roomId) throw new Error("join a room before publishing a realtime snapshot");
+    if (!this.#transport.sendRealtime) throw new Error("realtime rooms are unsupported by this transport");
+    const message = RealtimeClientEnvelopeSchema.parse({
+      protocolVersion: REALTIME_PROTOCOL_VERSION,
+      roomId: this.#roomId,
+      sequence: ++this.#realtimeSendSequence,
+      type: "realtime_snapshot",
+      authorityEpoch: options.authorityEpoch,
+      roundSequence: options.roundSequence,
+      simulationTick: options.simulationTick,
+      hostSnapshotSequence: options.hostSnapshotSequence,
+      processedInputCursors: options.processedInputCursors,
+      state,
+    });
+    await this.#transport.sendRealtime(message);
+  }
+
+  async requestRealtimeSync(): Promise<void> {
+    if (!this.#roomId) throw new Error("join a room before requesting realtime sync");
+    if (!this.#transport.sendRealtime) throw new Error("realtime rooms are unsupported by this transport");
+    const message = RealtimeClientEnvelopeSchema.parse({
+      protocolVersion: REALTIME_PROTOCOL_VERSION,
+      roomId: this.#roomId,
+      sequence: ++this.#realtimeSendSequence,
+      type: "realtime_sync_request",
+    });
+    await this.#transport.sendRealtime(message);
+  }
+
   async #sendRoomMessage(
     body:
       | { type: "snapshot_request" }
@@ -551,6 +717,7 @@ export class LokiClient {
     this.#unsubscribeConnection?.();
     this.#unsubscribeConnection = undefined;
     this.#listeners.clear();
+    this.#realtimeListeners.clear();
     this.#connectionListeners.clear();
     await this.#transport.close();
   }
@@ -655,7 +822,7 @@ export class FirstPartyTransport implements LokiTransport {
     return { playerId: checked.playerId };
   }
 
-  async createRoom(_input: { projectId: string }): Promise<JoinedRoom> {
+  async createRoom(input: { projectId: string; realtimeCapable?: boolean }): Promise<JoinedRoom> {
     const session = this.#requireSession();
     const socket = await this.#connectSocket();
     const created = payload<{
@@ -668,7 +835,11 @@ export class FirstPartyTransport implements LokiTransport {
     if (!created.matchId || !created.inviteCode) {
       throw new Error("Loki did not return a room invite");
     }
-    await socket.joinMatch(created.matchId);
+    await socket.joinMatch(
+      created.matchId,
+      undefined,
+      input.realtimeCapable ? { realtimeCapable: "true" } : undefined,
+    );
     try {
       const snapshot = await this.#snapshot(created.matchId);
       this.#roomId = created.matchId;
@@ -692,6 +863,7 @@ export class FirstPartyTransport implements LokiTransport {
   async joinRoom(input: {
     projectId: string;
     inviteCode: string;
+    realtimeCapable?: boolean;
   }): Promise<JoinedRoom> {
     const session = this.#requireSession();
     const socket = await this.#connectSocket();
@@ -705,7 +877,11 @@ export class FirstPartyTransport implements LokiTransport {
       ),
     );
     if (!joined.matchId) throw new Error("Loki did not return a room");
-    await socket.joinMatch(joined.matchId);
+    await socket.joinMatch(
+      joined.matchId,
+      undefined,
+      input.realtimeCapable ? { realtimeCapable: "true" } : undefined,
+    );
     try {
       const snapshot = await this.#snapshot(joined.matchId);
       this.#foreground.notify();
@@ -792,6 +968,21 @@ export class FirstPartyTransport implements LokiTransport {
               : message.type === "chat"
                 ? 14
                 : 15;
+    await socket.sendMatchState(
+      message.roomId,
+      opCode,
+      encodeMatchStateBytes(message),
+    );
+  }
+
+  async sendRealtime(message: RealtimeClientEnvelope): Promise<void> {
+    const socket = await this.#connectSocket();
+    const opCode =
+      message.type === "realtime_input"
+        ? REALTIME_OPCODES.input
+        : message.type === "realtime_snapshot"
+          ? REALTIME_OPCODES.snapshot
+          : REALTIME_OPCODES.sync;
     await socket.sendMatchState(
       message.roomId,
       opCode,

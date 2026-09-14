@@ -6,8 +6,13 @@ import {
   ClientEnvelopeSchema,
   GameManifestSchema,
   ProtocolHelloSchema,
+  RealtimeClientEnvelopeSchema,
+  RealtimeServerEnvelopeSchema,
   RoomConfigSchema,
   ServerEnvelopeSchema,
+  DEFAULT_REALTIME_LIMITS,
+  REALTIME_OPCODES,
+  REALTIME_PROTOCOL_VERSION,
   canonicalJson,
   dequantize,
   quantize,
@@ -94,6 +99,56 @@ test("protocol rejects malformed and unsupported client messages", () => {
   );
 });
 
+test("protocol v2 realtime envelopes stay disjoint from v1 and reject cross-version messages", () => {
+  const roomId = crypto.randomUUID();
+  assert.equal(REALTIME_PROTOCOL_VERSION, 2);
+  assert.deepEqual(REALTIME_OPCODES, { input: 17, snapshot: 18, sync: 19 });
+  assert.deepEqual(DEFAULT_REALTIME_LIMITS, {
+    maxRealtimeSnapshotHz: 10,
+    maxRealtimeInputHz: 20,
+    maxRealtimeInFlightSnapshots: 3,
+  });
+  assert.equal(
+    RealtimeClientEnvelopeSchema.parse({
+      protocolVersion: 2,
+      roomId,
+      sequence: 1,
+      type: "realtime_input",
+      roundSequence: 0,
+      inputSequence: 1,
+      targetTick: 1,
+      delivery: "latest",
+      clientSendTime: 0,
+      payload: { throttle: 1 },
+    }).type,
+    "realtime_input",
+  );
+  // A protocol-v1 envelope on a v2 opcode (and vice versa) must be rejected.
+  assert.throws(() =>
+    RealtimeClientEnvelopeSchema.parse({
+      protocolVersion: 1,
+      roomId,
+      sequence: 1,
+      type: "realtime_input",
+      roundSequence: 0,
+      inputSequence: 1,
+      targetTick: 1,
+      delivery: "latest",
+      clientSendTime: 0,
+      payload: {},
+    }),
+  );
+  assert.throws(() =>
+    ClientEnvelopeSchema.parse({
+      protocolVersion: 2,
+      roomId,
+      sequence: 1,
+      type: "action",
+      payload: {},
+    }),
+  );
+});
+
 test("shared conformance fixture matches canonical JSON and hash", async () => {
   const fixture = JSON.parse(
     await readFile(
@@ -115,6 +170,22 @@ test("shared conformance fixture matches canonical JSON and hash", async () => {
   fixture.serverReplay.forEach((message) => ServerEnvelopeSchema.parse(message));
   assert.equal(canonicalJson(fixture.canonicalState.input), fixture.canonicalState.json);
   assert.equal(stateHash(fixture.canonicalState.input), fixture.canonicalState.sha256);
+});
+
+test("JS-only realtime fixture replays through the protocol-v2 schemas", async () => {
+  const fixture = JSON.parse(
+    await readFile(
+      new URL("../packages/protocol/fixtures/realtime.json", import.meta.url),
+      "utf8",
+    ),
+  ) as {
+    hello: unknown;
+    clientMessages: unknown[];
+    serverReplay: unknown[];
+  };
+  ProtocolHelloSchema.parse(fixture.hello);
+  fixture.clientMessages.forEach((message) => RealtimeClientEnvelopeSchema.parse(message));
+  fixture.serverReplay.forEach((message) => RealtimeServerEnvelopeSchema.parse(message));
 });
 
 test("accounts, projects, credentials, sessions and audits enforce boundaries", () => {

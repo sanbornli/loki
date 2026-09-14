@@ -214,69 +214,114 @@ const homeMain = `
 
     <section class="marketing-section" id="workflow" aria-labelledby="workflow-title">
       <div class="marketing-section-inner">
-        <div class="split-heading split-heading-start">
-          <p class="eyebrow">From localhost to live</p>
-          <h2 id="workflow-title">Launch to the world<br>in minutes.</h2>
-        </div>
-        <div class="editorial-grid">
-          <article class="editorial-card">
-            <p class="card-index">01 / Connect</p>
-            <h3>Connect</h3>
-            <p>Drop Loki into your game. Your coding agent gets the SDK, project rules, and exact setup steps.</p>
-          </article>
-          <article class="editorial-card">
-            <p class="card-index">02 / Launch</p>
-            <h3>Launch</h3>
-            <p>Validate and deploy a finished build. Loki hosts it, scans it, and gives you a secure playable link.</p>
-          </article>
-          <article class="editorial-card">
-            <p class="card-index">03 / Grow</p>
-            <h3>Grow</h3>
-            <p>Invite friends while you build. When you are ready, submit your game to the public catalog.</p>
-          </article>
+        <div class="feature-row feature-row-flip workflow-row">
+          <div class="feature-copy">
+            <p class="card-index">From localhost to live</p>
+            <h2 id="workflow-title">Launch to the world<br>in minutes.</h2>
+            <p>Give a finished browser game a host, a room, and a playable URL—without standing up a backend or wiring five services together.</p>
+            <ul class="feature-list">
+              <li>One plugin for your coding agent</li>
+              <li>A secure link after every valid build</li>
+              <li>Invite first. Publish when it is ready.</li>
+            </ul>
+            <a class="card-link" href="/sdk">See the SDK →</a>
+          </div>
+          <div class="editorial-grid editorial-stack">
+            <article class="editorial-card">
+              <p class="card-index">01 / Connect</p>
+              <h3>Connect</h3>
+              <p>Drop Loki into your game. Your coding agent gets the SDK, project rules, and exact setup steps.</p>
+            </article>
+            <article class="editorial-card">
+              <p class="card-index">02 / Launch</p>
+              <h3>Launch</h3>
+              <p>Validate and deploy a finished build. Loki hosts it, scans it, and gives you a secure playable link.</p>
+            </article>
+            <article class="editorial-card">
+              <p class="card-index">03 / Grow</p>
+              <h3>Grow</h3>
+              <p>Invite friends while you build. When you are ready, submit your game to the public catalog.</p>
+            </article>
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="marketing-section" id="product" aria-labelledby="product-title">
+    <section class="marketing-section" id="product" aria-label="Hosting, multiplayer, and distribution">
       <div class="marketing-section-inner">
-        <div class="split-heading">
-          <p class="eyebrow">The stack, in one plugin</p>
-          <h2 id="product-title">Its only a game when there are players.</h2>
-        </div>
-        <div class="editorial-grid">
-          <article class="editorial-card editorial-card-raised">
-            <p class="card-index">01 / Hosting</p>
-            <h3>A home for every build.</h3>
-            <p>Ship a finished browser game to a secure Loki URL. Every upload is scanned, isolated, and saved as an immutable release.</p>
-            <ul class="feature-list">
-              <li>Private previews</li>
-              <li>Global asset delivery</li>
-              <li>No backend to maintain</li>
-            </ul>
-            <a class="card-link" href="/hosting">See hosting →</a>
+        <div class="feature-stack">
+          <article class="feature-row">
+            <div class="feature-copy">
+              <p class="card-index">01 / Hosting</p>
+              <h3>A home for every build.</h3>
+              <p>Ship a finished browser game to a secure Loki URL. Every upload is scanned, isolated, and saved as an immutable release.</p>
+              <ul class="feature-list">
+                <li>Private previews</li>
+                <li>Global asset delivery</li>
+                <li>No backend to maintain</li>
+              </ul>
+              <a class="card-link" href="/hosting">See hosting →</a>
+            </div>
+            <div class="feature-stage scene-pipeline" aria-hidden="true">
+              <div class="pipe-bar"><span>loki deploy</span><em>rel_08</em></div>
+              <ol class="pipe-steps">
+                <li class="pipe-step pipe-step-1"><b>01</b><span>Upload</span><code>game.zip</code></li>
+                <li class="pipe-step pipe-step-2"><b>02</b><span>Scan</span><code>pass</code></li>
+                <li class="pipe-step pipe-step-3"><b>03</b><span>Isolate</span><code>origin ready</code></li>
+                <li class="pipe-step pipe-step-4"><b>04</b><span>Live</span><code>play.lokiplay.cc</code></li>
+              </ol>
+              <div class="pipe-status">Build passed · URL issued</div>
+            </div>
           </article>
-          <article class="editorial-card editorial-card-raised">
-            <p class="card-index">02 / Multiplayer</p>
-            <h3>Multiplayer without the server project.</h3>
-            <p>Add rooms, invites, matchmaking, chat, shared state, and leaderboards through one game-ready SDK.</p>
-            <ul class="feature-list">
-              <li>Rooms and matchmaking</li>
-              <li>Reconnect and host migration</li>
-              <li>Identity across every game</li>
-            </ul>
-            <a class="card-link" href="/multiplayer">See multiplayer →</a>
+          <article class="feature-row feature-row-flip">
+            <div class="feature-copy">
+              <p class="card-index">02 / Multiplayer</p>
+              <h3>Multiplayer without the server project.</h3>
+              <p>Add rooms, invites, matchmaking, chat, shared state, and leaderboards through one game-ready SDK.</p>
+              <ul class="feature-list">
+                <li>Rooms and matchmaking</li>
+                <li>Reconnect and host migration</li>
+                <li>Identity across every game</li>
+              </ul>
+              <a class="card-link" href="/multiplayer">See multiplayer →</a>
+            </div>
+            <div class="feature-stage scene-lobby" aria-hidden="true">
+              <div class="lobby-head"><span>Room · battleship-04</span><em>3 / 4</em></div>
+              <div class="lobby-seat lobby-seat-1"><i>Y</i><span>You</span><b>Host</b></div>
+              <div class="lobby-seat lobby-seat-2"><i>M</i><span>Maya</span><b>Ready</b></div>
+              <div class="lobby-seat lobby-seat-3"><i>L</i><span>Leo</span><b>Joining</b></div>
+              <div class="lobby-seat lobby-seat-4"><i>+</i><span>Open seat</span><b>Invite</b></div>
+              <div class="lobby-chat"><span>Maya</span> lock in C4 when Leo lands.</div>
+            </div>
           </article>
-          <article class="editorial-card editorial-card-raised">
-            <p class="card-index">03 / Distribution</p>
-            <h3>A path from private link to public game.</h3>
-            <p>Keep it private while you experiment. When the game is ready, make it public and share one playable link.</p>
-            <ul class="feature-list">
-              <li>Reviewed catalog</li>
-              <li>Public game page</li>
-              <li>Tips and revenue share</li>
-            </ul>
-            <a class="card-link" href="/distribution">See distribution →</a>
+          <article class="feature-row">
+            <div class="feature-copy">
+              <p class="card-index">03 / Distribution</p>
+              <h3>A path from private link to public game.</h3>
+              <p>Keep it private while you experiment. When the game is ready, make it public and share one playable link.</p>
+              <ul class="feature-list">
+                <li>Reviewed catalog</li>
+                <li>Public game page</li>
+                <li>Tips and revenue share</li>
+              </ul>
+              <a class="card-link" href="/distribution">See distribution →</a>
+            </div>
+            <div class="feature-stage scene-catalog" aria-hidden="true">
+              <div class="catalog-rail">
+                <span class="catalog-pill">Private</span>
+                <span class="catalog-pill">In review</span>
+                <span class="catalog-pill">Public</span>
+              </div>
+              <div class="catalog-card">
+                <div class="catalog-thumb" aria-hidden="true">
+                  <span></span><span></span><span></span><span></span>
+                  <span></span><span></span><span></span><span></span>
+                </div>
+                <p>Battleship</p>
+                <small>play.lokiplay.cc / battleship</small>
+              </div>
+              <div class="catalog-meta">Listed · 2 players · Versus</div>
+            </div>
           </article>
         </div>
       </div>
@@ -292,14 +337,35 @@ const homeMain = `
             <a class="inline-link" href="/agents">How agents use Loki →</a>
             <a class="inline-link" href="/sdk">See the SDK →</a>
           </div>
+          <ul class="agent-logos" aria-label="Works with coding agents">
+            <li class="agent-logo">
+              <img src="/assets/CUBE_2D_DARK.svg" alt="" width="28" height="32">
+              <span>Cursor</span>
+            </li>
+            <li class="agent-logo">
+              <img src="/assets/claude-color.svg" alt="" width="28" height="28">
+              <span>Claude Code</span>
+            </li>
+            <li class="agent-logo">
+              <img src="/assets/openai-light.svg" alt="" width="28" height="28">
+              <span>Codex</span>
+            </li>
+            <li class="agent-logo">
+              <img src="/assets/replit-color.svg" alt="" width="28" height="28">
+              <span>Replit</span>
+            </li>
+            <li class="agent-logo">
+              <img src="/assets/lovable-color.svg" alt="" width="28" height="28">
+              <span>Lovable</span>
+            </li>
+          </ul>
         </div>
-        <div class="docs-panel" aria-label="Machine-readable documentation">
-          <div class="docs-panel-header"><span>docs.lokiplay.cc</span><span>Public</span></div>
-          <div class="docs-row"><code>/quickstart</code><span>Get running in five minutes</span></div>
-          <div class="docs-row"><code>/agents</code><span>Canonical integration rules</span></div>
-          <div class="docs-row"><code>/llms.txt</code><span>Agent-readable product summary</span></div>
-          <div class="docs-row"><code>/llms-full.txt</code><span>Every doc in one file</span></div>
-          <div class="docs-row"><code>/openapi.json</code><span>Control-plane API contract</span></div>
+        <div class="ide-stage" aria-label="Cursor receiving a Loki prompt">
+          <div class="ide-zoom">
+            <img class="ide-screen" src="/assets/cursor-screen.jpg" alt="Cursor">
+            <img class="ide-screen ide-screen-prompt" src="/assets/cursor-screen-prompt.jpg" alt="">
+            <div class="ide-pointer" aria-hidden="true"></div>
+          </div>
         </div>
       </div>
     </section>

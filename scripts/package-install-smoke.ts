@@ -76,6 +76,7 @@ try {
     await readFile(join(directory, "package.json"), "utf8"),
   ) as { dependencies?: Record<string, string> };
   const packageNames = Object.keys(installed.dependencies ?? {});
+  const sdkImportName = packageNames.find((name) => name === "@lokiplay/sdk");
   await writeFile(
     join(directory, "smoke.mjs"),
     [
@@ -83,8 +84,37 @@ try {
       "globalThis.customElements ??= { get() { return undefined; }, define() {} };",
       ...packageNames.map(
         (name) =>
-          `await import(${JSON.stringify(name)}).then((value) => { if (!value || typeof value !== "object") throw new Error("empty module: ${name}"); });`,
+          `const mod_${packageNames.indexOf(name)} = await import(${JSON.stringify(name)}); if (!mod_${packageNames.indexOf(name)} || typeof mod_${packageNames.indexOf(name)} !== "object") throw new Error("empty module: ${name}");`,
       ),
+      ...(sdkImportName
+        ? [
+            `const sdk = mod_${packageNames.indexOf(sdkImportName)};`,
+            'if (typeof sdk.LokiClient !== "function") throw new Error("LokiClient export missing from packed @lokiplay/sdk");',
+            'if (typeof sdk.RealtimeRoom !== "function") throw new Error("RealtimeRoom export missing from packed @lokiplay/sdk");',
+            // Instantiate the public RealtimeRoom API against a minimal stub
+            // transport to catch packaging regressions (missing exports,
+            // broken bundling) without requiring a live Nakama connection.
+            "const stubTransport = {",
+            '  async authenticate() { return { playerId: "smoke-player" }; },',
+            "  async createRoom() {",
+            '    throw new Error("createRoom not used in smoke test");',
+            "  },",
+            "  async joinRoom() {",
+            '    throw new Error("joinRoom not used in smoke test");',
+            "  },",
+            "  async leaveRoom() {},",
+            "  async send() {},",
+            "  async sendRealtime() {},",
+            "  subscribe() { return () => {}; },",
+            "  subscribeConnection() { return () => {}; },",
+            "  async reconnect() {},",
+            "  async close() {},",
+            "};",
+            'const client = new sdk.LokiClient({ projectId: "00000000-0000-0000-0000-000000000000", transport: stubTransport });',
+            "const room = client.createRealtimeRoom({});",
+            'if (typeof room.create !== "function" || typeof room.publishSnapshot !== "function") throw new Error("RealtimeRoom instance missing expected API surface");',
+          ]
+        : []),
     ].join("\n"),
   );
   await run("node", ["smoke.mjs"], directory);

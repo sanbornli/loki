@@ -1241,12 +1241,12 @@ const creatorScript = String.raw`
           productConfig.lokiplayVersion ||
           productConfig.packageVersion
         ),
-        "0.2.3"
+        "0.3.0"
       );
     }
 
     function configuredCliVersion() {
-      return text(productConfig && productConfig.cliVersion, "0.2.3");
+      return text(productConfig && productConfig.cliVersion, "0.3.0");
     }
 
     function agentPrompt(project) {
@@ -1313,10 +1313,14 @@ const creatorScript = String.raw`
         "- Classify simulation from how authoritative state progresses, not from visual animation. A game animated at 60 FPS may still be turn-based or event-driven.",
         "- Preserve existing game modes and rules. Add online settings and entry UI from the confirmed profile, including mode selection, team or seat selection, readiness, player limits, invite and join behavior, waiting states, and start conditions.",
         "- Do not invent new game.json fields. Current manifests accept only enabled, authority, maxPlayers, and tickRate. Report the richer profile in the final report: values, supporting evidence, and creator-confirmed decisions.",
-        "- Prefer createSynchronizedRoom() for shared state. Define this repository's state and actions, then provide a reducer. Loki owns authority checks, state versions, snapshots, retries, and membership.",
+        "- After confirming each mode's profile, choose createSynchronizedRoom() for turn-based or event-driven state, or createRealtimeRoom() for continuous host-authoritative simulation. Choose by how authoritative state actually progresses, not by genre or animation smoothness. Do not run both room types for the same mode.",
+        "- createSynchronizedRoom(): define this repository's state and actions, then provide a reducer. Loki owns authority checks, state versions, snapshots, retries, and membership.",
         "- Clients dispatch actions through the synchronized room. Do not create a parallel authoritative backend or direct Nakama integration.",
         "- Keep replicated state JSON-compatible and use finite safe integers. Reducers must be synchronous, deterministic, and fast, with no rendering, timers, network calls, or other I/O.",
         "- Subscribe to synchronized snapshots for state, members, authority, connection status, and rejected actions. Keep the same LokiClient and synchronized-room instance while interrupted.",
+        "- createRealtimeRoom(): integrate the game's existing simulation through its predict/interpolate/extrapolate/blendCorrection callbacks instead of writing a parallel input queue, RTT estimator, snapshot pacer, stale-round rejection, input ledger, interpolation buffer, or reconnect netcode; the SDK already owns all of that. Keep one game-owned render loop, keep authoritative snapshots compact and self-contained, and publish at a chosen rate up to the runtime's cap (10 Hz initially). Report the selected snapshot/input rates and observed diagnostics (RTT, jitter, reconnect/migration duration, dropped/coalesced frames) as evidence.",
+        "- Do not claim Loki supplies game physics, collision resolution, rendering optimization, or competitive/anti-cheat integrity for createRealtimeRoom() games. Loki owns transport, sequencing, fencing, and delivery only; the game owns simulation and rendering.",
+        "- createRealtimeRoom() requires every present room member to be realtime-capable before it activates; a legacy or non-realtime-capable client blocks activation and cannot join an already-active realtime room. Native clients cannot join realtime-mode rooms until a later parity release; do not offer createRealtimeRoom() for cross-client modes yet.",
         "- Let the SDK own lifecycle detection, socket replacement, reconnect retries, snapshot recovery, and pending-action replay. Do not add competing visibilitychange, pagehide, pageshow, blur, focus, online, or offline reconnect logic.",
         "- Never call leave(), close(), transport disconnect, reload, or create a replacement room because the page became hidden, blurred, offline, or unloaded. Call leave() only from a deliberate Leave/End Game action.",
         "- Call dispatch() only while connection is connected. Treat suspended, reconnecting, and resynchronizing as recoverable connection states, not a leave.",

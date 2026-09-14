@@ -48,4 +48,18 @@ await Promise.all([
     ),
     resolve(assetDirectory, "loki-vibecoded-game-montage.png"),
   ),
+  ...[
+    "CUBE_2D_DARK.svg",
+    "claude-color.svg",
+    "openai-light.svg",
+    "replit-color.svg",
+    "lovable-color.svg",
+    "cursor-screen.jpg",
+    "cursor-screen-prompt.jpg",
+  ].map((fileName) =>
+    copyFile(
+      resolve(repositoryRoot, "apps/web/src/assets/marketing", fileName),
+      resolve(assetDirectory, fileName),
+    ),
+  ),
 ]);

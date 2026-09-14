@@ -72,13 +72,26 @@ const AGENT_INSTRUCTIONS = `# Loki integration rules
   \`enabled\`, \`authority\`, \`maxPlayers\`, and \`tickRate\`. Report the richer
   profile in the final report: values, supporting evidence, and
   creator-confirmed decisions.
-- Prefer \`createSynchronizedRoom()\` for shared state. Keep synchronized state
-  JSON-compatible and use finite safe integers. Reducers must be synchronous,
-  deterministic, and fast, with no rendering, timers, network calls, or I/O.
+- After confirming each mode's profile, choose \`createSynchronizedRoom()\` for
+  turn-based or event-driven state, or \`createRealtimeRoom()\` for continuous
+  host-authoritative simulation. Choose by how authoritative state actually
+  progresses, not by genre or animation smoothness.
+- \`createSynchronizedRoom()\`: keep synchronized state JSON-compatible and use
+  finite safe integers. Reducers must be synchronous, deterministic, and fast,
+  with no rendering, timers, network calls, or I/O.
 - Subscribe to synchronized snapshots for state, members, authority, and
   connection status. Keep the same client and room instance while interrupted.
   Let Loki own lifecycle detection, socket replacement, reconnect retries,
   snapshot recovery, and unresolved-action replay.
+- \`createRealtimeRoom()\`: integrate the game's existing simulation through its
+  predict/interpolate/extrapolate/blendCorrection callbacks instead of writing
+  a parallel input queue, RTT estimator, snapshot pacer, stale-round
+  rejection, input ledger, interpolation buffer, or reconnect netcode. Keep
+  one game-owned render loop, keep authoritative snapshots compact and
+  self-contained, publish at a chosen rate up to the runtime's cap (10 Hz
+  initially), and report selected rates plus observed diagnostics as
+  evidence. Do not claim Loki supplies physics, collision, rendering
+  optimization, or competitive integrity for realtime rooms.
 - Do not implement competing reconnect behavior for \`visibilitychange\`,
   \`pagehide\`, \`pageshow\`, \`blur\`, \`focus\`, \`online\`, or \`offline\`.
   Never leave, close, disconnect, reload, or replace a room because the page is

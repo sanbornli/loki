@@ -33,6 +33,19 @@ var OP_CHAT = 14;
 var OP_SCORE = 15;
 var OP_ACTION_REJECT = 16;
 
+// Protocol-v2 realtime opcodes. These never overlap with the protocol-v1
+// opcodes above; a runtime requires protocolVersion 1 on 10-16 and
+// protocolVersion 2 on 17-19 in the same room.
+var REALTIME_PROTOCOL_VERSION = 2;
+var OP_REALTIME_INPUT = 17;
+var OP_REALTIME_SNAPSHOT = 18;
+var OP_REALTIME_SYNC = 19;
+var REALTIME_INPUT_RATE_LIMIT = 20;
+var REALTIME_SNAPSHOT_RATE_LIMIT = 10;
+var REALTIME_SYNC_RATE_LIMIT = 5;
+var REALTIME_MAX_ORDERED_INPUTS = 32;
+var REALTIME_HOST_AUTHORITY_GRACE_SECONDS = 5;
+
 var nowMs = function () {
   return Date.now();
 };
@@ -303,12 +316,17 @@ var deliveredActionCount = function (state) {
 var runtimeCapabilities = function (state) {
   return {
     synchronized_rooms: true,
+    realtime_rooms: true,
+    realtimeProtocolVersion: REALTIME_PROTOCOL_VERSION,
     minimumProtocolVersion: PROTOCOL_VERSION,
     limits: {
       maxPlayersPerRoom: state && state.maxPlayers ? state.maxPlayers : DEFAULT_MAX_PLAYERS,
       maxMessageBytes: MAX_MESSAGE_BYTES,
       maxChatBytes: MAX_CHAT_BYTES,
       messagesPerSecond: MESSAGE_RATE_LIMIT,
+      maxRealtimeSnapshotHz: REALTIME_SNAPSHOT_RATE_LIMIT,
+      maxRealtimeInputHz: REALTIME_INPUT_RATE_LIMIT,
+      maxRealtimeInFlightSnapshots: 3,
     },
   };
 };
@@ -1020,6 +1038,18 @@ var matchInit = function (ctx, logger, nk, params) {
       recentActions: {},
       emptyTicks: 0,
       lastStatusCheckTick: -1,
+      realtime: {
+        active: false,
+        authorityEpoch: 0,
+        roundSequence: 0,
+        serverSequence: 0,
+        runtimeSnapshotSequence: 0,
+        capableSessions: {},
+        pendingCapability: {},
+        latestSnapshot: null,
+        latestInputs: {},
+        rateLimits: {},
+      },
     },
     tickRate: tickRate,
     label: JSON.stringify({
@@ -1034,9 +1064,12 @@ var matchInit = function (ctx, logger, nk, params) {
   };
 };
 
-var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, presence) {
+var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, presence, metadata) {
   var accepted = false;
   var reason = "TENANT_MISMATCH: tenant mismatch";
+  var realtimeCapable =
+    Boolean(metadata) &&
+    (metadata.realtimeCapable === "true" || metadata.realtimeCapable === true);
   try {
     accepted = tenantForUser(nk, presence.userId) === state.projectId;
     if (accepted && !state.members[presence.userId] &&
@@ -1044,8 +1077,21 @@ var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, prese
       accepted = false;
       reason = "ROOM_FULL: room full";
     }
+    if (
+      accepted &&
+      !state.members[presence.userId] &&
+      state.realtime &&
+      state.realtime.active &&
+      !realtimeCapable
+    ) {
+      accepted = false;
+      reason = "INVALID_MESSAGE: room requires realtime support";
+    }
   } catch (error) {
     reason = String(error && error.message ? error.message : error);
+  }
+  if (accepted && state.realtime) {
+    state.realtime.pendingCapability[presence.userId] = realtimeCapable;
   }
   return {
     state: state,
@@ -1071,6 +1117,12 @@ var applyLeaves = function (dispatcher, state, userIds) {
     leaves.push(memberPresence(userId, member, state.hostId));
     delete state.members[userId];
     delete state.rateLimits[userId];
+    if (state.realtime) {
+      delete state.realtime.capableSessions[userId];
+      delete state.realtime.pendingCapability[userId];
+      delete state.realtime.latestInputs[userId];
+      delete state.realtime.rateLimits[userId];
+    }
   }
   if (!leaves.length) return;
   bumpMembership(state);
@@ -1081,7 +1133,9 @@ var applyLeaves = function (dispatcher, state, userIds) {
     return;
   }
   if (!state.members[state.hostId]) {
-    state.hostId = electHost(state.members, undefined, state.disconnectGraces);
+    var reassignedHostId = electHost(state.members, undefined, state.disconnectGraces);
+    if (reassignedHostId !== state.hostId) bumpRealtimeAuthorityEpoch(state);
+    state.hostId = reassignedHostId;
   }
   broadcastEnvelope(
     dispatcher,
@@ -1133,10 +1187,21 @@ var applyLeaves = function (dispatcher, state, userIds) {
   }
   updateLabel(dispatcher, state);
 };
+var bumpRealtimeAuthorityEpoch = function (state) {
+  if (!state.realtime || !state.realtime.active) return;
+  state.realtime.authorityEpoch += 1;
+  // The outgoing host's tick/hostSnapshotSequence counters are meaningless
+  // to the newly elected host; clear the stored snapshot so the new host's
+  // own counters (which restart independently) are not blocked by stale
+  // monotonic-tick fencing left over from the previous authority.
+  state.realtime.latestSnapshot = null;
+};
+
 var migrateHostAuthority = function (dispatcher, state, previousHostId) {
   if (!state.members[previousHostId] || state.hostId !== previousHostId) return;
   var nextHost = electHost(state.members, previousHostId, state.disconnectGraces);
   if (!nextHost || nextHost === previousHostId) return;
+  bumpRealtimeAuthorityEpoch(state);
   state.hostId = nextHost;
   broadcastEnvelope(
     dispatcher,
@@ -1231,6 +1296,13 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
     if (!state.hostId || !state.members[state.hostId]) {
       state.hostId = presence.userId;
     }
+    if (state.realtime) {
+      state.realtime.capableSessions[presence.userId] = {
+        sessionId: presence.sessionId,
+        capable: Boolean(state.realtime.pendingCapability[presence.userId]),
+      };
+      delete state.realtime.pendingCapability[presence.userId];
+    }
     joins.push(memberPresence(presence.userId, member, state.hostId));
     if (roomAlreadyOccupied || index > 0) {
       state.joinSyncs.push({
@@ -1287,12 +1359,16 @@ var matchLeave = function (ctx, logger, nk, dispatcher, tick, state, presences) 
     var member = state.members[presence.userId];
     // Ignore a delayed leave from the socket which a reconnect replaced.
     if (member && member.sessionId === presence.sessionId) {
+      var authorityGraceSeconds =
+        state.realtime && state.realtime.active
+          ? REALTIME_HOST_AUTHORITY_GRACE_SECONDS
+          : HOST_AUTHORITY_GRACE_SECONDS;
       state.disconnectGraces[presence.userId] = {
         sessionId: presence.sessionId,
         membershipTicks: Math.max(1, state.tickRate * MEMBERSHIP_GRACE_SECONDS),
         authorityTicks:
           presence.userId === state.hostId
-            ? Math.max(1, state.tickRate * HOST_AUTHORITY_GRACE_SECONDS)
+            ? Math.max(1, state.tickRate * authorityGraceSeconds)
             : 0,
       };
     }
@@ -1408,9 +1484,434 @@ var writeScore = function (nk, projectId, actorId, username, input) {
   );
 };
 
+var nextRealtimeServerSequence = function (state) {
+  var sequence = state.realtime.serverSequence;
+  state.realtime.serverSequence += 1;
+  return sequence;
+};
+
+var realtimeEnvelope = function (state, type, fields) {
+  var result = {
+    protocolVersion: REALTIME_PROTOCOL_VERSION,
+    roomId: state.roomId,
+    sequence: nextRealtimeServerSequence(state),
+    type: type,
+  };
+  Object.keys(fields || {}).forEach(function (key) {
+    if (fields[key] !== undefined) result[key] = fields[key];
+  });
+  return result;
+};
+
+var broadcastRealtimeEnvelope = function (
+  dispatcher,
+  state,
+  opCode,
+  type,
+  fields,
+  presences,
+  sender,
+  reliable
+) {
+  dispatcher.broadcastMessage(
+    opCode,
+    JSON.stringify(realtimeEnvelope(state, type, fields)),
+    presences || null,
+    sender || null,
+    reliable !== false,
+  );
+};
+
+var sendRealtimeError = function (dispatcher, state, opCode, presence, code, message, retryAfterMs) {
+  broadcastRealtimeEnvelope(
+    dispatcher,
+    state,
+    opCode,
+    "error",
+    {
+      code: code,
+      message:
+        typeof message === "string" && message.length > 200
+          ? message.slice(0, 200)
+          : message,
+      retryAfterMs: retryAfterMs,
+    },
+    [presence],
+    null,
+    true,
+  );
+};
+
+var validRealtimeClientEnvelope = function (state, message, input, expectedType) {
+  return (
+    input &&
+    input.protocolVersion === REALTIME_PROTOCOL_VERSION &&
+    input.roomId === state.roomId &&
+    integerInRange(input.sequence, 0, 9007199254740991) &&
+    input.type === expectedType &&
+    message.sender &&
+    state.members[message.sender.userId] &&
+    state.members[message.sender.userId].sessionId === message.sender.sessionId
+  );
+};
+
+var isRealtimeCapable = function (state, userId) {
+  var entry = state.realtime.capableSessions[userId];
+  return Boolean(entry && entry.capable);
+};
+
+var realtimeCapableTargets = function (state) {
+  var targets = [];
+  orderedMemberIds(state.members).forEach(function (userId) {
+    if (isRealtimeCapable(state, userId)) {
+      targets.push(memberTarget(userId, state.members[userId]));
+    }
+  });
+  return targets;
+};
+
+var realtimeRateLimit = function (state, userId, kind, timestamp, windowMs, maximum) {
+  var limits = state.realtime.rateLimits[userId];
+  if (!limits) {
+    limits = {};
+    state.realtime.rateLimits[userId] = limits;
+  }
+  var startedKey = kind + "StartedAt";
+  var countKey = kind + "Count";
+  if (limits[startedKey] === undefined || timestamp - limits[startedKey] >= windowMs) {
+    limits[startedKey] = timestamp;
+    limits[countKey] = 0;
+  }
+  limits[countKey] += 1;
+  if (limits[countKey] > maximum) {
+    return Math.max(1, windowMs - (timestamp - limits[startedKey]));
+  }
+  return 0;
+};
+
+var retainedInputsForSync = function (state) {
+  var retained = [];
+  Object.keys(state.realtime.latestInputs).forEach(function (playerId) {
+    var record = state.realtime.latestInputs[playerId];
+    if (!record) return;
+    if (record.latest) {
+      retained.push({
+        playerId: playerId,
+        inputSequence: record.latest.inputSequence,
+        targetTick: record.latest.targetTick,
+        delivery: "latest",
+        payload: record.latest.payload,
+      });
+    }
+    (record.ordered || []).forEach(function (entry) {
+      retained.push({
+        playerId: playerId,
+        inputSequence: entry.inputSequence,
+        targetTick: entry.targetTick,
+        delivery: "ordered",
+        payload: entry.payload,
+      });
+    });
+  });
+  return retained;
+};
+
+var processRealtimeV2Message = function (logger, nk, dispatcher, state, message, opCode) {
+  var expectedTypes = {};
+  expectedTypes[OP_REALTIME_INPUT] = "realtime_input";
+  expectedTypes[OP_REALTIME_SNAPSHOT] = "realtime_snapshot";
+  expectedTypes[OP_REALTIME_SYNC] = "realtime_sync_request";
+  var expectedType = expectedTypes[opCode];
+  if (!expectedType || !message.sender) return;
+
+  var raw =
+    typeof message.data === "string"
+      ? message.data
+      : nk.binaryToString(message.data);
+  if (raw.length > MAX_MESSAGE_BYTES) {
+    sendRealtimeError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "INVALID_MESSAGE",
+      "message exceeds maximum size",
+    );
+    return;
+  }
+
+  var input;
+  try {
+    input = parsePayload(raw);
+  } catch (_) {
+    sendRealtimeError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "INVALID_MESSAGE",
+      "invalid JSON payload",
+    );
+    return;
+  }
+  if (input.protocolVersion !== REALTIME_PROTOCOL_VERSION) {
+    sendRealtimeError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "UNSUPPORTED_VERSION",
+      "protocol version 2 required",
+    );
+    return;
+  }
+  if (!validRealtimeClientEnvelope(state, message, input, expectedType)) {
+    sendRealtimeError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "INVALID_MESSAGE",
+      "invalid protocol envelope",
+    );
+    return;
+  }
+
+  try {
+    if (tenantForUser(nk, message.sender.userId) !== state.projectId) {
+      sendRealtimeError(
+        dispatcher,
+        state,
+        opCode,
+        message.sender,
+        "TENANT_MISMATCH",
+        "tenant mismatch",
+      );
+      return;
+    }
+  } catch (error) {
+    var suspended = String(error).indexOf("PROJECT_SUSPENDED") !== -1;
+    sendRealtimeError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      suspended ? "PROJECT_SUSPENDED" : "FORBIDDEN",
+      suspended ? "project suspended" : "project not activated",
+    );
+    return;
+  }
+
+  var senderId = message.sender.userId;
+  if (!isRealtimeCapable(state, senderId)) {
+    sendRealtimeError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "FORBIDDEN",
+      "realtime capability required",
+    );
+    return;
+  }
+
+  var member = state.members[senderId];
+  if (input.sequence <= (member.lastRealtimeSequence === undefined ? -1 : member.lastRealtimeSequence)) {
+    sendRealtimeError(
+      dispatcher,
+      state,
+      opCode,
+      message.sender,
+      "INVALID_MESSAGE",
+      "sequence must increase",
+    );
+    return;
+  }
+  member.lastRealtimeSequence = input.sequence;
+
+  var now = nowMs();
+
+  if (opCode === OP_REALTIME_INPUT) {
+    var inputRetry = realtimeRateLimit(state, senderId, "realtimeInput", now, 1000, REALTIME_INPUT_RATE_LIMIT);
+    if (inputRetry) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "RATE_LIMITED", "realtime input rate exceeded", inputRetry);
+      return;
+    }
+    if (input.roundSequence !== state.realtime.roundSequence) {
+      // Stale-round input from before a beginRound() reset; drop silently.
+      return;
+    }
+    var record = state.realtime.latestInputs[senderId];
+    if (!record) {
+      record = { latest: null, ordered: [], dedupe: {} };
+      state.realtime.latestInputs[senderId] = record;
+    }
+    if (input.delivery === "latest") {
+      if (!record.latest || input.inputSequence > record.latest.inputSequence) {
+        record.latest = {
+          inputSequence: input.inputSequence,
+          targetTick: input.targetTick,
+          payload: input.payload,
+        };
+      }
+    } else {
+      if (record.dedupe[input.inputSequence]) return;
+      record.dedupe[input.inputSequence] = true;
+      record.ordered.push({
+        inputSequence: input.inputSequence,
+        targetTick: input.targetTick,
+        payload: input.payload,
+      });
+      while (record.ordered.length > REALTIME_MAX_ORDERED_INPUTS) {
+        var dropped = record.ordered.shift();
+        if (dropped) delete record.dedupe[dropped.inputSequence];
+      }
+    }
+    if (!state.hostId || !state.members[state.hostId] || !isRealtimeCapable(state, state.hostId)) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "HOST_REQUIRED", "realtime host required");
+      return;
+    }
+    var hostTarget = memberTarget(state.hostId, state.members[state.hostId]);
+    broadcastRealtimeEnvelope(
+      dispatcher,
+      state,
+      OP_REALTIME_INPUT,
+      "realtime_input",
+      {
+        senderId: senderId,
+        roundSequence: input.roundSequence,
+        inputSequence: input.inputSequence,
+        targetTick: input.targetTick,
+        delivery: input.delivery,
+        clientSendTime: input.clientSendTime,
+        serverReceiveTime: now,
+        payload: input.payload,
+      },
+      [hostTarget],
+      null,
+      true,
+    );
+    return;
+  }
+
+  if (opCode === OP_REALTIME_SNAPSHOT) {
+    if (senderId !== state.hostId) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "HOST_REQUIRED", "realtime host required");
+      return;
+    }
+    if (input.authorityEpoch !== state.realtime.authorityEpoch) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "STALE_VERSION", "stale authority epoch");
+      return;
+    }
+    if (input.roundSequence < state.realtime.roundSequence) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "STALE_VERSION", "stale round");
+      return;
+    }
+    var snapshotRetry = realtimeRateLimit(state, senderId, "realtimeSnapshot", now, 1000, REALTIME_SNAPSHOT_RATE_LIMIT);
+    if (snapshotRetry) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "RATE_LIMITED", "realtime snapshot rate exceeded", snapshotRetry);
+      return;
+    }
+    if (!state.realtime.active) {
+      var allCapable = orderedMemberIds(state.members).every(function (userId) {
+        return isRealtimeCapable(state, userId);
+      });
+      if (!allCapable) {
+        sendRealtimeError(dispatcher, state, opCode, message.sender, "INVALID_MESSAGE", "room has non-realtime members");
+        return;
+      }
+      state.realtime.active = true;
+    }
+    // A round number greater than the currently tracked round is the host
+    // publishing beginRound()'s tick zero: adopt the new round and drop all
+    // input/snapshot state carried over from the previous round.
+    if (input.roundSequence > state.realtime.roundSequence) {
+      state.realtime.roundSequence = input.roundSequence;
+      state.realtime.latestInputs = {};
+      state.realtime.latestSnapshot = null;
+    }
+    var previous = state.realtime.latestSnapshot;
+    if (
+      previous &&
+      (input.simulationTick <= previous.simulationTick ||
+        input.hostSnapshotSequence <= previous.hostSnapshotSequence)
+    ) {
+      // Late or duplicate echo; ignore without rewinding stored state.
+      return;
+    }
+    state.realtime.runtimeSnapshotSequence += 1;
+    state.realtime.latestSnapshot = {
+      state: input.state,
+      simulationTick: input.simulationTick,
+      hostSnapshotSequence: input.hostSnapshotSequence,
+      processedInputCursors: input.processedInputCursors || {},
+    };
+    broadcastRealtimeEnvelope(
+      dispatcher,
+      state,
+      OP_REALTIME_SNAPSHOT,
+      "realtime_snapshot",
+      {
+        hostId: state.hostId,
+        authorityEpoch: state.realtime.authorityEpoch,
+        roundSequence: state.realtime.roundSequence,
+        simulationTick: input.simulationTick,
+        runtimeSnapshotSequence: state.realtime.runtimeSnapshotSequence,
+        processedInputCursors: input.processedInputCursors || {},
+        serverTime: now,
+        state: input.state,
+      },
+      realtimeCapableTargets(state),
+      null,
+      true,
+    );
+    return;
+  }
+
+  if (opCode === OP_REALTIME_SYNC) {
+    var syncRetry = realtimeRateLimit(state, senderId, "realtimeSync", now, 1000, REALTIME_SYNC_RATE_LIMIT);
+    if (syncRetry) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "RATE_LIMITED", "realtime sync rate exceeded", syncRetry);
+      return;
+    }
+    var snapshot = state.realtime.latestSnapshot;
+    broadcastRealtimeEnvelope(
+      dispatcher,
+      state,
+      OP_REALTIME_SYNC,
+      "realtime_sync_response",
+      {
+        hostId: state.hostId || undefined,
+        authorityEpoch: state.realtime.authorityEpoch,
+        roundSequence: state.realtime.roundSequence,
+        simulationTick: snapshot ? snapshot.simulationTick : undefined,
+        runtimeSnapshotSequence: state.realtime.runtimeSnapshotSequence,
+        state: snapshot ? snapshot.state : undefined,
+        retainedInputs: retainedInputsForSync(state),
+        members: presenceList(state.members, state.hostId),
+        membersComplete: true,
+        membershipRevision: state.membershipRevision || 0,
+        serverTime: now,
+      },
+      [message.sender],
+      null,
+      true,
+    );
+    return;
+  }
+};
+
 var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
   // Nakama exposes int64 opcodes as numeric wrapper values in the JS runtime.
   var opCode = parseInt(String(message.opCode), 10);
+  if (
+    opCode === OP_REALTIME_INPUT ||
+    opCode === OP_REALTIME_SNAPSHOT ||
+    opCode === OP_REALTIME_SYNC
+  ) {
+    processRealtimeV2Message(logger, nk, dispatcher, state, message, opCode);
+    return;
+  }
   var expectedTypes = {};
   expectedTypes[OP_ACTION] = "action";
   expectedTypes[OP_EVENT] = "event";
