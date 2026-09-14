@@ -448,7 +448,8 @@ test("blendCorrection targets the live, continuously-advancing predicted state r
 
   const rendered1 = guestRoom.getRenderState(now);
   void rendered1;
-  const [callAfterReconcile] = calls.slice(-1);
+  const callAfterReconcile = calls.at(-1);
+  assert.ok(callAfterReconcile);
   assert.equal(callAfterReconcile.from, 20);
   assert.equal(callAfterReconcile.to, 10);
   assert.equal(callAfterReconcile.t, 0);
@@ -460,7 +461,8 @@ test("blendCorrection targets the live, continuously-advancing predicted state r
   now = now + step;
   guestRoom.advanceFrame(now);
   guestRoom.getRenderState(now);
-  const [callWhileCorrecting] = calls.slice(-1);
+  const callWhileCorrecting = calls.at(-1);
+  assert.ok(callWhileCorrecting);
   assert.equal(callWhileCorrecting.from, 20);
   assert.equal(callWhileCorrecting.to, 20);
   assert.ok(callWhileCorrecting.t > 0 && callWhileCorrecting.t < 1);
