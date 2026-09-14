@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.3.1"
+npm install @lokiplay/sdk@0.3.2"
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -147,9 +147,13 @@ const room = client.createRealtimeRoom<RacerState, RacerInput>({
     // Optional: advance state when no newer snapshot has arrived yet.
     return state;
   },
-  blendCorrection(predicted, authoritative, t) {
-    // Optional: smooth a misprediction back toward the authoritative state.
-    return authoritative;
+  blendCorrection(predicted, target, t) {
+    // Optional: smooth a misprediction (predicted, frozen at the moment the
+    // correction started) back toward `target`, which is the room's live,
+    // continuously-advancing #predictedState (not a delayed snapshot), so the
+    // blend always converges on zero-latency local prediction. t rises from
+    // 0 to 1 over correctionMs.
+    return target;
   },
 });
 
@@ -197,6 +201,18 @@ transport). Use the room's diagnostics to observe RTT, jitter, and
 reconnect/migration duration when tuning simulation and snapshot rates for a
 specific game; report the rates actually used along with this evidence rather
 than assuming defaults are sufficient for every game.
+
+`diagnostics: true` also exposes: `renderClockRate` (the current ±5%
+playback-rate nudge applied to keep the guest's render clock aligned with the
+host's tick cadence — see `REALTIME_ROOM_MAX_CLOCK_NUDGE`), `renderClockDriftTicks`
+(the error observed at the last nudge), `framesRendered` /
+`extrapolatedFrames` (compare these to see how often rendering had to
+extrapolate past the newest snapshot), `correctionCount` /
+`correctionsCompleted` (corrections started vs. ones that finished blending
+before being superseded by the next snapshot), and `lastSnapshotIntervalMs`
+(the actual wall-clock gap between the two most recently accepted snapshots,
+useful for confirming the real send/ack rate matches the configured
+`snapshotHz`).
 
 ### Migrating from hand-rolled racer networking
 

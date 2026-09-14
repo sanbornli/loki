@@ -350,3 +350,146 @@ test("setInput prediction advances local render state before the next host snaps
   assert.equal(reconciled?.positions.self, 10);
   assert.equal(guestRoom.getSnapshot().state?.positions.self, 0);
 });
+
+test("reconciliation replays the held control proportionally to ticks predicted ahead of the snapshot", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({});
+  const created = await hostRoom.create();
+  // No blendCorrection: getRenderState returns the raw predicted state
+  // directly so this test observes #reconcile()'s output, not a blend curve.
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
+    simulationHz: 60,
+    predict: (state, input) => {
+      if ("throttle" in input) {
+        return { positions: { ...state.positions, self: (state.positions.self ?? 0) + input.throttle } };
+      }
+      return state;
+    },
+    interpolate: (_from, to) => to,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { self: 0 } }, { simulationTick: 1 });
+  await sleep(5);
+
+  guestRoom.setInput({ throttle: 10 });
+  const t0 = 1_000;
+  const fixedStepMs = 1000 / 60;
+  // First call only seeds the accumulator; each subsequent call advances
+  // one fixed step plus a small epsilon (to sidestep floating-point ties at
+  // the exact catch-up boundary) so five held-input prediction steps
+  // accumulate (predictedTick reaches snapshotTick(1) + 5 = 6) before the
+  // next snapshot.
+  guestRoom.advanceFrame(t0);
+  for (let step = 1; step <= 5; step += 1) {
+    guestRoom.advanceFrame(t0 + step * (fixedStepMs + 0.01));
+  }
+  const beforeReconcile = guestRoom.getRenderState(t0 + 5 * fixedStepMs);
+  assert.equal(beforeReconcile?.positions.self, 50);
+
+  // The host only advanced one tick server-side, but the guest had predicted
+  // five ticks ahead of the previous snapshot; reconciliation must replay the
+  // held control that many ticks (not just once) so the corrected prediction
+  // does not collapse back to a single step. Wait out the host's 10Hz
+  // snapshot pacing so the second publish actually flushes.
+  hostRoom.publishSnapshot({ positions: { self: 0 } }, { simulationTick: 2 });
+  await sleep(120);
+  const reconciled = guestRoom.getRenderState(t0 + 6 * fixedStepMs);
+  assert.equal(reconciled?.positions.self, 40);
+});
+
+test("blendCorrection targets the live, continuously-advancing predicted state rather than a frozen value", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({});
+  const created = await hostRoom.create();
+  const calls: Array<{ from: number; to: number; t: number }> = [];
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
+    simulationHz: 60,
+    correctionMs: 200,
+    predict: (state, input) => {
+      if ("throttle" in input) {
+        return { positions: { ...state.positions, self: (state.positions.self ?? 0) + input.throttle } };
+      }
+      return state;
+    },
+    interpolate: (_from, to) => to,
+    blendCorrection: (predicted, authoritative, t) => {
+      calls.push({ from: predicted.positions.self ?? 0, to: authoritative.positions.self ?? 0, t });
+      return t >= 1 ? authoritative : predicted;
+    },
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { self: 0 } }, { simulationTick: 1 });
+  await sleep(5);
+
+  guestRoom.setInput({ throttle: 10 });
+  const t0 = 2_000;
+  const fixedStepMs = 1000 / 60;
+  const step = fixedStepMs + 0.01; // avoid float ties at the catch-up boundary
+  guestRoom.advanceFrame(t0);
+  guestRoom.advanceFrame(t0 + step);
+  guestRoom.advanceFrame(t0 + 2 * step);
+  let now = t0 + 2 * step;
+  assert.equal(guestRoom.getRenderState(now)?.positions.self, 20);
+
+  // Trigger a reconcile that creates a pending correction: the previous
+  // predicted state (self=20) becomes pendingCorrection.from, and #reconcile
+  // rebuilds #predictedState from the new snapshot (self=10, one held-input
+  // tick ahead). Wait out the host's 10Hz snapshot pacing so it flushes.
+  hostRoom.publishSnapshot({ positions: { self: 0 } }, { simulationTick: 2 });
+  await sleep(120);
+
+  const rendered1 = guestRoom.getRenderState(now);
+  void rendered1;
+  const [callAfterReconcile] = calls.slice(-1);
+  assert.equal(callAfterReconcile.from, 20);
+  assert.equal(callAfterReconcile.to, 10);
+  assert.equal(callAfterReconcile.t, 0);
+
+  // Advance the live prediction further while the correction is still
+  // in-flight (t still < 1); the target passed to blendCorrection must track
+  // that live prediction (10 -> 20), not stay pinned at a delayed/stale
+  // value the way the old authoritative-interpolation target would have.
+  now = now + step;
+  guestRoom.advanceFrame(now);
+  guestRoom.getRenderState(now);
+  const [callWhileCorrecting] = calls.slice(-1);
+  assert.equal(callWhileCorrecting.from, 20);
+  assert.equal(callWhileCorrecting.to, 20);
+  assert.ok(callWhileCorrecting.t > 0 && callWhileCorrecting.t < 1);
+  assert.notEqual(callAfterReconcile.to, callWhileCorrecting.to);
+});
+
+test("diagnostics expose render-clock drift/rate, frame counts, and snapshot cadence", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ diagnostics: true });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
+    diagnostics: true,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(120);
+  hostRoom.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
+  await sleep(120);
+
+  guestRoom.getRenderState(performance.now());
+  const snapshot = guestRoom.getSnapshot();
+  assert.ok(snapshot.diagnostics);
+  assert.ok((snapshot.diagnostics?.framesRendered ?? 0) > 0);
+  assert.ok((snapshot.diagnostics?.renderClockRate ?? 0) >= 0.95);
+  assert.ok((snapshot.diagnostics?.renderClockRate ?? 0) <= 1.05);
+  assert.equal(typeof snapshot.diagnostics?.renderClockDriftTicks, "number");
+  assert.ok((snapshot.diagnostics?.lastSnapshotIntervalMs ?? 0) >= 90);
+});

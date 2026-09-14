@@ -85,11 +85,19 @@ export type RealtimeRoomDiagnostics = {
   snapshotsCoalesced: number;
   snapshotsAcked: number;
   extrapolatedFrames: number;
+  framesRendered: number;
   correctionCount: number;
+  correctionsCompleted: number;
   reconnectCount: number;
   lastReconnectDurationMs?: number;
   hostMigrationCount: number;
   lastHostMigrationDurationMs?: number;
+  /** Current render-clock playback rate multiplier (nudged within ±REALTIME_ROOM_MAX_CLOCK_NUDGE). */
+  renderClockRate: number;
+  /** Ticks the render clock was ahead (positive) or behind (negative) of the latest snapshot at the last nudge. */
+  renderClockDriftTicks: number;
+  /** Wall-clock time between the two most recently accepted snapshots. */
+  lastSnapshotIntervalMs?: number;
 };
 
 export type InputsForTick<Input> = {
@@ -103,7 +111,14 @@ export type RealtimeRoomOptions<State, Input> = {
   predict?(state: State, input: Input, dtSeconds: number): State;
   interpolate?(from: State, to: State, t: number): State;
   extrapolate?(state: State, dtSeconds: number): State;
-  blendCorrection?(predicted: State, authoritative: State, t: number): State;
+  /**
+   * Smooths a misprediction back toward the room's live predicted state.
+   * `from` is frozen at the moment the correction started (the stale,
+   * pre-reconcile pose); `target` is the current #predictedState, which
+   * keeps advancing every advanceFrame() while the correction is in flight.
+   * `t` rises from 0 to 1 over `correctionMs`.
+   */
+  blendCorrection?(from: State, target: State, t: number): State;
   simulationHz?: number;
   snapshotHz?: number;
   inputHz?: number;
@@ -226,8 +241,17 @@ type HostInputRecord<Input> = {
  * rendering via the predict/interpolate/extrapolate/blendCorrection
  * callbacks; RealtimeRoom never runs simulation on its own. Held setInput()
  * controls are predicted on each advanceFrame() step; sendInput() commands
- * apply one prediction step immediately. Reconciliation restores the latest
- * snapshot and replays the held control plus unacknowledged ordered inputs.
+ * apply one prediction step immediately. On each new snapshot, reconciliation
+ * restores the authoritative state and replays unacknowledged ordered inputs
+ * plus the held control for however many ticks prediction had advanced ahead
+ * of the previous snapshot (bounded to REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS
+ * snapshot intervals). blendCorrection always targets the live predicted
+ * state, not the delayed authoritative interpolation, so a correction
+ * converges on zero-latency local prediction. The render clock re-anchors on
+ * every accepted snapshot and nudges its playback rate by at most
+ * REALTIME_ROOM_MAX_CLOCK_NUDGE so persistent drift between the host's tick
+ * clock and the guest's is corrected gradually instead of causing runaway
+ * extrapolation or stalls.
  */
 export class RealtimeRoom<State, Input> {
   readonly #host: RealtimeRoomHost;
@@ -283,6 +307,9 @@ export class RealtimeRoom<State, Input> {
 
   // Presentation-only local prediction: held setInput() plus unacked sendInput().
   #predictedState?: State;
+  // Simulation tick the current #predictedState represents, so reconciliation
+  // knows how many ticks of held input to replay. -1 means no prediction.
+  #predictedTick = -1;
   #pendingCorrection?: { from: State };
   #correctionStartedAt?: number;
 
@@ -298,9 +325,13 @@ export class RealtimeRoom<State, Input> {
     snapshotsCoalesced: 0,
     snapshotsAcked: 0,
     extrapolatedFrames: 0,
+    framesRendered: 0,
     correctionCount: 0,
+    correctionsCompleted: 0,
     reconnectCount: 0,
     hostMigrationCount: 0,
+    renderClockRate: 1,
+    renderClockDriftTicks: 0,
   };
 
   constructor(host: RealtimeRoomHost, options: RealtimeRoomOptions<State, Input> = {}) {
@@ -518,8 +549,12 @@ export class RealtimeRoom<State, Input> {
     this.#previousSnapshot = undefined;
     this.#latestSnapshot = undefined;
     this.#predictedState = undefined;
+    this.#predictedTick = -1;
     this.#pendingCorrection = undefined;
     this.#correctionStartedAt = undefined;
+    this.#renderClockAnchor = undefined;
+    this.#renderClockRate = 1;
+    this.#lastSnapshotReceivedAt = undefined;
     for (const pending of this.#orderedPending.values()) {
       pending.reject(new RealtimeRoomError("stale", "round restarted"));
     }
@@ -585,10 +620,17 @@ export class RealtimeRoom<State, Input> {
         : this.#correctionMs <= 0
           ? 1
           : clamp((now - (this.#correctionStartedAt ?? now)) / this.#correctionMs, 0, 1);
-      const blended = this.#options.blendCorrection(from, authoritative ?? predicted, t);
+      // Blend toward the live, continuously-advancing predicted state, not the
+      // delayed authoritative interpolation. #predictedState keeps stepping
+      // forward every advanceFrame() while a correction is in flight, so the
+      // target here is never latency-behind; the correction converges on
+      // zero-latency local prediction instead of snapping back to state that
+      // is interpolationDelayMs old.
+      const blended = this.#options.blendCorrection(from, predicted, t);
       if (this.#pendingCorrection && t >= 1) {
         this.#pendingCorrection = undefined;
         this.#correctionStartedAt = undefined;
+        this.#diagnostics.correctionsCompleted += 1;
       }
       return blended;
     }
@@ -599,6 +641,7 @@ export class RealtimeRoom<State, Input> {
   #sampleAuthoritative(now: number): State | undefined {
     const latest = this.#latestSnapshot;
     if (!latest) return undefined;
+    this.#diagnostics.framesRendered += 1;
     const fixedStepMs = 1000 / this.#simulationHz;
     const delayTicks = Math.max(0, Math.round(this.#interpolationDelayMs() / fixedStepMs));
     const renderClockTick = this.#renderClockTick(now, fixedStepMs);
@@ -626,14 +669,54 @@ export class RealtimeRoom<State, Input> {
   }
 
   #renderClockAnchor?: { now: number; tick: number };
+  #renderClockRate = 1;
+  #lastSnapshotReceivedAt?: number;
 
   #renderClockTick(now: number, fixedStepMs: number): number {
     const latestTick = this.#latestSnapshot?.simulationTick ?? 0;
     if (!this.#renderClockAnchor) {
       this.#renderClockAnchor = { now, tick: latestTick };
+      this.#renderClockRate = 1;
     }
-    const elapsedTicks = Math.round((now - this.#renderClockAnchor.now) / fixedStepMs);
-    return this.#renderClockAnchor.tick + elapsedTicks;
+    const elapsedTicks = ((now - this.#renderClockAnchor.now) / fixedStepMs) * this.#renderClockRate;
+    return Math.round(this.#renderClockAnchor.tick + elapsedTicks);
+  }
+
+  /**
+   * Re-anchors the render clock to every accepted snapshot without letting the
+   * visible render tick jump, then nudges the playback rate by at most
+   * REALTIME_ROOM_MAX_CLOCK_NUDGE toward the host's actual tick cadence. This
+   * corrects persistent drift gradually instead of letting the render clock
+   * race permanently ahead (runaway extrapolation) or fall permanently behind
+   * (stalled interpolation).
+   */
+  #nudgeRenderClock(now: number): void {
+    const latest = this.#latestSnapshot;
+    if (!latest) return;
+    const fixedStepMs = 1000 / this.#simulationHz;
+    if (!this.#renderClockAnchor) {
+      this.#renderClockAnchor = { now, tick: latest.simulationTick };
+      this.#renderClockRate = 1;
+      this.#diagnostics.renderClockRate = 1;
+      this.#diagnostics.renderClockDriftTicks = 0;
+      return;
+    }
+    const estimatedTick = this.#renderClockTick(now, fixedStepMs);
+    const error = latest.simulationTick - estimatedTick;
+    this.#renderClockAnchor = { now, tick: estimatedTick };
+    const snapshotIntervalTicks = Math.max(1, Math.round(this.#snapshotIntervalMs / fixedStepMs));
+    const correctionPerTick = clamp(
+      error / snapshotIntervalTicks,
+      -REALTIME_ROOM_MAX_CLOCK_NUDGE,
+      REALTIME_ROOM_MAX_CLOCK_NUDGE,
+    );
+    this.#renderClockRate = clamp(
+      1 + correctionPerTick,
+      1 - REALTIME_ROOM_MAX_CLOCK_NUDGE,
+      1 + REALTIME_ROOM_MAX_CLOCK_NUDGE,
+    );
+    this.#diagnostics.renderClockRate = this.#renderClockRate;
+    this.#diagnostics.renderClockDriftTicks = error;
   }
 
   #interpolationDelayMs(): number {
@@ -807,13 +890,22 @@ export class RealtimeRoom<State, Input> {
         this.#previousSnapshot = undefined;
         this.#latestSnapshot = undefined;
         this.#predictedState = undefined;
+        this.#predictedTick = -1;
         this.#pendingCorrection = undefined;
         this.#correctionStartedAt = undefined;
         this.#renderClockAnchor = undefined;
+        this.#renderClockRate = 1;
+        this.#lastSnapshotReceivedAt = undefined;
       }
       if (this.#latestSnapshot && message.simulationTick <= this.#latestSnapshot.simulationTick) return;
+      const receivedAt = monotonicNow();
+      if (this.#lastSnapshotReceivedAt !== undefined) {
+        this.#diagnostics.lastSnapshotIntervalMs = receivedAt - this.#lastSnapshotReceivedAt;
+      }
+      this.#lastSnapshotReceivedAt = receivedAt;
       this.#previousSnapshot = this.#latestSnapshot;
       this.#latestSnapshot = { state: message.state as State, simulationTick: message.simulationTick };
+      this.#nudgeRenderClock(receivedAt);
       this.#hostId = message.hostId || this.#hostId;
       if (this.#playerId === message.hostId) {
         this.#diagnostics.snapshotsAcked += 1;
@@ -844,6 +936,8 @@ export class RealtimeRoom<State, Input> {
         this.#previousSnapshot = undefined;
         this.#latestSnapshot = { state: message.state as State, simulationTick: message.simulationTick };
         this.#renderClockAnchor = undefined;
+        this.#renderClockRate = 1;
+        this.#lastSnapshotReceivedAt = undefined;
         this.#reconcile();
       }
       if (this.#reconnectStartedAt !== undefined) {
@@ -916,26 +1010,52 @@ export class RealtimeRoom<State, Input> {
     if (!this.#options.predict) return;
     const base = this.#predictedState ?? this.#latestSnapshot?.state;
     if (base === undefined) return;
+    const baseTick = this.#predictedTick >= 0 ? this.#predictedTick : this.#latestSnapshot?.simulationTick ?? 0;
     this.#predictedState = this.#options.predict(cloneJson(base), input, 1 / this.#simulationHz);
+    this.#predictedTick = baseTick + 1;
   }
 
   #reconcile(): void {
     if (!this.#options.predict || !this.#latestSnapshot) return;
     const oldPredicted = this.#predictedState;
+    const previousPredictedTick = this.#predictedTick;
     const dtSeconds = 1 / this.#simulationHz;
+    const snapshotTick = this.#latestSnapshot.simulationTick;
     const hasHeld = this.#latestInput !== undefined;
     const ordered = [...this.#orderedPending.values()].sort((a, b) => a.inputSequence - b.inputSequence);
     if (!hasHeld && ordered.length === 0) {
       this.#predictedState = undefined;
+      this.#predictedTick = -1;
     } else {
       let next = cloneJson(this.#latestSnapshot.state);
+      let tick = snapshotTick;
       for (const pending of ordered) {
         next = this.#options.predict(cloneJson(next), pending.input, dtSeconds);
+        tick += 1;
       }
-      if (this.#latestInput !== undefined) {
-        next = this.#options.predict(cloneJson(next), this.#latestInput, dtSeconds);
+      const heldInput = this.#latestInput;
+      if (heldInput !== undefined) {
+        // Replay the held control for however many ticks prediction had
+        // advanced ahead of the previous authoritative tick, so continuous
+        // steering does not collapse back to a single predicted step every
+        // time a new snapshot lands. Bounded to the same catch-up window as
+        // extrapolation so a large gap (e.g. after a reconnect) cannot cause
+        // an unbounded replay.
+        const fixedStepMs = 1000 / this.#simulationHz;
+        const snapshotIntervalTicks = Math.max(1, Math.round(this.#snapshotIntervalMs / fixedStepMs));
+        const maxReplaySteps = REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS * snapshotIntervalTicks;
+        const heldSteps = clamp(
+          previousPredictedTick >= 0 ? previousPredictedTick - snapshotTick : 1,
+          1,
+          maxReplaySteps,
+        );
+        for (let step = 0; step < heldSteps; step += 1) {
+          next = this.#options.predict(cloneJson(next), heldInput, dtSeconds);
+          tick += 1;
+        }
       }
       this.#predictedState = next;
+      this.#predictedTick = tick;
     }
     if (this.#options.blendCorrection && oldPredicted !== undefined) {
       this.#pendingCorrection = { from: oldPredicted };
@@ -1081,9 +1201,12 @@ export class RealtimeRoom<State, Input> {
     this.#previousSnapshot = undefined;
     this.#latestSnapshot = undefined;
     this.#predictedState = undefined;
+    this.#predictedTick = -1;
     this.#pendingCorrection = undefined;
     this.#correctionStartedAt = undefined;
     this.#renderClockAnchor = undefined;
+    this.#renderClockRate = 1;
+    this.#lastSnapshotReceivedAt = undefined;
     this.#pendingSnapshot = undefined;
     this.#inFlightSnapshots = 0;
     this.#lastSentSimulationTick = -1;
