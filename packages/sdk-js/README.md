@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.3.5
+npm install @lokiplay/sdk@0.3.6
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -236,6 +236,62 @@ diagnostics (e.g. "car 3 corrected by 0.4m") are similarly game-specific and
 are expected to be computed inside `shouldCorrect`/`composeRenderState`
 rather than built into Loki's diagnostics.
 
+#### `createEntityCompositor` / `createLocalPrediction` helpers
+
+Hand-writing a `composeRenderState` that renders the local entity from
+prediction and every other entity from interpolation (or a `predict` that
+only ever touches the local entity) is the same boilerplate for most
+multi-entity games. `createEntityCompositor` and `createLocalPrediction`
+cover that plumbing; the game still supplies the selectors that know its own
+State shape — Loki still has no built-in concept of "entity", "position", or
+"heading":
+
+```ts
+import { createEntityCompositor, createLocalPrediction } from "@lokiplay/sdk";
+
+const room = client.createRealtimeRoom<RacerState, RacerInput>({
+  predict: createLocalPrediction<RacerState, CarState, RacerInput>({
+    localEntityId: () => client.playerId,
+    getLocalEntity: (state, id) => state.cars[id],
+    predictLocal: (car, input, dtSeconds) => stepCar(car, input, dtSeconds),
+    replaceLocalEntity: (state, id, car) => ({ ...state, cars: { ...state.cars, [id]: car } }),
+  }),
+  composeRenderState: createEntityCompositor<RacerState, CarState>({
+    listEntityIds: (state) => Object.keys(state.cars),
+    getEntity: (state, id) => state.cars[id],
+    setEntity: (state, id, car) => ({ ...state, cars: { ...state.cars, [id]: car } }),
+    isLocalEntity: (id) => id === client.playerId,
+  }),
+});
+```
+
+`createLocalPrediction` guards against a common mistake — a `predict()` that
+closes over the whole state and accidentally advances every entity (guessing
+other players' controls) instead of just the local one.
+
+### Confirmed effects
+
+Speculative local effects (collision particles, impact audio) need to be
+reconciled against the host's authoritative outcome without the game
+building its own event-confirmation channel. Host-only `sendEffect()`
+confirms an event with a stable, runtime-assigned `effectId` (unique even
+across host migrations), reliably broadcast to every member — including the
+host itself, through the same `onConfirmedEffect()` path everyone else
+uses — plus replayed to a reconnecting member from a short server-side
+retained-effect ring so it isn't missed. Loki never interprets `payload`:
+
+```ts
+// Host, e.g. on detecting a collision:
+room.sendEffect({ kind: "collision", entities: ["car-1", "car-2"] }, { simulationTick });
+
+// Every member, including the host:
+room.onConfirmedEffect((effect) => {
+  // effect.effectId is stable and delivered at most once per subscriber;
+  // dedupe a speculative local effect already played for the same event.
+  playConfirmedCollision(effect.payload);
+});
+```
+
 ### Lifecycle and round flow
 
 Rooms use protocol v1 for membership, presence, and host-migration control
@@ -289,6 +345,33 @@ set explicitly. `snapshotSequenceGaps` counts missing `runtimeSnapshotSequence`
 numbers between consecutive accepted snapshots, and
 `snapshotsCoalescedOnReceive` counts snapshots that were superseded by a
 newer one before the game ever called `getRenderState()` to sample them.
+
+`publishSnapshot()` defers its flush to a microtask, so if a host calls it
+more than once within the same synchronous turn (e.g. a catch-up frame that
+simulates several steps before rendering), only the newest state is ever
+transmitted — every call after the first just overwrites the pending state
+and increments `snapshotsCoalesced`, matching the same-turn coalescing a
+game would otherwise have to implement itself.
+
+`diagnostics: true` also exposes host-only publish-cadence diagnostics
+measured from `publishSnapshot()`'s own call times (distinct from the
+runtime/guest-side cadence numbers above, which measure the wire):
+`snapshotPublishCalls`, `lastSnapshotPublishIntervalMs`,
+`effectiveSnapshotHz` (the smoothed actual send rate observed on the wire),
+`missedSnapshotWindows`, `hostFrameStallCount`, and `lastHostFrameStallMs`.
+These flag problems Loki cannot fix itself — the host's own frame loop
+stalling, or calling `publishSnapshot()` faster than its configured rate
+needs — via an optional `onDiagnosticWarning(event)` callback:
+
+```ts
+const room = client.createRealtimeRoom<RacerState, RacerInput>({
+  onDiagnosticWarning(event) {
+    // event.type: "back_to_back_publish" | "host_frame_stall"
+    //           | "missed_snapshot_window" | "low_effective_snapshot_rate"
+    console.warn("[loki]", event);
+  },
+});
+```
 
 ### Migrating from hand-rolled racer networking
 

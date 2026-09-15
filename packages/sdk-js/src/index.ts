@@ -27,6 +27,7 @@ import {
   type SynchronizedRoomOptions,
 } from "./synchronized-room.js";
 import { RealtimeRoom, type RealtimeRoomOptions } from "./realtime-room.js";
+import { createEntityCompositor, createLocalPrediction } from "./realtime-entities.js";
 
 export {
   SYNCHRONIZED_ROOM_ACTION_TTL_MS,
@@ -56,9 +57,13 @@ export type {
 } from "./synchronized-room.js";
 
 export {
+  REALTIME_ROOM_BACK_TO_BACK_PUBLISH_FACTOR,
   REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS,
   REALTIME_ROOM_DEFAULT_SNAPSHOT_HZ,
+  REALTIME_ROOM_HOST_STALL_FACTOR,
+  REALTIME_ROOM_HOST_STALL_FLOOR_MS,
   REALTIME_ROOM_IN_FLIGHT_BUDGET_MS,
+  REALTIME_ROOM_LOW_EFFECTIVE_RATE_FACTOR,
   REALTIME_ROOM_MAX_CATCHUP_STEPS,
   REALTIME_ROOM_MAX_CLOCK_NUDGE,
   REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS,
@@ -66,6 +71,7 @@ export {
   REALTIME_ROOM_MAX_INPUT_HZ,
   REALTIME_ROOM_MAX_MESSAGE_BYTES,
   REALTIME_ROOM_MAX_ORDERED_INPUTS,
+  REALTIME_ROOM_MAX_SEEN_EFFECT_IDS,
   REALTIME_ROOM_MAX_SNAPSHOT_HZ,
   REALTIME_ROOM_MIN_INTERPOLATION_DELAY_MS,
   REALTIME_ROOM_DEFAULT_CORRECTION_MS,
@@ -74,13 +80,18 @@ export {
 } from "./realtime-room.js";
 export type {
   InputsForTick,
+  RealtimeRoomConfirmedEffect,
   RealtimeRoomDiagnostics,
+  RealtimeRoomDiagnosticWarning,
   RealtimeRoomHost,
   RealtimeRoomOptions,
   RealtimeRoomOutcome,
   RealtimeRoomRenderStates,
   RealtimeRoomSnapshot,
 } from "./realtime-room.js";
+
+export { createEntityCompositor, createLocalPrediction };
+export type { EntitySelectors, LocalPredictionSelectors } from "./realtime-entities.js";
 
 export { dequantize, quantize };
 export {
@@ -322,9 +333,9 @@ export class LokiClient {
     );
   }
 
-  createRealtimeRoom<State, Input>(
+  createRealtimeRoom<State, Input, Effect = unknown>(
     options: RealtimeRoomOptions<State, Input> = {},
-  ): RealtimeRoom<State, Input> {
+  ): RealtimeRoom<State, Input, Effect> {
     if (!this.#unsubscribe) this.initialize();
     return new RealtimeRoom(
       {
@@ -335,6 +346,7 @@ export class LokiClient {
         reconnect: () => this.reconnect(),
         sendRealtimeInput: (payload, extras) => this.sendRealtimeInput(payload, extras),
         sendRealtimeSnapshot: (state, extras) => this.sendRealtimeSnapshot(state, extras),
+        sendRealtimeEffect: (payload, extras) => this.sendRealtimeEffect(payload, extras),
         requestRealtimeSync: () => this.requestRealtimeSync(),
         onMessage: (listener) => this.onMessage(listener),
         onRealtimeMessage: (listener) => this.onRealtimeMessage(listener),
@@ -680,6 +692,29 @@ export class LokiClient {
     await this.#transport.sendRealtime(message);
   }
 
+  async sendRealtimeEffect(
+    payload: unknown,
+    options: {
+      authorityEpoch: number;
+      roundSequence: number;
+      simulationTick: number;
+    },
+  ): Promise<void> {
+    if (!this.#roomId) throw new Error("join a room before sending a realtime effect");
+    if (!this.#transport.sendRealtime) throw new Error("realtime rooms are unsupported by this transport");
+    const message = RealtimeClientEnvelopeSchema.parse({
+      protocolVersion: REALTIME_PROTOCOL_VERSION,
+      roomId: this.#roomId,
+      sequence: ++this.#realtimeSendSequence,
+      type: "realtime_effect",
+      authorityEpoch: options.authorityEpoch,
+      roundSequence: options.roundSequence,
+      simulationTick: options.simulationTick,
+      payload,
+    });
+    await this.#transport.sendRealtime(message);
+  }
+
   async requestRealtimeSync(): Promise<void> {
     if (!this.#roomId) throw new Error("join a room before requesting realtime sync");
     if (!this.#transport.sendRealtime) throw new Error("realtime rooms are unsupported by this transport");
@@ -988,7 +1023,9 @@ export class FirstPartyTransport implements LokiTransport {
         ? REALTIME_OPCODES.input
         : message.type === "realtime_snapshot"
           ? REALTIME_OPCODES.snapshot
-          : REALTIME_OPCODES.sync;
+          : message.type === "realtime_effect"
+            ? REALTIME_OPCODES.effect
+            : REALTIME_OPCODES.sync;
     await socket.sendMatchState(
       message.roomId,
       opCode,

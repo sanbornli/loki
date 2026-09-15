@@ -58,6 +58,16 @@
       "protocolVersion": 2,
       "roomId": "00000000-0000-4000-8000-000000000001",
       "sequence": 4,
+      "type": "realtime_effect",
+      "authorityEpoch": 0,
+      "roundSequence": 0,
+      "simulationTick": 12,
+      "payload": { "kind": "collision", "entities": ["car-a", "car-b"] }
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 5,
       "type": "realtime_sync_request"
     }
   ],
@@ -95,6 +105,19 @@
       "protocolVersion": 2,
       "roomId": "00000000-0000-4000-8000-000000000001",
       "sequence": 3,
+      "type": "realtime_effect",
+      "hostId": "player-b",
+      "authorityEpoch": 0,
+      "roundSequence": 0,
+      "simulationTick": 12,
+      "effectId": "0-0-1",
+      "serverTime": 1015,
+      "payload": { "kind": "collision", "entities": ["car-a", "car-b"] }
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 4,
       "type": "realtime_sync_response",
       "hostId": "player-b",
       "authorityEpoch": 0,
@@ -111,6 +134,14 @@
           "payload": { "action": "fire" }
         }
       ],
+      "retainedEffects": [
+        {
+          "effectId": "0-0-1",
+          "simulationTick": 12,
+          "serverTime": 1015,
+          "payload": { "kind": "collision", "entities": ["car-a", "car-b"] }
+        }
+      ],
       "members": [
         { "playerId": "player-a", "sessionId": "sess-a", "joinedAt": 1, "host": false },
         { "playerId": "player-b", "sessionId": "sess-b", "joinedAt": 2, "host": true }
@@ -122,7 +153,7 @@
     {
       "protocolVersion": 2,
       "roomId": "00000000-0000-4000-8000-000000000001",
-      "sequence": 4,
+      "sequence": 5,
       "type": "error",
       "code": "STALE_VERSION",
       "message": "stale round"

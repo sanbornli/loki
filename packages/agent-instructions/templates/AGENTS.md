@@ -77,11 +77,22 @@
   driven by `advanceFrame()`/`getRenderState()`. Keep authoritative snapshots
   compact and self-contained (no references to transient local-only state).
   Host publishes snapshots at a chosen rate up to the runtime's cap (30 Hz;
-  default 10 Hz); do not exceed it. A game that needs the higher cadence must
-  pass `snapshotHz` and set `tickRate` to match; otherwise Loki stays at
-  10 Hz. Report the selected snapshot/input rates and the observed
-  diagnostics (RTT, jitter, reconnect/migration duration, dropped/coalesced
-  frames) as evidence, not assumptions.
+  default 10 Hz); do not exceed it. `publishSnapshot()` already coalesces
+  multiple calls made within the same synchronous turn to a single send; do
+  not build a separate coalescing layer for that. A game that needs the
+  higher cadence must pass `snapshotHz` and set `tickRate` to match;
+  otherwise Loki stays at 10 Hz. Report the selected snapshot/input rates
+  and the observed diagnostics (RTT, jitter, reconnect/migration duration,
+  dropped/coalesced frames, and any `onDiagnosticWarning` cadence warnings)
+  as evidence, not assumptions.
+- For multi-entity games, prefer the `createEntityCompositor`/
+  `createLocalPrediction` helpers over hand-writing `composeRenderState`/
+  `predict` selection logic; they cover the "predict/compose the local
+  entity, interpolate the rest" plumbing while the game still supplies the
+  selectors for its own State shape. Use `sendEffect()`/`onConfirmedEffect()`
+  to confirm authoritative events (e.g. collisions) with a stable id instead
+  of a custom event-confirmation channel, so speculative local particles or
+  audio can be deduped against the confirmed outcome.
 - Do not claim Loki supplies game physics, collision resolution, rendering
   optimization, or competitive/anti-cheat integrity for `createRealtimeRoom()`
   games. Loki owns transport, sequencing, fencing, and delivery only; the game

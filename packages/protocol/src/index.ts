@@ -287,6 +287,7 @@ export const REALTIME_OPCODES = {
   input: 17,
   snapshot: 18,
   sync: 19,
+  effect: 20,
 } as const;
 
 export const RealtimeDeliverySchema = z.enum(["latest", "ordered"]);
@@ -306,6 +307,21 @@ export const RealtimeRetainedInputSchema = z
     inputSequence: RealtimeInputSequenceSchema,
     targetTick: RealtimeTickSchema,
     delivery: RealtimeDeliverySchema,
+    payload: z.unknown(),
+  })
+  .strict();
+
+// A stable, host-confirmed event id (e.g. a collision) that guests can use
+// to dedupe speculative local effects (particles/audio) against the
+// authoritative outcome, without Loki knowing anything about what the
+// event represents. effectId is assigned by the runtime, not the host, so
+// it stays unique across host migrations even if the new host's own
+// sequence counters restart from zero.
+export const RealtimeRetainedEffectSchema = z
+  .object({
+    effectId: z.string().min(1).max(128),
+    simulationTick: RealtimeTickSchema,
+    serverTime: z.number().int().nonnegative(),
     payload: z.unknown(),
   })
   .strict();
@@ -331,6 +347,14 @@ export const RealtimeClientEnvelopeSchema = z.discriminatedUnion("type", [
     hostSendTime: z.number().int().nonnegative(),
     processedInputCursors: z.record(z.string(), z.number().int().nonnegative()).default({}),
     state: z.unknown(),
+  }),
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_effect"),
+    authorityEpoch: z.number().int().nonnegative(),
+    roundSequence: z.number().int().nonnegative(),
+    simulationTick: RealtimeTickSchema,
+    payload: z.unknown(),
   }),
   z.object({
     ...RealtimeEnvelopeBase,
@@ -366,6 +390,17 @@ export const RealtimeServerEnvelopeSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_effect"),
+    hostId: z.string().min(1).max(128),
+    authorityEpoch: z.number().int().nonnegative(),
+    roundSequence: z.number().int().nonnegative(),
+    simulationTick: RealtimeTickSchema,
+    effectId: z.string().min(1).max(128),
+    serverTime: z.number().int().nonnegative(),
+    payload: z.unknown(),
+  }),
+  z.object({
+    ...RealtimeEnvelopeBase,
     type: z.literal("realtime_sync_response"),
     hostId: z.string().min(1).max(128).optional(),
     authorityEpoch: z.number().int().nonnegative(),
@@ -374,6 +409,7 @@ export const RealtimeServerEnvelopeSchema = z.discriminatedUnion("type", [
     runtimeSnapshotSequence: z.number().int().nonnegative().optional(),
     state: z.unknown().optional(),
     retainedInputs: z.array(RealtimeRetainedInputSchema).default([]),
+    retainedEffects: z.array(RealtimeRetainedEffectSchema).default([]),
     members: z.array(PresenceSchema),
     membersComplete: z.boolean().optional(),
     membershipRevision: z.number().int().nonnegative().optional(),
@@ -390,6 +426,7 @@ export const RealtimeServerEnvelopeSchema = z.discriminatedUnion("type", [
 
 export type RealtimeDelivery = z.infer<typeof RealtimeDeliverySchema>;
 export type RealtimeRetainedInput = z.infer<typeof RealtimeRetainedInputSchema>;
+export type RealtimeRetainedEffect = z.infer<typeof RealtimeRetainedEffectSchema>;
 export type RealtimeClientEnvelope = z.infer<typeof RealtimeClientEnvelopeSchema>;
 export type RealtimeServerEnvelope = z.infer<typeof RealtimeServerEnvelopeSchema>;
 

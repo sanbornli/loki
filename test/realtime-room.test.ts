@@ -842,3 +842,118 @@ test("composeRenderState lets a game render entities from different streams, and
   assert.equal(reconciled?.positions.host, 1);
   assert.ok(composedInterpolatedValues.every((value) => value === 1));
 });
+
+test("publishSnapshot() called multiple times in one synchronous turn coalesces to a single send of the newest state", async () => {
+  const bus = new RealtimeBus();
+  const { client } = await connectedClient(bus);
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({ diagnostics: true });
+  await room.create();
+
+  // Simulate a host catch-up frame that runs several simulation steps and
+  // calls publishSnapshot() after each one, all within the same synchronous
+  // turn (no awaits in between).
+  for (let tick = 1; tick <= 5; tick += 1) {
+    room.publishSnapshot({ positions: { self: tick } }, { simulationTick: tick });
+  }
+  // The flush is deferred to a microtask, which runs before this awaited
+  // sleep resolves.
+  await sleep(5);
+
+  const snapshot = room.getSnapshot();
+  assert.equal(snapshot.diagnostics?.snapshotsSent, 1);
+  assert.equal(snapshot.diagnostics?.snapshotsCoalesced, 4);
+  assert.equal(snapshot.state?.positions.self, 5);
+});
+
+test("publish cadence diagnostics flag back-to-back calls and host frame stalls, and track effective send rate", async () => {
+  const bus = new RealtimeBus();
+  const { client } = await connectedClient(bus);
+  const warnings: Array<{ type: string }> = [];
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({
+    diagnostics: true,
+    onDiagnosticWarning: (event) => warnings.push(event),
+  });
+  await room.create();
+
+  room.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(1);
+  // A call an instant later than the first is well within the same cadence
+  // window at the default 10 Hz (100ms), so it should be flagged.
+  room.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
+  assert.ok(warnings.some((event) => event.type === "back_to_back_publish"));
+
+  await sleep(120);
+  // A long gap simulating a stalled host frame loop. The stall threshold is
+  // max(3 * snapshotInterval, 150ms) = 300ms at the default 10 Hz.
+  room.publishSnapshot({ positions: { self: 3 } }, { simulationTick: 3 });
+  await sleep(500);
+  room.publishSnapshot({ positions: { self: 4 } }, { simulationTick: 4 });
+  await sleep(120);
+
+  const diagnostics = room.getSnapshot().diagnostics;
+  assert.ok((diagnostics?.hostFrameStallCount ?? 0) >= 1);
+  assert.ok((diagnostics?.lastHostFrameStallMs ?? 0) >= 300);
+  assert.ok((diagnostics?.missedSnapshotWindows ?? 0) >= 1);
+  assert.ok(warnings.some((event) => event.type === "host_frame_stall"));
+  assert.ok(warnings.some((event) => event.type === "missed_snapshot_window"));
+  assert.equal(typeof diagnostics?.snapshotPublishCalls, "number");
+  assert.ok((diagnostics?.snapshotPublishCalls ?? 0) >= 4);
+  assert.equal(typeof diagnostics?.effectiveSnapshotHz, "number");
+});
+
+test("sendEffect() confirms a host event with a stable effectId, delivered once per subscriber including the host itself", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput, { kind: string }>({});
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput, { kind: string }>({});
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  const hostEffects: string[] = [];
+  const guestEffects: string[] = [];
+  hostRoom.onConfirmedEffect((effect) => hostEffects.push(effect.effectId));
+  guestRoom.onConfirmedEffect((effect) => guestEffects.push(effect.effectId));
+
+  hostRoom.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+
+  hostRoom.sendEffect({ kind: "collision" }, { simulationTick: 1 });
+  await sleep(10);
+
+  assert.equal(hostEffects.length, 1);
+  assert.equal(guestEffects.length, 1);
+  assert.equal(hostEffects[0], guestEffects[0]);
+
+  // Sending a second effect must produce a distinct, still-stable id.
+  hostRoom.sendEffect({ kind: "pickup" }, { simulationTick: 2 });
+  await sleep(10);
+  assert.equal(guestEffects.length, 2);
+  assert.notEqual(guestEffects[0], guestEffects[1]);
+});
+
+test("a reconnecting guest replays retained confirmed effects it missed, deduped against ones it already saw", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient, transport: guestTransport } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput, { kind: string }>({});
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput, { kind: string }>({});
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  const guestEffects: string[] = [];
+  guestRoom.onConfirmedEffect((effect) => guestEffects.push(effect.effectId));
+
+  hostRoom.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+  hostRoom.sendEffect({ kind: "collision" }, { simulationTick: 1 });
+  await sleep(10);
+  assert.equal(guestEffects.length, 1);
+
+  // Reconnect and request sync again; the already-seen effect must not be
+  // redelivered.
+  guestTransport.simulateDisconnect();
+  await guestRoom.reconnect();
+  await sleep(10);
+  assert.equal(guestEffects.length, 1);
+});

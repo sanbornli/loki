@@ -36,16 +36,19 @@ var OP_ACTION_REJECT = 16;
 
 // Protocol-v2 realtime opcodes. These never overlap with the protocol-v1
 // opcodes above; a runtime requires protocolVersion 1 on 10-16 and
-// protocolVersion 2 on 17-19 in the same room.
+// protocolVersion 2 on 17-20 in the same room.
 var REALTIME_PROTOCOL_VERSION = 2;
 var OP_REALTIME_INPUT = 17;
 var OP_REALTIME_SNAPSHOT = 18;
 var OP_REALTIME_SYNC = 19;
+var OP_REALTIME_EFFECT = 20;
 var REALTIME_INPUT_RATE_LIMIT = 20;
 var REALTIME_SNAPSHOT_RATE_LIMIT = 30;
 var REALTIME_MAX_IN_FLIGHT_SNAPSHOTS = 8;
 var REALTIME_SYNC_RATE_LIMIT = 5;
+var REALTIME_EFFECT_RATE_LIMIT = 30;
 var REALTIME_MAX_ORDERED_INPUTS = 32;
+var REALTIME_MAX_RETAINED_EFFECTS = 32;
 var REALTIME_HOST_AUTHORITY_GRACE_SECONDS = 5;
 
 var nowMs = function () {
@@ -1046,6 +1049,8 @@ var matchInit = function (ctx, logger, nk, params) {
         roundSequence: 0,
         serverSequence: 0,
         runtimeSnapshotSequence: 0,
+        effectSequence: 0,
+        retainedEffects: [],
         capableSessions: {},
         pendingCapability: {},
         latestSnapshot: null,
@@ -1618,11 +1623,23 @@ var retainedInputsForSync = function (state) {
   return retained;
 };
 
+var retainedEffectsForSync = function (state) {
+  return (state.realtime.retainedEffects || []).map(function (effect) {
+    return {
+      effectId: effect.effectId,
+      simulationTick: effect.simulationTick,
+      serverTime: effect.serverTime,
+      payload: effect.payload,
+    };
+  });
+};
+
 var processRealtimeV2Message = function (logger, nk, dispatcher, state, message, opCode) {
   var expectedTypes = {};
   expectedTypes[OP_REALTIME_INPUT] = "realtime_input";
   expectedTypes[OP_REALTIME_SNAPSHOT] = "realtime_snapshot";
   expectedTypes[OP_REALTIME_SYNC] = "realtime_sync_request";
+  expectedTypes[OP_REALTIME_EFFECT] = "realtime_effect";
   var expectedType = expectedTypes[opCode];
   if (!expectedType || !message.sender) return;
 
@@ -1831,6 +1848,8 @@ var processRealtimeV2Message = function (logger, nk, dispatcher, state, message,
       state.realtime.roundSequence = input.roundSequence;
       state.realtime.latestInputs = {};
       state.realtime.latestSnapshot = null;
+      state.realtime.effectSequence = 0;
+      state.realtime.retainedEffects = [];
     }
     var previous = state.realtime.latestSnapshot;
     if (
@@ -1871,6 +1890,61 @@ var processRealtimeV2Message = function (logger, nk, dispatcher, state, message,
     return;
   }
 
+  if (opCode === OP_REALTIME_EFFECT) {
+    if (senderId !== state.hostId) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "HOST_REQUIRED", "realtime host required");
+      return;
+    }
+    if (input.authorityEpoch !== state.realtime.authorityEpoch) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "STALE_VERSION", "stale authority epoch");
+      return;
+    }
+    if (input.roundSequence !== state.realtime.roundSequence) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "STALE_VERSION", "stale round");
+      return;
+    }
+    var effectRetry = realtimeRateLimit(state, senderId, "realtimeEffect", now, 1000, REALTIME_EFFECT_RATE_LIMIT);
+    if (effectRetry) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "RATE_LIMITED", "realtime effect rate exceeded", effectRetry);
+      return;
+    }
+    state.realtime.effectSequence += 1;
+    // The runtime assigns effectId (not the host) so it stays unique and
+    // monotonic across host migrations even though the new host's own
+    // sequence counters restart from zero.
+    var effectId =
+      state.realtime.authorityEpoch + "-" + state.realtime.roundSequence + "-" + state.realtime.effectSequence;
+    var confirmedEffect = {
+      effectId: effectId,
+      simulationTick: input.simulationTick,
+      serverTime: now,
+      payload: input.payload,
+    };
+    state.realtime.retainedEffects.push(confirmedEffect);
+    while (state.realtime.retainedEffects.length > REALTIME_MAX_RETAINED_EFFECTS) {
+      state.realtime.retainedEffects.shift();
+    }
+    broadcastRealtimeEnvelope(
+      dispatcher,
+      state,
+      OP_REALTIME_EFFECT,
+      "realtime_effect",
+      {
+        hostId: state.hostId,
+        authorityEpoch: state.realtime.authorityEpoch,
+        roundSequence: state.realtime.roundSequence,
+        simulationTick: input.simulationTick,
+        effectId: effectId,
+        serverTime: now,
+        payload: input.payload,
+      },
+      realtimeCapableTargets(state),
+      null,
+      true,
+    );
+    return;
+  }
+
   if (opCode === OP_REALTIME_SYNC) {
     var syncRetry = realtimeRateLimit(state, senderId, "realtimeSync", now, 1000, REALTIME_SYNC_RATE_LIMIT);
     if (syncRetry) {
@@ -1891,6 +1965,7 @@ var processRealtimeV2Message = function (logger, nk, dispatcher, state, message,
         runtimeSnapshotSequence: state.realtime.runtimeSnapshotSequence,
         state: snapshot ? snapshot.state : undefined,
         retainedInputs: retainedInputsForSync(state),
+        retainedEffects: retainedEffectsForSync(state),
         members: presenceList(state.members, state.hostId),
         membersComplete: true,
         membershipRevision: state.membershipRevision || 0,
@@ -1910,7 +1985,8 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
   if (
     opCode === OP_REALTIME_INPUT ||
     opCode === OP_REALTIME_SNAPSHOT ||
-    opCode === OP_REALTIME_SYNC
+    opCode === OP_REALTIME_SYNC ||
+    opCode === OP_REALTIME_EFFECT
   ) {
     processRealtimeV2Message(logger, nk, dispatcher, state, message, opCode);
     return;

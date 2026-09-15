@@ -29,6 +29,21 @@ export const REALTIME_ROOM_DEFAULT_CORRECTION_MS = 280;
 export const REALTIME_ROOM_MAX_CATCHUP_STEPS = 2;
 export const REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS = 2;
 export const REALTIME_ROOM_MAX_CLOCK_NUDGE = 0.05;
+// A gap between publishSnapshot() calls smaller than this fraction of the
+// configured cadence window is flagged as a back-to-back publish (the game
+// is calling publishSnapshot faster than its own configured rate needs).
+export const REALTIME_ROOM_BACK_TO_BACK_PUBLISH_FACTOR = 0.25;
+// A gap between publishSnapshot() calls larger than this multiple of the
+// configured cadence window (or this absolute floor, whichever is larger)
+// is treated as a host frame stall rather than ordinary jitter.
+export const REALTIME_ROOM_HOST_STALL_FACTOR = 3;
+export const REALTIME_ROOM_HOST_STALL_FLOOR_MS = 150;
+// Effective send rate below this fraction of the configured snapshotHz
+// triggers a low-effective-rate warning.
+export const REALTIME_ROOM_LOW_EFFECTIVE_RATE_FACTOR = 0.7;
+// How many recent confirmed-effect ids a guest keeps to dedupe redelivered
+// or resynced effects. Bounded so long sessions cannot leak memory.
+export const REALTIME_ROOM_MAX_SEEN_EFFECT_IDS = 256;
 
 export type RealtimeRoomOutcome =
   | "rejected"
@@ -116,7 +131,26 @@ export type RealtimeRoomDiagnostics = {
   snapshotSequenceGaps: number;
   /** Snapshots accepted before the previous one was ever sampled by getRenderState(), i.e. coalesced without ever being rendered. */
   snapshotsCoalescedOnReceive: number;
+  /** Host-only: total publishSnapshot() calls, including ones coalesced away without ever being sent. */
+  snapshotPublishCalls: number;
+  /** Host-only: wall-clock time (this host's clock) between the two most recent publishSnapshot() calls. */
+  lastSnapshotPublishIntervalMs?: number;
+  /** Host-only: smoothed actual sends-per-second observed on the wire, vs. the configured snapshotHz target. */
+  effectiveSnapshotHz?: number;
+  /** Host-only: cumulative count of pacing windows where the host frame stalled for long enough that one or more cadence windows produced no publishSnapshot() call. */
+  missedSnapshotWindows: number;
+  /** Host-only: cumulative count of gaps between publishSnapshot() calls large enough to be considered a host frame stall (see REALTIME_ROOM_HOST_STALL_FACTOR). */
+  hostFrameStallCount: number;
+  /** Host-only: duration of the most recently observed host frame stall. */
+  lastHostFrameStallMs?: number;
 };
+
+/** Host-only diagnostic warnings for publish cadence problems Loki cannot fix itself (the game controls its own frame loop). Purely informational; RealtimeRoom keeps functioning regardless. */
+export type RealtimeRoomDiagnosticWarning =
+  | { type: "back_to_back_publish"; intervalMs: number }
+  | { type: "host_frame_stall"; stallMs: number }
+  | { type: "missed_snapshot_window"; windows: number }
+  | { type: "low_effective_snapshot_rate"; effectiveHz: number; targetHz: number };
 
 export type InputsForTick<Input> = {
   latest: Record<string, Input>;
@@ -149,6 +183,21 @@ export type RealtimeRoomRenderStates<State> = {
   authoritativeTick?: number;
   /** The simulation tick `predicted`/`correctedPredicted` represent. */
   predictedTick?: number;
+};
+
+/**
+ * A host-confirmed, authoritative event (e.g. a collision) delivered with a
+ * stable effectId assigned by the runtime, so every member (including the
+ * host) can dedupe it against their own speculative local effects
+ * (particles, audio, etc.) instead of guessing from state deltas alone.
+ * Loki never interprets `payload`; it is opaque game-defined JSON, exactly
+ * like State and Input.
+ */
+export type RealtimeRoomConfirmedEffect<Effect> = {
+  effectId: string;
+  simulationTick: number;
+  serverTime: number;
+  payload: Effect;
 };
 
 export type RealtimeRoomOptions<State, Input> = {
@@ -189,6 +238,13 @@ export type RealtimeRoomOptions<State, Input> = {
    * authoritative-interpolated, never composed).
    */
   composeRenderState?(states: RealtimeRoomRenderStates<State>): State | undefined;
+  /**
+   * Host-only: called when Loki observes a publish-cadence problem it
+   * cannot fix itself (the game owns its own frame loop). Purely
+   * informational diagnostics; RealtimeRoom keeps functioning regardless
+   * of whether this is provided.
+   */
+  onDiagnosticWarning?(event: RealtimeRoomDiagnosticWarning): void;
   simulationHz?: number;
   snapshotHz?: number;
   inputHz?: number;
@@ -222,6 +278,14 @@ export interface RealtimeRoomHost {
       hostSnapshotSequence: number;
       hostSendTime: number;
       processedInputCursors: Record<string, number>;
+    },
+  ): Promise<void>;
+  sendRealtimeEffect(
+    payload: unknown,
+    options: {
+      authorityEpoch: number;
+      roundSequence: number;
+      simulationTick: number;
     },
   ): Promise<void>;
   requestRealtimeSync(): Promise<void>;
@@ -324,7 +388,7 @@ type HostInputRecord<Input> = {
  * clock and the guest's is corrected gradually instead of causing runaway
  * extrapolation or stalls.
  */
-export class RealtimeRoom<State, Input> {
+export class RealtimeRoom<State, Input, Effect = unknown> {
   readonly #host: RealtimeRoomHost;
   readonly #options: RealtimeRoomOptions<State, Input>;
   readonly #listeners = new Set<(snapshot: RealtimeRoomSnapshot<State>) => void>();
@@ -371,7 +435,14 @@ export class RealtimeRoom<State, Input> {
   #inFlightSnapshots = 0;
   #lastSnapshotSentAt = 0;
   #snapshotFlushTimer?: ReturnType<typeof setTimeout>;
+  #flushMicrotaskScheduled = false;
   #lastSentSimulationTick = -1;
+
+  // Host-only publish cadence diagnostics: measured from publishSnapshot()
+  // call times (the host's own clock) and from actual send times, so a
+  // stalled host frame loop can be told apart from Loki's own pacing.
+  #lastPublishCallAt?: number;
+  #smoothedEffectiveHz?: number;
 
   // Authoritative timeline (both host and guest observe broadcasts).
   #previousSnapshot?: { state: State; simulationTick: number };
@@ -408,6 +479,13 @@ export class RealtimeRoom<State, Input> {
   // false, the previous one was never rendered (coalesced).
   #sampledSinceLastSnapshot = true;
 
+  // Confirmed-effects: bounded dedupe of effectIds already delivered to
+  // listeners (covers redelivery and retained-effect replay on sync), plus
+  // the listeners themselves. Loki never interprets effect payloads.
+  readonly #effectListeners = new Set<(effect: RealtimeRoomConfirmedEffect<Effect>) => void>();
+  readonly #seenEffectIds = new Set<string>();
+  #seenEffectOrder: string[] = [];
+
   readonly #diagnostics: RealtimeRoomDiagnostics = {
     inputsSent: 0,
     inputsCoalesced: 0,
@@ -428,6 +506,9 @@ export class RealtimeRoom<State, Input> {
     snapshotArrivalJitterMs: 0,
     snapshotSequenceGaps: 0,
     snapshotsCoalescedOnReceive: 0,
+    snapshotPublishCalls: 0,
+    missedSnapshotWindows: 0,
+    hostFrameStallCount: 0,
   };
 
   constructor(host: RealtimeRoomHost, options: RealtimeRoomOptions<State, Input> = {}) {
@@ -636,7 +717,121 @@ export class RealtimeRoom<State, Input> {
     assertJsonCompatible(parsed);
     if (this.#pendingSnapshot) this.#diagnostics.snapshotsCoalesced += 1;
     this.#pendingSnapshot = { state: parsed, simulationTick: options.simulationTick };
-    this.#attemptFlush();
+    this.#recordPublishCadence();
+    // Defer the actual flush attempt to a microtask so that if the game
+    // calls publishSnapshot() more than once within the same synchronous
+    // turn (e.g. a catch-up frame simulating several steps at once), every
+    // call after the first only overwrites #pendingSnapshot; the flush that
+    // finally runs always sees the newest state and Loki transmits once.
+    this.#scheduleFlush();
+  }
+
+  #scheduleFlush(): void {
+    if (this.#flushMicrotaskScheduled) return;
+    this.#flushMicrotaskScheduled = true;
+    queueMicrotask(() => {
+      this.#flushMicrotaskScheduled = false;
+      this.#attemptFlush();
+    });
+  }
+
+  /**
+   * Tracks publishSnapshot() call cadence on the host's own clock (distinct
+   * from the send-pacing diagnostics measured in #attemptFlush) and raises
+   * onDiagnosticWarning for problems Loki cannot fix itself: the game is
+   * calling publishSnapshot back-to-back faster than its own configured
+   * rate needs, or the gap between calls is large enough that the host's
+   * own frame loop appears to have stalled (long GC pause, backgrounded
+   * tab, etc.), which will also show up as one or more missed cadence
+   * windows.
+   */
+  #recordPublishCadence(): void {
+    const now = monotonicNow();
+    this.#diagnostics.snapshotPublishCalls += 1;
+    if (this.#lastPublishCallAt !== undefined) {
+      const interval = now - this.#lastPublishCallAt;
+      this.#diagnostics.lastSnapshotPublishIntervalMs = interval;
+      if (interval < this.#snapshotIntervalMs * REALTIME_ROOM_BACK_TO_BACK_PUBLISH_FACTOR) {
+        this.#warn({ type: "back_to_back_publish", intervalMs: interval });
+      }
+      const stallThresholdMs = Math.max(
+        this.#snapshotIntervalMs * REALTIME_ROOM_HOST_STALL_FACTOR,
+        REALTIME_ROOM_HOST_STALL_FLOOR_MS,
+      );
+      if (interval > stallThresholdMs) {
+        this.#diagnostics.hostFrameStallCount += 1;
+        this.#diagnostics.lastHostFrameStallMs = interval;
+        this.#warn({ type: "host_frame_stall", stallMs: interval });
+        const missedWindows = Math.max(0, Math.floor(interval / this.#snapshotIntervalMs) - 1);
+        if (missedWindows > 0) {
+          this.#diagnostics.missedSnapshotWindows += missedWindows;
+          this.#warn({ type: "missed_snapshot_window", windows: missedWindows });
+        }
+      }
+    }
+    this.#lastPublishCallAt = now;
+  }
+
+  #warn(event: RealtimeRoomDiagnosticWarning): void {
+    try {
+      this.#options.onDiagnosticWarning?.(event);
+    } catch {
+      // Diagnostic warnings must not break the host's send path.
+    }
+  }
+
+  /**
+   * Host-only, fire-and-forget: confirms an authoritative event (e.g. a
+   * collision) with a stable, runtime-assigned effectId, reliably broadcast
+   * to every member (including this host, via the same onConfirmedEffect
+   * path everyone else uses) so games can dedupe speculative local effects
+   * against the confirmed outcome instead of guessing from state deltas.
+   * Loki never interprets `payload`.
+   */
+  sendEffect(payload: Effect, options: { simulationTick: number }): void {
+    if (!this.isHost) {
+      throw new RealtimeRoomError("rejected", "sendEffect is host-only");
+    }
+    assertJsonCompatible(payload);
+    void this.#host
+      .sendRealtimeEffect(payload, {
+        authorityEpoch: this.#authorityEpoch,
+        roundSequence: this.#roundSequence,
+        simulationTick: options.simulationTick,
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Subscribes to host-confirmed effects (see sendEffect). Delivers each
+   * distinct effectId at most once per subscriber, covering both live
+   * broadcast and retained-effect replay after reconnect/host-migration
+   * sync (bounded to the most recent REALTIME_ROOM_MAX_SEEN_EFFECT_IDS).
+   */
+  onConfirmedEffect(listener: (effect: RealtimeRoomConfirmedEffect<Effect>) => void): () => void {
+    this.#effectListeners.add(listener);
+    return () => this.#effectListeners.delete(listener);
+  }
+
+  #recordEffect(effect: RealtimeRoomConfirmedEffect<Effect>): boolean {
+    if (this.#seenEffectIds.has(effect.effectId)) return false;
+    this.#seenEffectIds.add(effect.effectId);
+    this.#seenEffectOrder.push(effect.effectId);
+    if (this.#seenEffectOrder.length > REALTIME_ROOM_MAX_SEEN_EFFECT_IDS) {
+      const evicted = this.#seenEffectOrder.shift();
+      if (evicted !== undefined) this.#seenEffectIds.delete(evicted);
+    }
+    return true;
+  }
+
+  #emitEffect(effect: RealtimeRoomConfirmedEffect<Effect>): void {
+    for (const listener of this.#effectListeners) {
+      try {
+        listener(effect);
+      } catch {
+        // Effect listeners must not break message handling.
+      }
+    }
   }
 
   /** Host-only: increments roundSequence, resets input/prediction state, publishes tick zero. */
@@ -668,6 +863,10 @@ export class RealtimeRoom<State, Input> {
     this.#snapshotJitterMs = 0;
     this.#lastRuntimeSnapshotSequence = undefined;
     this.#sampledSinceLastSnapshot = true;
+    this.#lastPublishCallAt = undefined;
+    this.#smoothedEffectiveHz = undefined;
+    this.#seenEffectIds.clear();
+    this.#seenEffectOrder = [];
     for (const pending of this.#orderedPending.values()) {
       pending.reject(new RealtimeRoomError("stale", "round restarted"));
     }
@@ -1063,6 +1262,8 @@ export class RealtimeRoom<State, Input> {
         this.#snapshotJitterMs = 0;
         this.#lastRuntimeSnapshotSequence = undefined;
         this.#sampledSinceLastSnapshot = true;
+        this.#seenEffectIds.clear();
+        this.#seenEffectOrder = [];
       }
       if (this.#latestSnapshot && message.simulationTick <= this.#latestSnapshot.simulationTick) return;
       if (this.#latestSnapshot && !this.#sampledSinceLastSnapshot) {
@@ -1114,6 +1315,19 @@ export class RealtimeRoom<State, Input> {
       this.#emit();
       return;
     }
+    if (message.type === "realtime_effect") {
+      if (message.authorityEpoch !== this.#authorityEpoch) return;
+      if (message.roundSequence !== this.#roundSequence) return;
+      this.#hostId = message.hostId || this.#hostId;
+      const effect: RealtimeRoomConfirmedEffect<Effect> = {
+        effectId: message.effectId,
+        simulationTick: message.simulationTick,
+        serverTime: message.serverTime,
+        payload: message.payload as Effect,
+      };
+      if (this.#recordEffect(effect)) this.#emitEffect(effect);
+      return;
+    }
     if (message.type === "realtime_sync_response") {
       this.#authorityEpoch = message.authorityEpoch;
       this.#roundSequence = message.roundSequence;
@@ -1144,6 +1358,18 @@ export class RealtimeRoom<State, Input> {
         this.#diagnostics.reconnectCount += 1;
         this.#diagnostics.lastReconnectDurationMs = monotonicNow() - this.#reconnectStartedAt;
         this.#reconnectStartedAt = undefined;
+      }
+      // Replay any confirmed effects this member hasn't seen yet (e.g. one
+      // that landed while it was disconnected or mid host-migration), so a
+      // reconnecting guest still gets to dedupe against them.
+      for (const retained of message.retainedEffects ?? []) {
+        const effect: RealtimeRoomConfirmedEffect<Effect> = {
+          effectId: retained.effectId,
+          simulationTick: retained.simulationTick,
+          serverTime: retained.serverTime,
+          payload: retained.payload as Effect,
+        };
+        if (this.#recordEffect(effect)) this.#emitEffect(effect);
       }
       if (this.#latestInput !== undefined) void this.#sendLatestInput();
       for (const pending of this.#orderedPending.values()) {
@@ -1344,9 +1570,24 @@ export class RealtimeRoom<State, Input> {
     this.#pendingSnapshot = undefined;
     this.#hostSnapshotSequence += 1;
     this.#lastSentSimulationTick = next.simulationTick;
-    this.#lastSnapshotSentAt = monotonicNow();
+    const sentAt = monotonicNow();
+    const priorSentAt = this.#lastSnapshotSentAt;
+    this.#lastSnapshotSentAt = sentAt;
     this.#inFlightSnapshots += 1;
     this.#diagnostics.snapshotsSent += 1;
+    if (priorSentAt > 0) {
+      const sendIntervalMs = sentAt - priorSentAt;
+      if (sendIntervalMs > 0) {
+        const instantHz = 1000 / sendIntervalMs;
+        this.#smoothedEffectiveHz =
+          this.#smoothedEffectiveHz === undefined ? instantHz : this.#smoothedEffectiveHz * 0.8 + instantHz * 0.2;
+        this.#diagnostics.effectiveSnapshotHz = this.#smoothedEffectiveHz;
+        const targetHz = 1000 / this.#snapshotIntervalMs;
+        if (this.#smoothedEffectiveHz < targetHz * REALTIME_ROOM_LOW_EFFECTIVE_RATE_FACTOR) {
+          this.#warn({ type: "low_effective_snapshot_rate", effectiveHz: this.#smoothedEffectiveHz, targetHz });
+        }
+      }
+    }
     const processedInputCursors: Record<string, number> = {};
     for (const [playerId, cursor] of this.#hostProcessedCursors) {
       if (cursor >= 0) processedInputCursors[playerId] = cursor;
@@ -1440,6 +1681,10 @@ export class RealtimeRoom<State, Input> {
     this.#inFlightSnapshots = 0;
     this.#lastSentSimulationTick = -1;
     this.#hostSnapshotSequence = 0;
+    this.#lastPublishCallAt = undefined;
+    this.#smoothedEffectiveHz = undefined;
+    this.#seenEffectIds.clear();
+    this.#seenEffectOrder = [];
   }
 
   #isInactive(): boolean {

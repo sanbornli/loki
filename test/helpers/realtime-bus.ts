@@ -23,6 +23,8 @@ export class RealtimeBus {
   authorityEpoch = 0;
   roundSequence = 0;
   runtimeSnapshotSequence = 0;
+  effectSequence = 0;
+  retainedEffects: Array<{ effectId: string; simulationTick: number; serverTime: number; payload: unknown }> = [];
   active = false;
   latestSnapshot?: { state: unknown; simulationTick: number; hostSnapshotSequence: number };
   members = new Map<string, { transport: FakeRealtimeTransport; capable: boolean; sessionId: string }>();
@@ -137,6 +139,8 @@ export class RealtimeBus {
       if (message.roundSequence > this.roundSequence) {
         this.roundSequence = message.roundSequence;
         this.latestSnapshot = undefined;
+        this.effectSequence = 0;
+        this.retainedEffects = [];
       }
       const previous = this.latestSnapshot;
       if (
@@ -172,6 +176,47 @@ export class RealtimeBus {
       }
       return;
     }
+    if (message.type === "realtime_effect") {
+      if (senderId !== this.hostId) {
+        this.#sendV2Error(senderId, "HOST_REQUIRED", "realtime host required");
+        return;
+      }
+      if (message.authorityEpoch !== this.authorityEpoch) {
+        this.#sendV2Error(senderId, "STALE_VERSION", "stale authority epoch");
+        return;
+      }
+      if (message.roundSequence !== this.roundSequence) {
+        this.#sendV2Error(senderId, "STALE_VERSION", "stale round");
+        return;
+      }
+      this.effectSequence += 1;
+      const effectId = `${this.authorityEpoch}-${this.roundSequence}-${this.effectSequence}`;
+      const serverTime = Date.now();
+      this.retainedEffects.push({
+        effectId,
+        simulationTick: message.simulationTick,
+        serverTime,
+        payload: message.payload,
+      });
+      while (this.retainedEffects.length > 32) this.retainedEffects.shift();
+      const targets = [...this.members.values()].filter((member) => member.capable);
+      for (const member of targets) {
+        this.#deliverV2(member.transport, {
+          protocolVersion: 2,
+          roomId: this.roomId,
+          sequence: this.v2Sequence++,
+          type: "realtime_effect",
+          hostId: this.hostId,
+          authorityEpoch: this.authorityEpoch,
+          roundSequence: this.roundSequence,
+          simulationTick: message.simulationTick,
+          effectId,
+          serverTime,
+          payload: message.payload,
+        });
+      }
+      return;
+    }
     if (message.type === "realtime_sync_request") {
       const member = this.members.get(senderId);
       if (!member) return;
@@ -187,6 +232,7 @@ export class RealtimeBus {
         runtimeSnapshotSequence: this.runtimeSnapshotSequence,
         state: this.latestSnapshot?.state,
         retainedInputs: [],
+        retainedEffects: this.retainedEffects.map((effect) => ({ ...effect })),
         members: this.#presenceList(),
         membersComplete: true,
         membershipRevision: this.members.size,
