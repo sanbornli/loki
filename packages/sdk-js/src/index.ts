@@ -78,6 +78,7 @@ export type {
   RealtimeRoomHost,
   RealtimeRoomOptions,
   RealtimeRoomOutcome,
+  RealtimeRoomRenderStates,
   RealtimeRoomSnapshot,
 } from "./realtime-room.js";
 
@@ -657,6 +658,7 @@ export class LokiClient {
       roundSequence: number;
       simulationTick: number;
       hostSnapshotSequence: number;
+      hostSendTime: number;
       processedInputCursors: Record<string, number>;
     },
   ): Promise<void> {
@@ -671,6 +673,7 @@ export class LokiClient {
       roundSequence: options.roundSequence,
       simulationTick: options.simulationTick,
       hostSnapshotSequence: options.hostSnapshotSequence,
+      hostSendTime: options.hostSendTime,
       processedInputCursors: options.processedInputCursors,
       state,
     });

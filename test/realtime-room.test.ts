@@ -87,6 +87,7 @@ test("stale-round and stale-authority snapshots do not roll back stored state", 
     roundSequence: 0,
     simulationTick: 1,
     hostSnapshotSequence: 1,
+    hostSendTime: Date.now(),
     processedInputCursors: {},
     state: { positions: { host: -999 } },
   });
@@ -524,4 +525,320 @@ test("diagnostics expose render-clock drift/rate, frame counts, and snapshot cad
   assert.ok((snapshot.diagnostics?.renderClockRate ?? 0) <= 1.05);
   assert.equal(typeof snapshot.diagnostics?.renderClockDriftTicks, "number");
   assert.ok((snapshot.diagnostics?.lastSnapshotIntervalMs ?? 0) >= 90);
+});
+
+test("diagnostics measure host send interval and runtime relay interval separately from guest arrival interval", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ diagnostics: true });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
+    diagnostics: true,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(120);
+  hostRoom.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
+  await sleep(120);
+
+  const guestDiagnostics = guestRoom.getSnapshot().diagnostics;
+  assert.ok((guestDiagnostics?.lastSnapshotHostIntervalMs ?? 0) >= 90);
+  assert.ok((guestDiagnostics?.lastSnapshotRelayIntervalMs ?? 0) >= 90);
+  assert.equal(typeof guestDiagnostics?.snapshotArrivalJitterMs, "number");
+
+  // The host also receives its own broadcast, so the same three-stage
+  // cadence measurement is available on the host side too.
+  const hostDiagnostics = hostRoom.getSnapshot().diagnostics;
+  assert.ok((hostDiagnostics?.lastSnapshotHostIntervalMs ?? 0) >= 90);
+  assert.ok((hostDiagnostics?.lastSnapshotRelayIntervalMs ?? 0) >= 90);
+});
+
+test("shouldCorrect suppresses imperceptible drift while still counting the reconciliation", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({});
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
+    diagnostics: true,
+    predict: (state, input) => {
+      if ("throttle" in input) {
+        return { positions: { ...state.positions, self: (state.positions.self ?? 0) + input.throttle } };
+      }
+      return state;
+    },
+    interpolate: (_from, to) => to,
+    blendCorrection: (_from, target) => target,
+    // Games understand their own units; Loki's state is opaque JSON, so the
+    // threshold is game-supplied instead of hard-coded position/heading
+    // fields.
+    shouldCorrect: (displayed, reconciled) =>
+      Math.abs((reconciled.positions.self ?? 0) - (displayed.positions.self ?? 0)) > 5,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { self: 0 } }, { simulationTick: 1 });
+  await sleep(5);
+  guestRoom.setInput({ throttle: 1 });
+  await sleep(5);
+  guestRoom.getRenderState(performance.now());
+
+  // This reconcile is prediction's cold start (there is no prior predicted
+  // state to compare against yet), so it must not count as a reconciliation.
+  hostRoom.publishSnapshot({ positions: { self: 0 } }, { simulationTick: 2 });
+  await sleep(120);
+  guestRoom.getRenderState(performance.now());
+
+  // This reconcile has a real prior prediction to compare against, so it is
+  // the one that should be suppressed by the threshold.
+  hostRoom.publishSnapshot({ positions: { self: 0 } }, { simulationTick: 3 });
+  await sleep(120);
+  guestRoom.getRenderState(performance.now());
+
+  const diagnostics = guestRoom.getSnapshot().diagnostics;
+  assert.ok((diagnostics?.reconciliations ?? 0) >= 1);
+  assert.equal(diagnostics?.correctionsStarted, 0);
+  assert.ok((diagnostics?.correctionsSuppressed ?? 0) >= 1);
+});
+
+test("an in-flight correction rebases from the displayed pose without resetting its deadline", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient, transport: guestTransport } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({});
+  const created = await hostRoom.create();
+  const hostId = hostClient.playerId!;
+  const calls: Array<{ from: number; to: number; t: number }> = [];
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
+    simulationHz: 60,
+    correctionMs: 200,
+    diagnostics: true,
+    predict: (state, input) => {
+      if ("throttle" in input) {
+        return { positions: { ...state.positions, self: (state.positions.self ?? 0) + input.throttle } };
+      }
+      return state;
+    },
+    interpolate: (_from, to) => to,
+    blendCorrection: (from, target, t) => {
+      calls.push({ from: from.positions.self ?? 0, to: target.positions.self ?? 0, t });
+      return t >= 1 ? target : from;
+    },
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  const envelope = (simulationTick: number, runtimeSnapshotSequence: number) => ({
+    protocolVersion: 2,
+    roomId: bus.roomId,
+    sequence: 9000 + runtimeSnapshotSequence,
+    type: "realtime_snapshot",
+    hostId,
+    authorityEpoch: 0,
+    roundSequence: 0,
+    simulationTick,
+    runtimeSnapshotSequence,
+    processedInputCursors: {},
+    hostSendTime: Date.now(),
+    serverTime: Date.now(),
+    state: { positions: { self: 0 } },
+  });
+
+  guestTransport.deliver(envelope(1, 1));
+
+  guestRoom.setInput({ throttle: 10 });
+  const t0 = 2_000;
+  const fixedStepMs = 1000 / 60;
+  const step = fixedStepMs + 0.01; // avoid float ties at the catch-up boundary
+  guestRoom.advanceFrame(t0);
+  guestRoom.advanceFrame(t0 + step);
+  guestRoom.advanceFrame(t0 + 2 * step);
+  const now = t0 + 2 * step;
+  assert.equal(guestRoom.getRenderState(now)?.positions.self, 20);
+
+  // Snapshot 2 triggers a reconcile that starts a correction from self=20.
+  guestTransport.deliver(envelope(2, 2));
+  guestRoom.getRenderState(now);
+  assert.equal(calls.at(-1)?.t, 0);
+  assert.equal(guestRoom.getSnapshot().diagnostics?.correctionsStarted, 1);
+
+  // Advance partway into the correction window.
+  const midNow = now + 100;
+  guestRoom.advanceFrame(midNow);
+  guestRoom.getRenderState(midNow);
+  const midway = calls.at(-1)!;
+  assert.ok(midway.t > 0 && midway.t < 1);
+
+  // A second snapshot arrives mid-correction. It must rebase `from` to the
+  // currently displayed pose instead of restarting the correction, and must
+  // not reset the deadline: t must keep climbing from where it left off,
+  // not jump back to 0 (a full-duration reset every ~33ms would risk a
+  // correction that never completes).
+  guestTransport.deliver(envelope(3, 3));
+  guestRoom.getRenderState(midNow);
+  const afterRebase = calls.at(-1)!;
+  assert.ok(afterRebase.t > 0, "deadline must not reset to 0 when rebasing mid-correction");
+  assert.equal(
+    guestRoom.getSnapshot().diagnostics?.correctionsStarted,
+    1,
+    "rebasing an in-flight correction must not start a second one",
+  );
+  assert.ok((guestRoom.getSnapshot().diagnostics?.reconciliations ?? 0) >= 2);
+
+  // The original (unreset) deadline elapses; the correction completes.
+  const finalNow = now + 201;
+  guestRoom.advanceFrame(finalNow);
+  guestRoom.getRenderState(finalNow);
+  assert.equal(calls.at(-1)?.t, 1);
+  assert.equal(guestRoom.getSnapshot().diagnostics?.correctionsCompleted, 1);
+});
+
+test("guest counts missing runtimeSnapshotSequence numbers and snapshots coalesced before ever being rendered", async () => {
+  const bus = new RealtimeBus();
+  const { client, transport } = await connectedClient(bus);
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({ diagnostics: true });
+  await room.create();
+  const hostId = client.playerId!;
+
+  const envelope = (simulationTick: number, runtimeSnapshotSequence: number) => ({
+    protocolVersion: 2,
+    roomId: bus.roomId,
+    sequence: 5000 + runtimeSnapshotSequence,
+    type: "realtime_snapshot",
+    hostId,
+    authorityEpoch: 0,
+    roundSequence: 0,
+    simulationTick,
+    runtimeSnapshotSequence,
+    processedInputCursors: {},
+    hostSendTime: Date.now(),
+    serverTime: Date.now(),
+    state: { positions: { self: simulationTick } },
+  });
+
+  transport.deliver(envelope(1, 1));
+  // Nothing has sampled getRenderState() since snapshot 1 landed, so
+  // snapshot 2 arriving now means snapshot 1 was coalesced away unrendered.
+  transport.deliver(envelope(2, 2));
+  assert.equal(room.getSnapshot().diagnostics?.snapshotsCoalescedOnReceive, 1);
+
+  room.getRenderState(performance.now());
+  transport.deliver(envelope(3, 3));
+  // Sampled in between this time, so nothing was coalesced.
+  assert.equal(room.getSnapshot().diagnostics?.snapshotsCoalescedOnReceive, 1);
+
+  // Sequence jumps from 3 to 5: one missing sequence number.
+  transport.deliver(envelope(4, 5));
+  assert.equal(room.getSnapshot().diagnostics?.snapshotSequenceGaps, 1);
+});
+
+test("getRenderStates exposes independent interpolated/latest-authoritative/predicted streams and their ticks", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({});
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
+    simulationHz: 60,
+    predict: (state, input) => {
+      if ("throttle" in input) {
+        return { positions: { ...state.positions, self: (state.positions.self ?? 0) + input.throttle } };
+      }
+      return state;
+    },
+    interpolate: (_from, to) => to,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { self: 5 } }, { simulationTick: 1 });
+  await sleep(5);
+
+  guestRoom.setInput({ throttle: 10 });
+  const t0 = 3_000;
+  const fixedStepMs = 1000 / 60;
+  const step = fixedStepMs + 0.01;
+  guestRoom.advanceFrame(t0);
+  guestRoom.advanceFrame(t0 + step);
+  const now = t0 + step;
+
+  const states = guestRoom.getRenderStates(now);
+  // No blendCorrection is configured, so correctedPredicted passes through
+  // the raw predicted value unchanged.
+  assert.equal(states.predicted?.positions.self, 15);
+  assert.equal(states.correctedPredicted?.positions.self, 15);
+  // The authoritative streams are sampled independently of prediction and
+  // must still reflect the host's last accepted snapshot, not the guest's
+  // local prediction.
+  assert.equal(states.latestAuthoritative?.positions.self, 5);
+  assert.equal(states.interpolated?.positions.self, 5);
+  assert.equal(states.authoritativeTick, 1);
+  assert.equal(states.predictedTick, 2);
+  assert.equal(typeof states.interpolatedTick, "number");
+
+  // getRenderState() without a compositor still defaults to the whole
+  // predicted state, matching pre-compositor behavior.
+  assert.equal(guestRoom.getRenderState(now)?.positions.self, 15);
+});
+
+test("composeRenderState lets a game render entities from different streams, and local reconciliation never disturbs the authoritative stream", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({});
+  const created = await hostRoom.create();
+  const composedInterpolatedValues: Array<number | undefined> = [];
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    interpolationDelayMs: 0,
+    simulationHz: 60,
+    predict: (state, input) => {
+      if ("throttle" in input) {
+        return { positions: { ...state.positions, self: (state.positions.self ?? 0) + input.throttle } };
+      }
+      return state;
+    },
+    interpolate: (_from, to) => to,
+    // A minimal compositor: local entity from correctedPredicted, remote
+    // entity ("host") from the authoritative interpolation stream.
+    composeRenderState: (states) => {
+      composedInterpolatedValues.push(states.interpolated?.positions.host);
+      return {
+        positions: {
+          self: states.correctedPredicted?.positions.self ?? states.interpolated?.positions.self ?? 0,
+          host: states.interpolated?.positions.host ?? 0,
+        },
+      };
+    },
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { host: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+
+  guestRoom.setInput({ throttle: 10 });
+  const t0 = 4_000;
+  const fixedStepMs = 1000 / 60;
+  const step = fixedStepMs + 0.01;
+  guestRoom.advanceFrame(t0);
+  guestRoom.advanceFrame(t0 + step);
+  let now = t0 + step;
+  const rendered = guestRoom.getRenderState(now);
+  assert.equal(rendered?.positions.self, 10);
+  assert.equal(rendered?.positions.host, 1);
+
+  // A new snapshot triggers local reconciliation of the predicted local
+  // entity; the composed remote/authoritative value must be completely
+  // unaffected by that reconciliation (it is never reset, replaced, or
+  // snapped by it).
+  hostRoom.publishSnapshot({ positions: { host: 1 } }, { simulationTick: 2 });
+  await sleep(120);
+  now = now + step;
+  guestRoom.advanceFrame(now);
+  const reconciled = guestRoom.getRenderState(now);
+  assert.equal(reconciled?.positions.host, 1);
+  assert.ok(composedInterpolatedValues.every((value) => value === 1));
 });

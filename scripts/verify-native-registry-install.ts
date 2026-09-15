@@ -15,7 +15,7 @@ const ecosystems = requested
 if (requested && !["kotlin", "swift", "unity"].includes(requested)) {
   throw new Error(`unsupported ecosystem ${requested}`);
 }
-const version = process.env.LOKI_PACKAGE_VERSION ?? "0.3.4";
+const version = process.env.LOKI_PACKAGE_VERSION ?? "0.3.5";
 const tag = `v${version}`;
 
 async function run(

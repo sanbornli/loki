@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.3.4
+npm install @lokiplay/sdk@0.3.5
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -152,8 +152,25 @@ const room = client.createRealtimeRoom<RacerState, RacerInput>({
     // correction started) back toward `target`, which is the room's live,
     // continuously-advancing #predictedState (not a delayed snapshot), so the
     // blend always converges on zero-latency local prediction. t rises from
-    // 0 to 1 over correctionMs.
+    // 0 to 1 over correctionMs. If a new snapshot arrives while a correction
+    // is already in flight, Loki rebases `predicted` to whatever was last
+    // displayed instead of restarting, and preserves the original deadline.
     return target;
+  },
+  shouldCorrect(displayed, reconciled) {
+    // Optional: Loki's state is opaque JSON, so it can't judge position
+    // units or heading radians itself. Return false to suppress starting a
+    // new correction when the drift between what's currently displayed and
+    // the freshly reconciled prediction is imperceptible. Defaults to
+    // always correcting when omitted.
+    return true;
+  },
+  composeRenderState(states) {
+    // Optional: compose the independent render streams (see below) into the
+    // single State returned by getRenderState(), instead of one predicted-
+    // or-authoritative value applying to the whole state at once. Defaults
+    // to `correctedPredicted ?? interpolated` when omitted.
+    return states.correctedPredicted ?? states.interpolated;
   },
 });
 
@@ -176,6 +193,48 @@ function frame(now: number) {
   render(room.getRenderState(now));
 }
 ```
+
+### Independent render streams and composition
+
+For a single-entity game, `getRenderState()`'s default of "the whole state is
+either fully predicted or fully authoritative-interpolated" is enough. For a
+multi-entity game (e.g. a racer with other players' cars, or anything with
+collisions), predicting every entity from local input guesses other players'
+controls and can diverge sharply after a collision. `getRenderStates(now)`
+exposes the streams `getRenderState()` composes internally, so a compositor
+can render each entity from whichever stream fits it best:
+
+```ts
+composeRenderState(states) {
+  return {
+    // Local entity: zero-latency prediction (with correction blending).
+    cars: {
+      ...states.interpolated?.cars,
+      [localPlayerId]: states.correctedPredicted?.cars[localPlayerId],
+    },
+  };
+},
+```
+
+- `interpolated` / `latestAuthoritative`: the delayed/interpolated (or
+  extrapolated) authoritative sample, and the most recently accepted
+  snapshot with no delay applied — use these for remote entities and as
+  collision proxies. Both are sampled independently of local reconciliation:
+  a local correction never resets, replaces, or snaps this stream.
+- `predicted` / `correctedPredicted`: the live local prediction, before and
+  after `blendCorrection` is applied — use these for the local entity.
+- `interpolatedTick` / `authoritativeTick` / `predictedTick`: the simulation
+  ticks each stream currently represents, for compositors that need to
+  reason about relative timing (e.g. how far ahead prediction has advanced).
+
+`getRenderState()` calls `getRenderStates()` internally and, if
+`composeRenderState` is configured, passes its result through that callback;
+otherwise it defaults to `correctedPredicted ?? interpolated`, matching prior
+behavior. Loki has no concept of "entities" — `composeRenderState` composes
+whatever opaque State shape the game defines; correction-magnitude/entity
+diagnostics (e.g. "car 3 corrected by 0.4m") are similarly game-specific and
+are expected to be computed inside `shouldCorrect`/`composeRenderState`
+rather than built into Loki's diagnostics.
 
 ### Lifecycle and round flow
 
@@ -209,12 +268,27 @@ playback-rate nudge applied to keep the guest's render clock aligned with the
 host's tick cadence — see `REALTIME_ROOM_MAX_CLOCK_NUDGE`), `renderClockDriftTicks`
 (the error observed at the last nudge), `framesRendered` /
 `extrapolatedFrames` (compare these to see how often rendering had to
-extrapolate past the newest snapshot), `correctionCount` /
-`correctionsCompleted` (corrections started vs. ones that finished blending
-before being superseded by the next snapshot), and `lastSnapshotIntervalMs`
-(the actual wall-clock gap between the two most recently accepted snapshots,
-useful for confirming the real send/ack rate matches the configured
-`snapshotHz`).
+extrapolate past the newest snapshot), and `reconciliations` /
+`correctionsStarted` / `correctionsCompleted` / `correctionsSuppressed`
+(every reconcile against a prior prediction counts as a `reconciliation`;
+it becomes a started correction unless `shouldCorrect` returns false, in
+which case it's counted as suppressed instead; a started correction is
+`completed` once its blend reaches `t = 1`).
+
+Snapshot cadence is measured at three independent stages so unevenness can
+be attributed to its source: `lastSnapshotHostIntervalMs` (interval between
+the host's own send timestamps — host pacing), `lastSnapshotRelayIntervalMs`
+(interval between the runtime's accept/broadcast timestamps — relay/
+backpressure), and `lastSnapshotIntervalMs` (the wall-clock gap between
+snapshots as this client actually observed them arriving — the network).
+`snapshotArrivalJitterMs` is a smoothed measure of how much that arrival
+interval deviates from its own running average; Loki folds it into the
+default adaptive interpolation delay (raising delay temporarily when
+arrival is uneven, lowering it when stable) unless `interpolationDelayMs` is
+set explicitly. `snapshotSequenceGaps` counts missing `runtimeSnapshotSequence`
+numbers between consecutive accepted snapshots, and
+`snapshotsCoalescedOnReceive` counts snapshots that were superseded by a
+newer one before the game ever called `getRenderState()` to sample them.
 
 ### Migrating from hand-rolled racer networking
 

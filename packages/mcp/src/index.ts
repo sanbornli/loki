@@ -12,7 +12,7 @@ export const lokiResources = [
       "Inspect the game to establish its multiplayer profile. Do not infer player counts, teams, or simulation type from the game's name or genre. If a material field is ambiguous, stop and ask the creator. Do not invent new game.json fields.",
       "After confirming each mode's profile, choose createSynchronizedRoom for turn-based or event-driven state, or createRealtimeRoom for continuous host-authoritative simulation. Choose by how authoritative state actually progresses, not by genre or animation smoothness.",
       "createSynchronizedRoom: keep synchronized state compact and JSON-compatible; reducers must be synchronous, deterministic, and free of rendering, timers, networking, or other I/O.",
-      "createRealtimeRoom: integrate the game's existing simulation through its predict/interpolate/extrapolate/blendCorrection callbacks instead of a parallel input queue, RTT estimator, snapshot pacer, stale-round rejection, input ledger, interpolation buffer, or reconnect netcode. Keep one game-owned render loop, keep authoritative snapshots compact and self-contained, publish at a chosen rate up to the runtime's cap (30 Hz; default 10 Hz), and report selected rates plus observed diagnostics as evidence. Loki does not supply physics, collision, rendering optimization, or competitive integrity for realtime rooms.",
+      "createRealtimeRoom: integrate the game's existing simulation through its predict/interpolate/extrapolate/blendCorrection/shouldCorrect/composeRenderState callbacks instead of a parallel input queue, RTT estimator, snapshot pacer, stale-round rejection, input ledger, interpolation buffer, or reconnect netcode. For multi-entity games, use getRenderStates()/composeRenderState to render each entity from the stream that fits it (predicted for local, interpolated/latestAuthoritative for remotes) instead of predicting every entity, which diverges after collisions. Keep one game-owned render loop, keep authoritative snapshots compact and self-contained, publish at a chosen rate up to the runtime's cap (30 Hz; default 10 Hz), and report selected rates plus observed diagnostics as evidence. Loki does not supply physics, collision, rendering optimization, or competitive integrity for realtime rooms.",
       "Let the SDK own page lifecycle, socket replacement, retries, snapshots, and pending-action replay. Keep the same client and room while interrupted. Never leave, close, disconnect, reload, or replace a room because of visibility, page, focus, or network lifecycle events.",
       "Dispatch only while connected. During suspended, reconnecting, or resynchronizing, lock authoritative input, preserve rendered state, show a temporary reconnecting message, and wait for an authoritative snapshot. Do not assume host authority survives reconnect.",
       "Do not repeat unresolved actions under new IDs. Treat indeterminate confirmation as an unknown outcome, room_closed as terminal, and leave_failed as requiring resolution before another room.",
@@ -114,8 +114,8 @@ export async function callLokiTool(
   }
   if (name === "integration_requirements") {
     return {
-      packages: ["@lokiplay/sdk@0.3.4", "@lokiplay/ui-web@0.3.4"],
-      command: "npm install @lokiplay/sdk@0.3.4 @lokiplay/ui-web@0.3.4",
+      packages: ["@lokiplay/sdk@0.3.5", "@lokiplay/ui-web@0.3.5"],
+      command: "npm install @lokiplay/sdk@0.3.5 @lokiplay/ui-web@0.3.5",
       apiOrigin: "https://api.lokiplay.cc",
       authority: "host",
       rankedIntegrity: false,
@@ -172,7 +172,7 @@ export async function callLokiTool(
     if (!/@lokiplay\/sdk|FirstPartyTransport|LokiClient/.test(joined)) {
       findings.push({
         code: "SDK_NOT_DETECTED",
-        message: "Install and initialize @lokiplay/sdk@0.3.4.",
+        message: "Install and initialize @lokiplay/sdk@0.3.5.",
       });
     }
     if (

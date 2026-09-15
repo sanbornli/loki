@@ -89,8 +89,13 @@ export type RealtimeRoomDiagnostics = {
   snapshotsAcked: number;
   extrapolatedFrames: number;
   framesRendered: number;
-  correctionCount: number;
+  /** Times #reconcile() recomputed a predicted state against a prior one, whether or not it produced a visible correction. */
+  reconciliations: number;
+  /** Corrections actually started (shouldCorrect returned true, or no shouldCorrect was configured). */
+  correctionsStarted: number;
   correctionsCompleted: number;
+  /** Reconciliations where shouldCorrect determined the drift was imperceptible, so no correction was started. */
+  correctionsSuppressed: number;
   reconnectCount: number;
   lastReconnectDurationMs?: number;
   hostMigrationCount: number;
@@ -99,13 +104,51 @@ export type RealtimeRoomDiagnostics = {
   renderClockRate: number;
   /** Ticks the render clock was ahead (positive) or behind (negative) of the latest snapshot at the last nudge. */
   renderClockDriftTicks: number;
-  /** Wall-clock time between the two most recently accepted snapshots. */
+  /** Wall-clock time (this client's clock) between the two most recently accepted snapshots. */
   lastSnapshotIntervalMs?: number;
+  /** Interval between the host's send timestamps of the two most recently accepted snapshots (host's clock; isolates host pacing). */
+  lastSnapshotHostIntervalMs?: number;
+  /** Interval between the runtime's accept/broadcast timestamps of the two most recently accepted snapshots (runtime's clock; isolates relay/backpressure). */
+  lastSnapshotRelayIntervalMs?: number;
+  /** Smoothed deviation of this client's observed snapshot arrival interval from its running average; feeds adaptive interpolation delay. */
+  snapshotArrivalJitterMs: number;
+  /** Cumulative count of missing runtimeSnapshotSequence numbers observed between consecutive accepted snapshots. */
+  snapshotSequenceGaps: number;
+  /** Snapshots accepted before the previous one was ever sampled by getRenderState(), i.e. coalesced without ever being rendered. */
+  snapshotsCoalescedOnReceive: number;
 };
 
 export type InputsForTick<Input> = {
   latest: Record<string, Input>;
   orderedCommands: Array<{ playerId: string; inputSequence: number; input: Input }>;
+};
+
+/**
+ * The independent render streams sampled on a single getRenderState() call,
+ * before they are composed into one displayed State. Exposed so a game can
+ * render different entities from different streams (e.g. the local entity
+ * from `correctedPredicted`, remote entities from `interpolated`, and use
+ * `latestAuthoritative` as a collision proxy for remotes) instead of one
+ * predicted-or-authoritative value applying to the whole state at once.
+ * Loki keeps `interpolated`/`latestAuthoritative` sampling independent of
+ * local reconciliation: nothing here is reset, replaced, or snapped by a
+ * correction, since corrections only ever affect the predicted streams.
+ */
+export type RealtimeRoomRenderStates<State> = {
+  /** The delayed/interpolated (or extrapolated) sample of the authoritative timeline, per interpolationDelayMs. Undefined until a snapshot has been accepted. */
+  interpolated?: State;
+  /** The most recently accepted authoritative snapshot, with no delay/interpolation/extrapolation applied. Undefined until a snapshot has been accepted. */
+  latestAuthoritative?: State;
+  /** The live, continuously-advancing local prediction (held setInput() plus unacked sendInput()), with no correction blend applied. Undefined when there is nothing to predict. */
+  predicted?: State;
+  /** `predicted` after blendCorrection has been applied (if configured); equals `predicted` unchanged when no blendCorrection is configured or none is in flight. */
+  correctedPredicted?: State;
+  /** The simulation tick `interpolated` targeted (may be fractional-between two ticks, or ahead of authoritativeTick during extrapolation). */
+  interpolatedTick?: number;
+  /** The simulation tick of `latestAuthoritative`. */
+  authoritativeTick?: number;
+  /** The simulation tick `predicted`/`correctedPredicted` represent. */
+  predictedTick?: number;
 };
 
 export type RealtimeRoomOptions<State, Input> = {
@@ -122,6 +165,30 @@ export type RealtimeRoomOptions<State, Input> = {
    * `t` rises from 0 to 1 over `correctionMs`.
    */
   blendCorrection?(from: State, target: State, t: number): State;
+  /**
+   * Called on every reconciliation (when blendCorrection is configured) to
+   * decide whether the difference between what's currently displayed and
+   * the freshly reconciled prediction is large enough to warrant a visible
+   * correction. Loki's state is opaque JSON, so it cannot judge position
+   * units or heading radians itself; games that care about correction
+   * thresholds should supply this. Returning false suppresses starting a
+   * new correction (an already in-flight correction is left to finish).
+   * Defaults to always correcting when omitted, matching prior behavior.
+   */
+  shouldCorrect?(displayed: State, reconciled: State): boolean;
+  /**
+   * Composes the independent render streams (see RealtimeRoomRenderStates)
+   * into the single State returned by getRenderState(). Use this to render
+   * different entities from different streams instead of one value applying
+   * to the whole state — e.g. the local entity from `correctedPredicted`,
+   * remote entities from `interpolated`, with `latestAuthoritative` used as
+   * a collision proxy for remotes. Loki is state-agnostic and has no
+   * concept of "entities"; the game composes its own opaque State shape.
+   * Defaults to `correctedPredicted ?? interpolated` when omitted, matching
+   * prior behavior (the whole state is either fully predicted or fully
+   * authoritative-interpolated, never composed).
+   */
+  composeRenderState?(states: RealtimeRoomRenderStates<State>): State | undefined;
   simulationHz?: number;
   snapshotHz?: number;
   inputHz?: number;
@@ -153,6 +220,7 @@ export interface RealtimeRoomHost {
       roundSequence: number;
       simulationTick: number;
       hostSnapshotSequence: number;
+      hostSendTime: number;
       processedInputCursors: Record<string, number>;
     },
   ): Promise<void>;
@@ -316,10 +384,29 @@ export class RealtimeRoom<State, Input> {
   #predictedTick = -1;
   #pendingCorrection?: { from: State };
   #correctionStartedAt?: number;
+  // The last state actually returned by getRenderState(), i.e. what the game
+  // displayed. Corrections rebase from this (not a frozen prediction) so a
+  // new snapshot arriving mid-correction continues smoothly from what's on
+  // screen instead of snapping back to a stale pose.
+  #lastDisplayedState?: State;
 
   // RTT/jitter estimate derived from ordered-input ack round trips.
   #smoothedRttMs = 0;
   #jitterMs = 0;
+
+  // Snapshot cadence measured at three independent clock domains: the host's
+  // send clock, the runtime's accept/broadcast clock, and this client's own
+  // arrival clock (#lastSnapshotReceivedAt below), so unevenness can be
+  // attributed to host pacing, relay/backpressure, or the network.
+  #lastSnapshotHostSendTime?: number;
+  #lastSnapshotServerTime?: number;
+  #smoothedSnapshotIntervalMs?: number;
+  #snapshotJitterMs = 0;
+  #lastRuntimeSnapshotSequence?: number;
+  // Whether getRenderState() has sampled the authoritative timeline since the
+  // last accepted snapshot; if a new snapshot arrives while this is still
+  // false, the previous one was never rendered (coalesced).
+  #sampledSinceLastSnapshot = true;
 
   readonly #diagnostics: RealtimeRoomDiagnostics = {
     inputsSent: 0,
@@ -330,12 +417,17 @@ export class RealtimeRoom<State, Input> {
     snapshotsAcked: 0,
     extrapolatedFrames: 0,
     framesRendered: 0,
-    correctionCount: 0,
+    reconciliations: 0,
+    correctionsStarted: 0,
     correctionsCompleted: 0,
+    correctionsSuppressed: 0,
     reconnectCount: 0,
     hostMigrationCount: 0,
     renderClockRate: 1,
     renderClockDriftTicks: 0,
+    snapshotArrivalJitterMs: 0,
+    snapshotSequenceGaps: 0,
+    snapshotsCoalescedOnReceive: 0,
   };
 
   constructor(host: RealtimeRoomHost, options: RealtimeRoomOptions<State, Input> = {}) {
@@ -565,9 +657,17 @@ export class RealtimeRoom<State, Input> {
     this.#predictedTick = -1;
     this.#pendingCorrection = undefined;
     this.#correctionStartedAt = undefined;
+    this.#lastDisplayedState = undefined;
     this.#renderClockAnchor = undefined;
     this.#renderClockRate = 1;
     this.#lastSnapshotReceivedAt = undefined;
+    this.#lastInterpolatedTick = undefined;
+    this.#lastSnapshotHostSendTime = undefined;
+    this.#lastSnapshotServerTime = undefined;
+    this.#smoothedSnapshotIntervalMs = undefined;
+    this.#snapshotJitterMs = 0;
+    this.#lastRuntimeSnapshotSequence = undefined;
+    this.#sampledSinceLastSnapshot = true;
     for (const pending of this.#orderedPending.values()) {
       pending.reject(new RealtimeRoomError("stale", "round restarted"));
     }
@@ -581,6 +681,7 @@ export class RealtimeRoom<State, Input> {
         roundSequence: this.#roundSequence,
         simulationTick: 0,
         hostSnapshotSequence: this.#hostSnapshotSequence,
+        hostSendTime: Date.now(),
         processedInputCursors: {},
       })
       .catch(() => undefined);
@@ -618,47 +719,81 @@ export class RealtimeRoom<State, Input> {
   #lastFrameAt?: number;
   #accumulatorMs = 0;
 
+  /**
+   * Samples every independent render stream (delayed/interpolated
+   * authoritative, latest authoritative, raw predicted, correction-blended
+   * predicted) plus their timeline ticks, without composing them into one
+   * displayed State. This is the same sampling getRenderState() performs
+   * internally; call it directly when a compositor needs to render
+   * different entities from different streams (see RealtimeRoomRenderStates).
+   * Authoritative sampling here is independent of reconciliation: nothing
+   * a local correction does can reset, replace, or snap this stream.
+   */
+  getRenderStates(now: number): RealtimeRoomRenderStates<State> {
+    const interpolated = this.#sampleAuthoritative(now);
+    const predicted = this.#predictedState;
+    const correctedPredicted = this.#applyCorrection(now, predicted);
+    return {
+      interpolated,
+      latestAuthoritative: this.#latestSnapshot?.state,
+      predicted,
+      correctedPredicted,
+      interpolatedTick: this.#lastInterpolatedTick,
+      authoritativeTick: this.#latestSnapshot?.simulationTick,
+      predictedTick: this.#predictedTick >= 0 ? this.#predictedTick : undefined,
+    };
+  }
+
   /** Samples the authoritative timeline for rendering: prediction, interpolation, and correction. */
   getRenderState(now: number): State | undefined {
-    const authoritative = this.#sampleAuthoritative(now);
-    const predicted = this.#predictedState;
-    if (authoritative === undefined && predicted === undefined) return undefined;
-    if (predicted !== undefined && this.#options.blendCorrection) {
-      const from = this.#pendingCorrection?.from ?? predicted;
-      if (this.#pendingCorrection && this.#correctionStartedAt === undefined) {
-        this.#correctionStartedAt = now;
-      }
-      const t = !this.#pendingCorrection
-        ? 0
-        : this.#correctionMs <= 0
-          ? 1
-          : clamp((now - (this.#correctionStartedAt ?? now)) / this.#correctionMs, 0, 1);
-      // Blend toward the live, continuously-advancing predicted state, not the
-      // delayed authoritative interpolation. #predictedState keeps stepping
-      // forward every advanceFrame() while a correction is in flight, so the
-      // target here is never latency-behind; the correction converges on
-      // zero-latency local prediction instead of snapping back to state that
-      // is interpolationDelayMs old.
-      const blended = this.#options.blendCorrection(from, predicted, t);
-      if (this.#pendingCorrection && t >= 1) {
-        this.#pendingCorrection = undefined;
-        this.#correctionStartedAt = undefined;
-        this.#diagnostics.correctionsCompleted += 1;
-      }
-      return blended;
+    const states = this.getRenderStates(now);
+    const result = this.#options.composeRenderState
+      ? this.#options.composeRenderState(states)
+      : (states.correctedPredicted ?? states.interpolated);
+    this.#lastDisplayedState = result;
+    return result;
+  }
+
+  /** Blends a raw predicted state toward itself via blendCorrection while a correction is in flight; a no-op passthrough otherwise. Never touches the authoritative streams. */
+  #applyCorrection(now: number, predicted: State | undefined): State | undefined {
+    if (predicted === undefined || !this.#options.blendCorrection) return predicted;
+    const from = this.#pendingCorrection?.from ?? predicted;
+    if (this.#pendingCorrection && this.#correctionStartedAt === undefined) {
+      this.#correctionStartedAt = now;
     }
-    if (predicted !== undefined) return predicted;
-    return authoritative;
+    const t = !this.#pendingCorrection
+      ? 0
+      : this.#correctionMs <= 0
+        ? 1
+        : clamp((now - (this.#correctionStartedAt ?? now)) / this.#correctionMs, 0, 1);
+    // Blend toward the live, continuously-advancing predicted state, not the
+    // delayed authoritative interpolation. #predictedState keeps stepping
+    // forward every advanceFrame() while a correction is in flight, so the
+    // target here is never latency-behind; the correction converges on
+    // zero-latency local prediction instead of snapping back to state that
+    // is interpolationDelayMs old.
+    const blended = this.#options.blendCorrection(from, predicted, t);
+    if (this.#pendingCorrection && t >= 1) {
+      this.#pendingCorrection = undefined;
+      this.#correctionStartedAt = undefined;
+      this.#diagnostics.correctionsCompleted += 1;
+    }
+    return blended;
   }
 
   #sampleAuthoritative(now: number): State | undefined {
     const latest = this.#latestSnapshot;
-    if (!latest) return undefined;
+    if (!latest) {
+      this.#lastInterpolatedTick = undefined;
+      return undefined;
+    }
+    this.#sampledSinceLastSnapshot = true;
     this.#diagnostics.framesRendered += 1;
     const fixedStepMs = 1000 / this.#simulationHz;
     const delayTicks = Math.max(0, Math.round(this.#interpolationDelayMs() / fixedStepMs));
     const renderClockTick = this.#renderClockTick(now, fixedStepMs);
     const targetTick = renderClockTick - delayTicks;
+    this.#lastInterpolatedTick = targetTick;
     const previous = this.#previousSnapshot;
     if (targetTick <= latest.simulationTick && previous && previous.simulationTick < latest.simulationTick) {
       const span = latest.simulationTick - previous.simulationTick;
@@ -684,6 +819,9 @@ export class RealtimeRoom<State, Input> {
   #renderClockAnchor?: { now: number; tick: number };
   #renderClockRate = 1;
   #lastSnapshotReceivedAt?: number;
+  // The simulation tick the authoritative interpolation last targeted;
+  // exposed via getRenderStates().interpolatedTick.
+  #lastInterpolatedTick?: number;
 
   #renderClockTick(now: number, fixedStepMs: number): number {
     const latestTick = this.#latestSnapshot?.simulationTick ?? 0;
@@ -736,7 +874,15 @@ export class RealtimeRoom<State, Input> {
     if (this.#options.interpolationDelayMs !== undefined) {
       return Math.max(0, this.#options.interpolationDelayMs);
     }
-    return Math.max(REALTIME_ROOM_MIN_INTERPOLATION_DELAY_MS, this.#smoothedRttMs / 2 + this.#jitterMs);
+    // Adapt to whichever jitter signal is currently worse: ordered-input RTT
+    // jitter (useful before any snapshot has arrived) or observed
+    // snapshot-arrival jitter (a direct measurement of how uneven the actual
+    // presentation feed is). This lowers delay when arrival is stable and
+    // temporarily raises it when snapshots become uneven.
+    return Math.max(
+      REALTIME_ROOM_MIN_INTERPOLATION_DELAY_MS,
+      this.#smoothedRttMs / 2 + Math.max(this.#jitterMs, this.#snapshotJitterMs),
+    );
   }
 
   onConnection(listener: (event: ConnectionEvent) => void): () => void {
@@ -906,16 +1052,50 @@ export class RealtimeRoom<State, Input> {
         this.#predictedTick = -1;
         this.#pendingCorrection = undefined;
         this.#correctionStartedAt = undefined;
+        this.#lastDisplayedState = undefined;
         this.#renderClockAnchor = undefined;
         this.#renderClockRate = 1;
         this.#lastSnapshotReceivedAt = undefined;
+        this.#lastInterpolatedTick = undefined;
+        this.#lastSnapshotHostSendTime = undefined;
+        this.#lastSnapshotServerTime = undefined;
+        this.#smoothedSnapshotIntervalMs = undefined;
+        this.#snapshotJitterMs = 0;
+        this.#lastRuntimeSnapshotSequence = undefined;
+        this.#sampledSinceLastSnapshot = true;
       }
       if (this.#latestSnapshot && message.simulationTick <= this.#latestSnapshot.simulationTick) return;
+      if (this.#latestSnapshot && !this.#sampledSinceLastSnapshot) {
+        this.#diagnostics.snapshotsCoalescedOnReceive += 1;
+      }
+      this.#sampledSinceLastSnapshot = false;
+      if (
+        this.#lastRuntimeSnapshotSequence !== undefined &&
+        message.runtimeSnapshotSequence > this.#lastRuntimeSnapshotSequence + 1
+      ) {
+        this.#diagnostics.snapshotSequenceGaps +=
+          message.runtimeSnapshotSequence - this.#lastRuntimeSnapshotSequence - 1;
+      }
+      this.#lastRuntimeSnapshotSequence = message.runtimeSnapshotSequence;
       const receivedAt = monotonicNow();
       if (this.#lastSnapshotReceivedAt !== undefined) {
-        this.#diagnostics.lastSnapshotIntervalMs = receivedAt - this.#lastSnapshotReceivedAt;
+        const interval = receivedAt - this.#lastSnapshotReceivedAt;
+        this.#diagnostics.lastSnapshotIntervalMs = interval;
+        const expected = this.#smoothedSnapshotIntervalMs ?? this.#snapshotIntervalMs;
+        this.#smoothedSnapshotIntervalMs = expected === 0 ? interval : expected * 0.8 + interval * 0.2;
+        const deviation = Math.abs(interval - this.#smoothedSnapshotIntervalMs);
+        this.#snapshotJitterMs = this.#snapshotJitterMs === 0 ? deviation : this.#snapshotJitterMs * 0.8 + deviation * 0.2;
+        this.#diagnostics.snapshotArrivalJitterMs = this.#snapshotJitterMs;
       }
       this.#lastSnapshotReceivedAt = receivedAt;
+      if (this.#lastSnapshotHostSendTime !== undefined) {
+        this.#diagnostics.lastSnapshotHostIntervalMs = message.hostSendTime - this.#lastSnapshotHostSendTime;
+      }
+      this.#lastSnapshotHostSendTime = message.hostSendTime;
+      if (this.#lastSnapshotServerTime !== undefined) {
+        this.#diagnostics.lastSnapshotRelayIntervalMs = message.serverTime - this.#lastSnapshotServerTime;
+      }
+      this.#lastSnapshotServerTime = message.serverTime;
       this.#previousSnapshot = this.#latestSnapshot;
       this.#latestSnapshot = { state: message.state as State, simulationTick: message.simulationTick };
       this.#nudgeRenderClock(receivedAt);
@@ -951,6 +1131,13 @@ export class RealtimeRoom<State, Input> {
         this.#renderClockAnchor = undefined;
         this.#renderClockRate = 1;
         this.#lastSnapshotReceivedAt = undefined;
+        this.#lastInterpolatedTick = undefined;
+        this.#lastSnapshotHostSendTime = undefined;
+        this.#lastSnapshotServerTime = undefined;
+        this.#smoothedSnapshotIntervalMs = undefined;
+        this.#snapshotJitterMs = 0;
+        this.#lastRuntimeSnapshotSequence = message.runtimeSnapshotSequence;
+        this.#sampledSinceLastSnapshot = true;
         this.#reconcile();
       }
       if (this.#reconnectStartedAt !== undefined) {
@@ -1070,10 +1257,30 @@ export class RealtimeRoom<State, Input> {
       this.#predictedState = next;
       this.#predictedTick = tick;
     }
-    if (this.#options.blendCorrection && oldPredicted !== undefined) {
-      this.#pendingCorrection = { from: oldPredicted };
-      this.#correctionStartedAt = undefined;
-      this.#diagnostics.correctionCount += 1;
+    if (this.#options.blendCorrection && oldPredicted !== undefined && this.#predictedState !== undefined) {
+      this.#diagnostics.reconciliations += 1;
+      // Rebase from what the game actually has on screen right now, not the
+      // stale prediction frozen at the moment the previous correction (if
+      // any) started; falls back to oldPredicted before anything has ever
+      // been rendered.
+      const displayed = this.#lastDisplayedState ?? oldPredicted;
+      const shouldCorrect = this.#options.shouldCorrect
+        ? this.#options.shouldCorrect(displayed, this.#predictedState)
+        : true;
+      if (shouldCorrect) {
+        if (!this.#pendingCorrection) {
+          this.#correctionStartedAt = undefined;
+          this.#diagnostics.correctionsStarted += 1;
+        }
+        // Whether starting fresh or already correcting, always rebase `from`
+        // to the currently displayed pose. When a correction is already in
+        // flight, #correctionStartedAt is left untouched so a new snapshot
+        // arriving mid-correction (e.g. every ~33ms) cannot keep resetting
+        // the deadline and prevent it from ever completing.
+        this.#pendingCorrection = { from: displayed };
+      } else {
+        this.#diagnostics.correctionsSuppressed += 1;
+      }
     }
   }
 
@@ -1150,6 +1357,7 @@ export class RealtimeRoom<State, Input> {
         roundSequence: this.#roundSequence,
         simulationTick: next.simulationTick,
         hostSnapshotSequence: this.#hostSnapshotSequence,
+        hostSendTime: Date.now(),
         processedInputCursors,
       })
       .catch(() => {
@@ -1217,9 +1425,17 @@ export class RealtimeRoom<State, Input> {
     this.#predictedTick = -1;
     this.#pendingCorrection = undefined;
     this.#correctionStartedAt = undefined;
+    this.#lastDisplayedState = undefined;
     this.#renderClockAnchor = undefined;
     this.#renderClockRate = 1;
     this.#lastSnapshotReceivedAt = undefined;
+    this.#lastInterpolatedTick = undefined;
+    this.#lastSnapshotHostSendTime = undefined;
+    this.#lastSnapshotServerTime = undefined;
+    this.#smoothedSnapshotIntervalMs = undefined;
+    this.#snapshotJitterMs = 0;
+    this.#lastRuntimeSnapshotSequence = undefined;
+    this.#sampledSinceLastSnapshot = true;
     this.#pendingSnapshot = undefined;
     this.#inFlightSnapshots = 0;
     this.#lastSentSimulationTick = -1;

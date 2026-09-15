@@ -70,8 +70,8 @@
   while interrupted. Let the SDK own browser lifecycle detection, socket
   replacement, reconnect retries, snapshot recovery, and pending-action replay.
 - `createRealtimeRoom()`: integrate the game's existing simulation through
-  `RealtimeRoom`'s callbacks (predict/interpolate/extrapolate/blendCorrection)
-  rather than writing a parallel input queue, RTT estimator, snapshot pacer,
+  `RealtimeRoom`'s callbacks (predict/interpolate/extrapolate/blendCorrection/
+  shouldCorrect/composeRenderState) rather than writing a parallel input queue, RTT estimator, snapshot pacer,
   stale-round rejection, input ledger, interpolation buffer, or reconnect
   netcode; the SDK already owns all of that. Keep one game-owned render loop
   driven by `advanceFrame()`/`getRenderState()`. Keep authoritative snapshots

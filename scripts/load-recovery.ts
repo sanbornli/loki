@@ -721,6 +721,7 @@ async function runRealtimeMode(): Promise<void> {
               roundSequence: room.roundSequence,
               simulationTick: room.simulationTick,
               hostSnapshotSequence: room.hostSnapshotSequence,
+              hostSendTime: Date.now(),
               processedInputCursors,
               state: { tick: room.simulationTick, sentAt: Date.now() },
             });

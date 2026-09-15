@@ -165,6 +165,7 @@ export class RealtimeBus {
           simulationTick: message.simulationTick,
           runtimeSnapshotSequence: this.runtimeSnapshotSequence,
           processedInputCursors: message.processedInputCursors,
+          hostSendTime: message.hostSendTime,
           serverTime: Date.now(),
           state: message.state,
         });

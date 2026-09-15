@@ -50,6 +50,7 @@
       "roundSequence": 0,
       "simulationTick": 12,
       "hostSnapshotSequence": 1,
+      "hostSendTime": 995,
       "processedInputCursors": { "player-a": 1 },
       "state": { "positions": { "player-a": [1.5, 0, 2.25] } }
     },
@@ -86,6 +87,7 @@
       "simulationTick": 12,
       "runtimeSnapshotSequence": 1,
       "processedInputCursors": { "player-a": 1 },
+      "hostSendTime": 995,
       "serverTime": 1010,
       "state": { "positions": { "player-a": [1.5, 0, 2.25] } }
     },
