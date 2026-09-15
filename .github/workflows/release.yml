@@ -5,8 +5,10 @@ name: Release
 # 2. Pass live integration and recovery (nakama-live below).
 # 3. Publish npm packages and the Kotlin Maven artifact in parallel.
 # 4. Verify Swift and Unity from the public tag without waiting for Maven.
-# 5. Create the GitHub release after npm + Swift + Unity.
-# 6. Kotlin/Maven Central verification continues independently after publish.
+# 5. Deploy web so creator/agent install instructions match the released
+#    package versions (web is not Git-connected; a tag alone does not ship it).
+# 6. Create the GitHub release after npm + Swift + Unity + web.
+# 7. Kotlin/Maven Central verification continues independently after publish.
 
 on:
   push:
@@ -236,8 +238,25 @@ jobs:
           done
           npx tsx scripts/verify-native-registry-install.ts --ecosystem kotlin
 
+  deploy-web:
+    needs: [nakama-live]
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+      - name: Deploy web with the released package versions
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --service web --ci --yes \
+            --project e59d29d4-a7f0-4d4f-a082-3097f31a0c3a \
+            --environment production
+
   github-release:
-    needs: [publish-npm, verify-swift, verify-unity]
+    needs: [publish-npm, verify-swift, verify-unity, deploy-web]
     runs-on: ubuntu-latest
     environment: release
     steps:

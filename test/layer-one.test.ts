@@ -778,7 +778,9 @@ test("release workflow retries npm smoke and generates a Swift 5.9 manifest", as
   assert.match(workflow, /--ecosystem swift/);
   assert.match(workflow, /--ecosystem unity/);
   assert.match(workflow, /--ecosystem kotlin/);
-  assert.match(workflow, /needs: \[publish-npm, verify-swift, verify-unity\]/);
+  assert.match(workflow, /deploy-web:/);
+  assert.match(workflow, /railway up --service web --ci --yes/);
+  assert.match(workflow, /needs: \[publish-npm, verify-swift, verify-unity, deploy-web\]/);
   assert.doesNotMatch(workflow, /needs: \[verify-native-installs\]/);
   assert.doesNotMatch(workflow, /needs: \[publish-npm, publish-kotlin\]/);
 
