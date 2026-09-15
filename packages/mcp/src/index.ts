@@ -12,7 +12,7 @@ export const lokiResources = [
       "Inspect the game to establish its multiplayer profile. Do not infer player counts, teams, or simulation type from the game's name or genre. If a material field is ambiguous, stop and ask the creator. Do not invent new game.json fields.",
       "After confirming each mode's profile, choose createSynchronizedRoom for turn-based or event-driven state, or createRealtimeRoom for continuous host-authoritative simulation. Choose by how authoritative state actually progresses, not by genre or animation smoothness.",
       "createSynchronizedRoom: keep synchronized state compact and JSON-compatible; reducers must be synchronous, deterministic, and free of rendering, timers, networking, or other I/O.",
-      "createRealtimeRoom: integrate the game's existing simulation through its predict/interpolate/extrapolate/blendCorrection callbacks instead of a parallel input queue, RTT estimator, snapshot pacer, stale-round rejection, input ledger, interpolation buffer, or reconnect netcode. Keep one game-owned render loop, keep authoritative snapshots compact and self-contained, publish at a chosen rate up to the runtime's cap (25 Hz; default 10 Hz), and report selected rates plus observed diagnostics as evidence. Loki does not supply physics, collision, rendering optimization, or competitive integrity for realtime rooms.",
+      "createRealtimeRoom: integrate the game's existing simulation through its predict/interpolate/extrapolate/blendCorrection callbacks instead of a parallel input queue, RTT estimator, snapshot pacer, stale-round rejection, input ledger, interpolation buffer, or reconnect netcode. Keep one game-owned render loop, keep authoritative snapshots compact and self-contained, publish at a chosen rate up to the runtime's cap (30 Hz; default 10 Hz), and report selected rates plus observed diagnostics as evidence. Loki does not supply physics, collision, rendering optimization, or competitive integrity for realtime rooms.",
       "Let the SDK own page lifecycle, socket replacement, retries, snapshots, and pending-action replay. Keep the same client and room while interrupted. Never leave, close, disconnect, reload, or replace a room because of visibility, page, focus, or network lifecycle events.",
       "Dispatch only while connected. During suspended, reconnecting, or resynchronizing, lock authoritative input, preserve rendered state, show a temporary reconnecting message, and wait for an authoritative snapshot. Do not assume host authority survives reconnect.",
       "Do not repeat unresolved actions under new IDs. Treat indeterminate confirmation as an unknown outcome, room_closed as terminal, and leave_failed as requiring resolution before another room.",
@@ -32,7 +32,7 @@ export const lokiResources = [
       schemaVersion: 1,
       authority: "host",
       maxPlayers: "1..16",
-      tickRate: "1..25",
+      tickRate: "1..30",
     }),
   },
 ] as const;
@@ -114,15 +114,15 @@ export async function callLokiTool(
   }
   if (name === "integration_requirements") {
     return {
-      packages: ["@lokiplay/sdk@0.3.3", "@lokiplay/ui-web@0.3.3"],
-      command: "npm install @lokiplay/sdk@0.3.3 @lokiplay/ui-web@0.3.3",
+      packages: ["@lokiplay/sdk@0.3.4", "@lokiplay/ui-web@0.3.4"],
+      command: "npm install @lokiplay/sdk@0.3.4 @lokiplay/ui-web@0.3.4",
       apiOrigin: "https://api.lokiplay.cc",
       authority: "host",
       rankedIntegrity: false,
       synchronizedRooms: true,
       realtimeRooms: true,
       guidance:
-        "After confirming each mode's profile, choose createSynchronizedRoom for turn-based or event-driven state, or createRealtimeRoom for continuous host-authoritative simulation (25 Hz snapshot cap, 10 Hz default); do not choose by genre or animation smoothness. For createRealtimeRoom, integrate the game's existing simulation through its callbacks rather than a parallel input queue, RTT estimator, snapshot pacer, or reconnect netcode, keep one game-owned render loop, and report selected rates and diagnostics as evidence; Loki does not supply physics, collision, rendering optimization, or competitive integrity. Installing the SDK does not add a create/join screen; add a usable room-entry flow (minimal lobby or automatic create/join) before shipping. Inspect the game to establish its multiplayer profile; do not infer player counts, teams, or simulation type from name or genre, and stop to ask the creator when a material field is ambiguous. Do not invent new game.json fields. Let Loki own lifecycle reconnect and pending-action replay; never leave or replace a room on browser visibility, page, focus, or network events. Dispatch only while connected and preserve authoritative state while suspended, reconnecting, or resynchronizing. Use responsive safe-area-aware viewport sizing, Pointer Events for touch and desktop, and bounded canvas resolution and rendering. Low-level sendAction and sendHostState remain supported. Native clients cannot join realtime-mode rooms until a later parity release.",
+        "After confirming each mode's profile, choose createSynchronizedRoom for turn-based or event-driven state, or createRealtimeRoom for continuous host-authoritative simulation (30 Hz snapshot cap, 10 Hz default); do not choose by genre or animation smoothness. For createRealtimeRoom, integrate the game's existing simulation through its callbacks rather than a parallel input queue, RTT estimator, snapshot pacer, or reconnect netcode, keep one game-owned render loop, and report selected rates and diagnostics as evidence; Loki does not supply physics, collision, rendering optimization, or competitive integrity. Installing the SDK does not add a create/join screen; add a usable room-entry flow (minimal lobby or automatic create/join) before shipping. Inspect the game to establish its multiplayer profile; do not infer player counts, teams, or simulation type from name or genre, and stop to ask the creator when a material field is ambiguous. Do not invent new game.json fields. Let Loki own lifecycle reconnect and pending-action replay; never leave or replace a room on browser visibility, page, focus, or network events. Dispatch only while connected and preserve authoritative state while suspended, reconnecting, or resynchronizing. Use responsive safe-area-aware viewport sizing, Pointer Events for touch and desktop, and bounded canvas resolution and rendering. Low-level sendAction and sendHostState remain supported. Native clients cannot join realtime-mode rooms until a later parity release.",
     };
   }
   if (name === "diagnose_multiplayer") {
@@ -172,7 +172,7 @@ export async function callLokiTool(
     if (!/@lokiplay\/sdk|FirstPartyTransport|LokiClient/.test(joined)) {
       findings.push({
         code: "SDK_NOT_DETECTED",
-        message: "Install and initialize @lokiplay/sdk@0.3.3.",
+        message: "Install and initialize @lokiplay/sdk@0.3.4.",
       });
     }
     if (

@@ -76,7 +76,7 @@
   netcode; the SDK already owns all of that. Keep one game-owned render loop
   driven by `advanceFrame()`/`getRenderState()`. Keep authoritative snapshots
   compact and self-contained (no references to transient local-only state).
-  Host publishes snapshots at a chosen rate up to the runtime's cap (25 Hz;
+  Host publishes snapshots at a chosen rate up to the runtime's cap (30 Hz;
   default 10 Hz); do not exceed it. A game that needs the higher cadence must
   pass `snapshotHz` and set `tickRate` to match; otherwise Loki stays at
   10 Hz. Report the selected snapshot/input rates and the observed

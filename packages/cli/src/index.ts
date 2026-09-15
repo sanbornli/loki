@@ -88,7 +88,7 @@ const AGENT_INSTRUCTIONS = `# Loki integration rules
   a parallel input queue, RTT estimator, snapshot pacer, stale-round
   rejection, input ledger, interpolation buffer, or reconnect netcode. Keep
   one game-owned render loop, keep authoritative snapshots compact and
-  self-contained, publish at a chosen rate up to the runtime's cap (25 Hz;
+  self-contained, publish at a chosen rate up to the runtime's cap (30 Hz;
   default 10 Hz), and report selected rates plus observed diagnostics as
   evidence. Do not claim Loki supplies physics, collision, rendering
   optimization, or competitive integrity for realtime rooms.

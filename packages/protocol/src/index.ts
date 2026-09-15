@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-export const MAX_TICK_RATE = 25;
+export const MAX_TICK_RATE = 30;
 
 export const ProjectStateSchema = z.enum([
   "draft",

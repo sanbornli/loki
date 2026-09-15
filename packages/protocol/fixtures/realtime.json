@@ -9,7 +9,7 @@
       "maxMessageBytes": 16384,
       "maxChatBytes": 500,
       "messagesPerSecond": 20,
-      "maxRealtimeSnapshotHz": 25,
+      "maxRealtimeSnapshotHz": 30,
       "maxRealtimeInputHz": 20,
       "maxRealtimeInFlightSnapshots": 8
     },

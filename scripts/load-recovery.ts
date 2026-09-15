@@ -684,10 +684,10 @@ async function runRealtimeMode(): Promise<void> {
 
     realtimeCounting = true;
     const deadline = performance.now() + config.durationSeconds * 1_000;
-    // Snapshot cadence is capped at the runtime's 25 Hz limit; the host's
+    // Snapshot cadence is capped at the runtime's 30 Hz limit; the host's
     // own simulation runs at a representative 60 Hz internally (modeled
     // here by advancing simulationTick several times per published snapshot).
-    const snapshotHz = Math.min(config.updatesPerSecond, 25);
+    const snapshotHz = Math.min(config.updatesPerSecond, 30);
     const snapshotIntervalMs = 1_000 / snapshotHz;
     const inputIntervalMs = 1_000 / 15; // representative control traffic, under the 20 Hz cap
     const maxInFlightSnapshots = Math.max(3, Math.ceil((250 / 1000) * snapshotHz));

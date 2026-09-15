@@ -34,7 +34,7 @@ test("host publishSnapshot at 60Hz coalesces to the default 10 Hz cap and bounds
   assert.ok((snapshot.diagnostics?.snapshotsSent ?? 0) <= REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS);
 });
 
-test("snapshotHz 25 paces faster than the default 10 Hz cap and raises in-flight headroom", async () => {
+test("snapshotHz 30 paces faster than the default 10 Hz cap and raises in-flight headroom", async () => {
   const bus = new RealtimeBus();
   const { client } = await connectedClient(bus);
   const room = client.createRealtimeRoom<RacerState, RacerInput>({
