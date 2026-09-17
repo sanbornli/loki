@@ -17,7 +17,7 @@ type JoinedRoom = {
 };
 
 export const REALTIME_ROOM_MAX_MESSAGE_BYTES = 16_384;
-export const REALTIME_ROOM_DEFAULT_SNAPSHOT_HZ = 10;
+export const REALTIME_ROOM_DEFAULT_SNAPSHOT_HZ = 30;
 export const REALTIME_ROOM_MAX_SNAPSHOT_HZ = 30;
 export const REALTIME_ROOM_MAX_INPUT_HZ = 20;
 export const REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS = 3;
@@ -44,6 +44,58 @@ export const REALTIME_ROOM_LOW_EFFECTIVE_RATE_FACTOR = 0.7;
 // How many recent confirmed-effect ids a guest keeps to dedupe redelivered
 // or resynced effects. Bounded so long sessions cannot leak memory.
 export const REALTIME_ROOM_MAX_SEEN_EFFECT_IDS = 256;
+
+// --- Adaptive snapshot rate (opt-in via `adaptiveRate: true`) --------------
+// `snapshotHz` is the ceiling, never exceeded. Without `adaptiveRate`, the
+// room publishes at exactly that rate (unchanged prior behavior). With it,
+// the room starts conservatively and only climbs toward the ceiling after a
+// sustained run of clean acknowledgements, but backs off immediately (and
+// further) on rejection, timeout, or sustained backpressure.
+export const REALTIME_ROOM_DEFAULT_MIN_SNAPSHOT_HZ = 8;
+export const REALTIME_ROOM_DEFAULT_INITIAL_SNAPSHOT_HZ = 12;
+// Multiplicative decrease applied to the current target on rejection/timeout.
+export const REALTIME_ROOM_RATE_DECREASE_FACTOR = 0.5;
+// Additive increase (in Hz) applied after a sustained clean run.
+export const REALTIME_ROOM_RATE_INCREASE_STEP_HZ = 2;
+// Consecutive accepted sends required (with no rejection/timeout) before the
+// controller is willing to raise the target rate again.
+export const REALTIME_ROOM_RATE_INCREASE_STREAK = 20;
+// Minimum time between rate increases, so raising the rate can never itself
+// look like a back-to-back stall right after a reduction.
+export const REALTIME_ROOM_RATE_INCREASE_COOLDOWN_MS = 2_000;
+
+// A submitted snapshot that has not been acknowledged (accepted-echo or
+// explicit error) within this many multiples of the current send interval
+// (or this absolute floor, whichever is larger) is treated as timed out and
+// its in-flight capacity is released. This is what prevents a silently
+// dropped/superseded submission (the runtime ignores late/duplicate echoes
+// without ever responding) from permanently saturating the in-flight budget.
+export const REALTIME_ROOM_SNAPSHOT_ACK_TIMEOUT_FACTOR = 4;
+export const REALTIME_ROOM_SNAPSHOT_ACK_TIMEOUT_FLOOR_MS = 1_000;
+
+// A guest sends a bounded transport-health report to the host at roughly
+// this interval so a host-side adaptive controller can react to the
+// worst-placed guest, not only its own send/ack cadence.
+export const REALTIME_ROOM_GUEST_REPORT_INTERVAL_MS = 1_000;
+// A guest's extrapolated-frame ratio (over its own rolling window) above
+// this threshold is reported as a diagnostic warning and factored into the
+// host's rate controller as a backoff signal.
+export const REALTIME_ROOM_HIGH_EXTRAPOLATION_RATIO = 0.3;
+// How many recent getRenderStates() samples the extrapolation ratio is
+// computed over.
+export const REALTIME_ROOM_EXTRAPOLATION_WINDOW = 60;
+// How many recent snapshot round-trip samples snapshotAckP95Ms is computed
+// over.
+export const REALTIME_ROOM_MAX_ACK_LATENCY_SAMPLES = 50;
+// How long the in-flight budget must stay fully saturated before it is
+// reported as sustained backpressure (a warning, and a rate-controller
+// backoff signal) rather than an ordinary brief burst.
+export const REALTIME_ROOM_SUSTAINED_BACKPRESSURE_MS = 500;
+// Buffer applied to the *measured* accepted snapshot interval (not the
+// configured one) when deriving the default interpolation delay, so
+// presentation adapts to reality instead of assuming the configured rate is
+// actually being delivered.
+export const REALTIME_ROOM_INTERPOLATION_BUFFER_INTERVALS = 1.25;
 
 export type RealtimeRoomOutcome =
   | "rejected"
@@ -143,6 +195,40 @@ export type RealtimeRoomDiagnostics = {
   hostFrameStallCount: number;
   /** Host-only: duration of the most recently observed host frame stall. */
   lastHostFrameStallMs?: number;
+  /** Host-only: total snapshot submissions actually transmitted (equivalent to `snapshotsSent`, kept for clarity: this counts attempts, not runtime acceptance). */
+  snapshotsAttempted: number;
+  /** Host-only: submissions the runtime accepted and echoed back. */
+  snapshotsAccepted: number;
+  /** Host-only: submissions the runtime explicitly rejected (stale version/round, rate limited, etc). */
+  snapshotsRejected: number;
+  /** Host-only: submissions that never received an accepted-echo or an explicit error within the ack timeout, so their in-flight capacity was released speculatively (usually a silently-superseded/late echo the runtime drops without responding). */
+  snapshotAckTimeouts: number;
+  /** Host-only: cumulative time spent with the in-flight budget fully saturated (unable to send a newer state even though one was pending). */
+  snapshotBackpressureDurationMs: number;
+  /** Host-only: the highest number of concurrently in-flight (unacknowledged) snapshot submissions observed. */
+  maxInFlightObserved: number;
+  /** Host-only: smoothed rate of *accepted* echoes (vs. `effectiveSnapshotHz`, which measures attempted sends). Falls behind `effectiveSnapshotHz` when the runtime is dropping/rejecting submissions. */
+  effectiveAcceptedSnapshotHz?: number;
+  /** Host-only: the configured ceiling (`snapshotHz`), never exceeded regardless of adaptive-rate behavior. */
+  configuredMaxSnapshotHz: number;
+  /** Host-only: the rate the adaptive controller is currently targeting (equals `configuredMaxSnapshotHz` unless `adaptiveRate: true`). */
+  currentTargetSnapshotHz: number;
+  /** Host-only: `snapshotsAccepted / snapshotsAttempted` since the last round began. */
+  snapshotAcceptanceRatio?: number;
+  /** Host-only: p95 latency between a snapshot submission and its accepted-echo, over the most recent `REALTIME_ROOM_MAX_ACK_LATENCY_SAMPLES` samples. */
+  snapshotAckP95Ms?: number;
+  /** Host-only: how many times the adaptive rate controller reduced the target rate (rejection, timeout, or sustained backpressure). */
+  adaptiveRateReductions: number;
+  /** Host-only: how many times the adaptive rate controller raised the target rate after a sustained clean run. */
+  adaptiveRateIncreases: number;
+  /** Total setInput() calls, whether or not they resulted in a network send this turn. */
+  inputCalls: number;
+  /** Latest-wins input actually transmitted over the network (paced by `inputHz`); always <= `inputCalls`. */
+  inputsTransmitted: number;
+  /** Times the runtime rejected a realtime_input submission with RATE_LIMITED. */
+  inputRateLimited: number;
+  /** Guest-only: smoothed accepted-snapshot arrival rate this client actually observed, independent of what the host is configured/targeting to send. */
+  guestEffectiveSnapshotHz?: number;
 };
 
 /** Host-only diagnostic warnings for publish cadence problems Loki cannot fix itself (the game controls its own frame loop). Purely informational; RealtimeRoom keeps functioning regardless. */
@@ -150,7 +236,11 @@ export type RealtimeRoomDiagnosticWarning =
   | { type: "back_to_back_publish"; intervalMs: number }
   | { type: "host_frame_stall"; stallMs: number }
   | { type: "missed_snapshot_window"; windows: number }
-  | { type: "low_effective_snapshot_rate"; effectiveHz: number; targetHz: number };
+  | { type: "low_effective_snapshot_rate"; effectiveHz: number; targetHz: number }
+  | { type: "snapshot_ack_timeout"; hostSnapshotSequence: number; timeoutMs: number }
+  | { type: "snapshot_backpressure"; durationMs: number }
+  | { type: "runtime_rate_limited"; operation: "realtime_snapshot" | "realtime_input"; retryAfterMs?: number }
+  | { type: "high_extrapolation_ratio"; ratio: number };
 
 export type InputsForTick<Input> = {
   latest: Record<string, Input>;
@@ -246,7 +336,19 @@ export type RealtimeRoomOptions<State, Input> = {
    */
   onDiagnosticWarning?(event: RealtimeRoomDiagnosticWarning): void;
   simulationHz?: number;
+  /** The maximum snapshot publish rate — a ceiling, never a promise of delivery. With `adaptiveRate: true`, the room starts below this and climbs toward it only after sustained clean acknowledgements. */
   snapshotHz?: number;
+  /**
+   * Host-only: enables the AIMD rate controller (start conservative, climb
+   * slowly on sustained success, back off immediately on rejection/timeout/
+   * backpressure) instead of publishing at a fixed `snapshotHz`. Defaults to
+   * false, matching prior fixed-rate behavior.
+   */
+  adaptiveRate?: boolean;
+  /** Host-only, requires `adaptiveRate`: the floor the controller will not reduce below. Defaults to `REALTIME_ROOM_DEFAULT_MIN_SNAPSHOT_HZ`. */
+  minSnapshotHz?: number;
+  /** Host-only, requires `adaptiveRate`: the starting target rate. Defaults to `REALTIME_ROOM_DEFAULT_INITIAL_SNAPSHOT_HZ`. */
+  initialSnapshotHz?: number;
   inputHz?: number;
   interpolationDelayMs?: number;
   correctionMs?: number;
@@ -288,6 +390,14 @@ export interface RealtimeRoomHost {
       simulationTick: number;
     },
   ): Promise<void>;
+  sendRealtimeGuestReport(report: {
+    roundSequence: number;
+    effectiveSnapshotHz?: number;
+    arrivalJitterMs?: number;
+    sequenceGaps: number;
+    extrapolatedFrameRatio: number;
+    latestAuthoritativeTick?: number;
+  }): Promise<void>;
   requestRealtimeSync(): Promise<void>;
   onMessage(listener: (message: ServerEnvelope) => void): () => void;
   onRealtimeMessage(listener: (message: RealtimeServerEnvelope) => void): () => void;
@@ -368,6 +478,16 @@ type HostInputRecord<Input> = {
   dedupe: Set<number>;
 };
 
+// A submitted-but-not-yet-resolved publishSnapshot() call. Tracked by
+// hostSnapshotSequence (rather than a flat counter) so an accepted echo,
+// explicit runtime error, or ack timeout can each release the *specific*
+// entry they refer to.
+type PendingSnapshotSubmission = {
+  simulationTick: number;
+  sentAt: number;
+  timeoutTimer: ReturnType<typeof setTimeout>;
+};
+
 /**
  * RealtimeRoom is Loki's continuous, host-authoritative networking layer.
  * It owns input sequencing, snapshot pacing/backpressure, stale-frame
@@ -393,11 +513,20 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
   readonly #options: RealtimeRoomOptions<State, Input>;
   readonly #listeners = new Set<(snapshot: RealtimeRoomSnapshot<State>) => void>();
   readonly #simulationHz: number;
-  readonly #snapshotIntervalMs: number;
+  // Mutable when adaptiveRate is enabled: the interval derived from
+  // #currentSnapshotHz, which the AIMD controller adjusts between
+  // #snapshotHzFloor and #snapshotHzCeiling. Fixed at the ceiling's
+  // interval (matching prior behavior) when adaptiveRate is off.
+  #snapshotIntervalMs: number;
   readonly #inputIntervalMs: number;
   readonly #maxInFlightSnapshots: number;
   readonly #correctionMs: number;
   readonly #diagnosticsEnabled: boolean;
+  readonly #adaptiveRateEnabled: boolean;
+  readonly #snapshotHzCeiling: number;
+  readonly #snapshotHzFloor: number;
+  readonly #initialSnapshotHz: number;
+  #currentSnapshotHz: number;
 
   #unsubscribe?: () => void;
   #unsubscribeRealtime?: () => void;
@@ -432,17 +561,53 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
   readonly #hostProcessedCursors = new Map<string, number>();
   #hostSnapshotSequence = 0;
   #pendingSnapshot?: { state: State; simulationTick: number };
-  #inFlightSnapshots = 0;
+  readonly #pendingSnapshotSubmissions = new Map<number, PendingSnapshotSubmission>();
   #lastSnapshotSentAt = 0;
   #snapshotFlushTimer?: ReturnType<typeof setTimeout>;
   #flushMicrotaskScheduled = false;
   #lastSentSimulationTick = -1;
+  // Set when the runtime responds RATE_LIMITED to a snapshot submission;
+  // the next flush attempt waits at least until this time before retrying.
+  #snapshotRateLimitedUntil?: number;
+  // How long the in-flight budget has been continuously fully saturated
+  // (see REALTIME_ROOM_SUSTAINED_BACKPRESSURE_MS), for
+  // snapshotBackpressureDurationMs and the sustained-backpressure warning.
+  #backpressureStartedAt?: number;
+  // Consecutive accepted sends with no rejection/timeout since the last
+  // rate change; the adaptive controller only raises the target once this
+  // reaches REALTIME_ROOM_RATE_INCREASE_STREAK.
+  #cleanSendStreak = 0;
+  #lastRateIncreaseAt?: number;
+  #lastAcceptedSnapshotAt?: number;
+  #smoothedAcceptedSnapshotHz?: number;
+  // Bounded rolling window of publishSnapshot()->accepted-echo latencies,
+  // for snapshotAckP95Ms.
+  #ackLatencySamples: number[] = [];
 
   // Host-only publish cadence diagnostics: measured from publishSnapshot()
   // call times (the host's own clock) and from actual send times, so a
   // stalled host frame loop can be told apart from Loki's own pacing.
   #lastPublishCallAt?: number;
   #smoothedEffectiveHz?: number;
+
+  // Paced, latest-wins network transmission of setInput() controls,
+  // independent from the immediate local-prediction update: setInput()
+  // always updates #latestInput synchronously, but the network send is
+  // throttled to at most once per #inputIntervalMs.
+  #lastInputSentAt = 0;
+  #inputSendTimer?: ReturnType<typeof setTimeout>;
+
+  // Bounded rolling window used to detect *sustained* high extrapolation
+  // (vs. the lifetime extrapolatedFrames/framesRendered average), and a
+  // guest-only periodic report of the same signal to the host.
+  #extrapolationWindowCount = 0;
+  #extrapolationWindowExtrapolated = 0;
+  #lastExtrapolationWarningAt?: number;
+  #guestReportTimer?: ReturnType<typeof setInterval>;
+  // Host-only: the worst (highest) extrapolatedFrameRatio any guest has
+  // reported this round, used as an additional backoff signal for the
+  // adaptive rate controller beyond the host's own send/ack cadence.
+  #worstGuestExtrapolationRatio = 0;
 
   // Authoritative timeline (both host and guest observe broadcasts).
   #previousSnapshot?: { state: State; simulationTick: number };
@@ -509,27 +674,60 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     snapshotPublishCalls: 0,
     missedSnapshotWindows: 0,
     hostFrameStallCount: 0,
+    snapshotsAttempted: 0,
+    snapshotsAccepted: 0,
+    snapshotsRejected: 0,
+    snapshotAckTimeouts: 0,
+    snapshotBackpressureDurationMs: 0,
+    maxInFlightObserved: 0,
+    configuredMaxSnapshotHz: 0,
+    currentTargetSnapshotHz: 0,
+    adaptiveRateReductions: 0,
+    adaptiveRateIncreases: 0,
+    inputCalls: 0,
+    inputsTransmitted: 0,
+    inputRateLimited: 0,
   };
 
   constructor(host: RealtimeRoomHost, options: RealtimeRoomOptions<State, Input> = {}) {
     this.#host = host;
     this.#options = options;
     this.#simulationHz = clamp(options.simulationHz ?? 60, 1, 240);
-    const snapshotHz = clamp(
+    this.#snapshotHzCeiling = clamp(
       options.snapshotHz ?? REALTIME_ROOM_DEFAULT_SNAPSHOT_HZ,
       1,
       REALTIME_ROOM_MAX_SNAPSHOT_HZ,
     );
+    this.#adaptiveRateEnabled = options.adaptiveRate ?? false;
+    // Without adaptiveRate, the floor and initial rate both equal the
+    // ceiling: the room publishes at exactly the configured snapshotHz,
+    // matching prior fixed-rate behavior exactly.
+    this.#snapshotHzFloor = this.#adaptiveRateEnabled
+      ? clamp(options.minSnapshotHz ?? REALTIME_ROOM_DEFAULT_MIN_SNAPSHOT_HZ, 1, this.#snapshotHzCeiling)
+      : this.#snapshotHzCeiling;
+    this.#initialSnapshotHz = this.#adaptiveRateEnabled
+      ? clamp(
+          options.initialSnapshotHz ?? REALTIME_ROOM_DEFAULT_INITIAL_SNAPSHOT_HZ,
+          this.#snapshotHzFloor,
+          this.#snapshotHzCeiling,
+        )
+      : this.#snapshotHzCeiling;
+    this.#currentSnapshotHz = this.#initialSnapshotHz;
     const inputHz = clamp(options.inputHz ?? REALTIME_ROOM_MAX_INPUT_HZ, 1, REALTIME_ROOM_MAX_INPUT_HZ);
-    this.#snapshotIntervalMs = 1000 / snapshotHz;
+    this.#snapshotIntervalMs = 1000 / this.#currentSnapshotHz;
     this.#inputIntervalMs = 1000 / inputHz;
+    // In-flight budget scales with the ceiling (the highest rate the
+    // adaptive controller might ramp up to), not the current target, so
+    // headroom is already available before any rate increase.
     this.#maxInFlightSnapshots = clamp(
-      Math.ceil((REALTIME_ROOM_IN_FLIGHT_BUDGET_MS / 1000) * snapshotHz),
+      Math.ceil((REALTIME_ROOM_IN_FLIGHT_BUDGET_MS / 1000) * this.#snapshotHzCeiling),
       REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS,
       REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS,
     );
     this.#correctionMs = Math.max(0, options.correctionMs ?? REALTIME_ROOM_DEFAULT_CORRECTION_MS);
     this.#diagnosticsEnabled = options.diagnostics ?? false;
+    this.#diagnostics.configuredMaxSnapshotHz = this.#snapshotHzCeiling;
+    this.#diagnostics.currentTargetSnapshotHz = this.#currentSnapshotHz;
   }
 
   get isHost(): boolean {
@@ -559,11 +757,31 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
       jitterMs: this.#jitterMs,
       interpolationDelayMs: this.#interpolationDelayMs(),
       pendingInputCount: this.#orderedPending.size,
-      pendingSnapshotCount: this.#inFlightSnapshots + (this.#pendingSnapshot ? 1 : 0),
+      pendingSnapshotCount: this.#pendingSnapshotSubmissions.size + (this.#pendingSnapshot ? 1 : 0),
       lastAcknowledgedInputSequence: this.#lastAcknowledgedInputSequence,
       lastError: this.#lastError,
-      diagnostics: this.#diagnosticsEnabled ? { ...this.#diagnostics } : undefined,
+      diagnostics: this.#diagnosticsEnabled ? this.#computeDiagnostics() : undefined,
     };
+  }
+
+  #computeDiagnostics(): RealtimeRoomDiagnostics {
+    return {
+      ...this.#diagnostics,
+      snapshotAcceptanceRatio:
+        this.#diagnostics.snapshotsAttempted > 0
+          ? this.#diagnostics.snapshotsAccepted / this.#diagnostics.snapshotsAttempted
+          : undefined,
+      snapshotAckP95Ms: this.#computeAckLatencyP95(),
+      guestEffectiveSnapshotHz:
+        this.#smoothedSnapshotIntervalMs !== undefined ? 1000 / this.#smoothedSnapshotIntervalMs : undefined,
+    };
+  }
+
+  #computeAckLatencyP95(): number | undefined {
+    if (this.#ackLatencySamples.length === 0) return undefined;
+    const sorted = [...this.#ackLatencySamples].sort((a, b) => a - b);
+    const index = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95));
+    return sorted[index];
   }
 
   subscribe(listener: (snapshot: RealtimeRoomSnapshot<State>) => void): () => void {
@@ -631,7 +849,14 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     }
   }
 
-  /** Latest-wins continuous control input; coalesced and periodically refreshed. */
+  /**
+   * Latest-wins continuous control input. Updates local prediction
+   * immediately (safe to call every render frame), but network
+   * transmission is paced to at most once per `inputHz` interval: calls
+   * made faster than that only replace the pending value (coalesced) and
+   * the most recent one is sent when the interval elapses. Held controls
+   * are also periodically refreshed at the same cadence.
+   */
   setInput(input: Input): void {
     if (this.#connection === "closed" || this.#connection === "failed") {
       throw new RealtimeRoomError("rejected", "room is not connected");
@@ -639,8 +864,33 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     const parsed = this.#parseInput(input);
     assertJsonCompatible(parsed);
     this.#latestInput = parsed;
+    this.#diagnostics.inputCalls += 1;
     this.#armInputResendTimer();
-    void this.#sendLatestInput();
+    this.#scheduleInputSend();
+  }
+
+  /**
+   * Sends #latestInput now if at least #inputIntervalMs has elapsed since
+   * the last network send; otherwise coalesces this call away and arms a
+   * single timer (if one isn't already pending) to flush whatever the
+   * latest value is once the interval elapses.
+   */
+  #scheduleInputSend(): void {
+    const elapsed = monotonicNow() - this.#lastInputSentAt;
+    if (elapsed >= this.#inputIntervalMs) {
+      void this.#sendLatestInput();
+      return;
+    }
+    this.#diagnostics.inputsCoalesced += 1;
+    if (this.#inputSendTimer) return;
+    const wait = this.#inputIntervalMs - elapsed;
+    this.#inputSendTimer = setTimeout(() => {
+      this.#inputSendTimer = undefined;
+      if (this.#latestInput === undefined) return;
+      if (this.#connection === "closed" || this.#connection === "failed") return;
+      void this.#sendLatestInput();
+    }, wait);
+    this.#inputSendTimer.unref?.();
   }
 
   /** Bounded one-shot command retained until acknowledged by the host. */
@@ -845,7 +1095,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#hostSnapshotSequence = 0;
     this.#lastSentSimulationTick = -1;
     this.#pendingSnapshot = undefined;
-    this.#inFlightSnapshots = 0;
+    this.#resetSnapshotPacingState();
     this.#previousSnapshot = undefined;
     this.#latestSnapshot = undefined;
     this.#predictedState = undefined;
@@ -867,6 +1117,8 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#smoothedEffectiveHz = undefined;
     this.#seenEffectIds.clear();
     this.#seenEffectOrder = [];
+    this.#extrapolationWindowCount = 0;
+    this.#extrapolationWindowExtrapolated = 0;
     for (const pending of this.#orderedPending.values()) {
       pending.reject(new RealtimeRoomError("stale", "round restarted"));
     }
@@ -874,20 +1126,32 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     const parsed = this.#parseState(initialState);
     assertJsonCompatible(parsed);
     this.#hostSnapshotSequence += 1;
+    const hostSnapshotSequence = this.#hostSnapshotSequence;
+    const sentAt = monotonicNow();
+    const timeoutMs = Math.max(
+      REALTIME_ROOM_SNAPSHOT_ACK_TIMEOUT_FLOOR_MS,
+      this.#snapshotIntervalMs * REALTIME_ROOM_SNAPSHOT_ACK_TIMEOUT_FACTOR,
+    );
+    const timeoutTimer = setTimeout(() => this.#onSnapshotAckTimeout(hostSnapshotSequence), timeoutMs);
+    timeoutTimer.unref?.();
+    this.#pendingSnapshotSubmissions.set(hostSnapshotSequence, { simulationTick: 0, sentAt, timeoutTimer });
     void this.#host
       .sendRealtimeSnapshot(parsed, {
         authorityEpoch: this.#authorityEpoch,
         roundSequence: this.#roundSequence,
         simulationTick: 0,
-        hostSnapshotSequence: this.#hostSnapshotSequence,
+        hostSnapshotSequence,
         hostSendTime: Date.now(),
         processedInputCursors: {},
       })
-      .catch(() => undefined);
-    this.#inFlightSnapshots += 1;
+      .catch(() => {
+        this.#releasePendingSnapshot(hostSnapshotSequence);
+        this.#diagnostics.snapshotsRejected += 1;
+      });
     this.#lastSentSimulationTick = 0;
-    this.#lastSnapshotSentAt = monotonicNow();
+    this.#lastSnapshotSentAt = sentAt;
     this.#diagnostics.snapshotsSent += 1;
+    this.#diagnostics.snapshotsAttempted += 1;
     if (this.#latestInput !== undefined) void this.#sendLatestInput();
     this.#emit();
   }
@@ -927,6 +1191,12 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
    * different entities from different streams (see RealtimeRoomRenderStates).
    * Authoritative sampling here is independent of reconciliation: nothing
    * a local correction does can reset, replace, or snap this stream.
+   * Call this (or `getRenderState()`, which calls it internally) at most
+   * once per rendered frame with that frame's `now`: each call advances
+   * frame-scoped diagnostics counters (`framesRendered`,
+   * `extrapolatedFrames`) and can complete an in-flight correction, so
+   * calling it more than once per frame double-counts that bookkeeping
+   * and can end a correction a frame early.
    */
   getRenderStates(now: number): RealtimeRoomRenderStates<State> {
     const interpolated = this.#sampleAuthoritative(now);
@@ -1005,14 +1275,41 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     if (targetTick > latest.simulationTick) {
       const extraTicks = Math.min(
         targetTick - latest.simulationTick,
-        REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS * Math.round(this.#snapshotIntervalMs / fixedStepMs),
+        REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS * Math.round(this.#effectiveSnapshotIntervalMs() / fixedStepMs),
       );
       if (this.#options.extrapolate && extraTicks > 0) {
         this.#diagnostics.extrapolatedFrames += 1;
+        this.#recordExtrapolationSample(true);
         return this.#options.extrapolate(latest.state, (extraTicks * fixedStepMs) / 1000);
       }
     }
+    this.#recordExtrapolationSample(false);
     return latest.state;
+  }
+
+  /** The measured accepted-snapshot interval when available, falling back to the configured/current target interval before enough samples exist. Extrapolation bounds and render-clock nudging use this instead of the configured interval so presentation adapts to reality (e.g. a configured 30 Hz room actually delivering at 8 Hz) rather than assuming the request is being honored. */
+  #effectiveSnapshotIntervalMs(): number {
+    return this.#smoothedSnapshotIntervalMs ?? this.#snapshotIntervalMs;
+  }
+
+  /**
+   * Tracks a bounded rolling window of whether recent samples had to
+   * extrapolate, to detect *sustained* high extrapolation (vs. the
+   * lifetime extrapolatedFrames/framesRendered average) and warn once per
+   * window when it crosses REALTIME_ROOM_HIGH_EXTRAPOLATION_RATIO.
+   */
+  #recordExtrapolationSample(extrapolated: boolean): void {
+    this.#extrapolationWindowCount += 1;
+    if (extrapolated) this.#extrapolationWindowExtrapolated += 1;
+    if (this.#extrapolationWindowCount < REALTIME_ROOM_EXTRAPOLATION_WINDOW) return;
+    const ratio = this.#extrapolationWindowExtrapolated / this.#extrapolationWindowCount;
+    this.#extrapolationWindowCount = 0;
+    this.#extrapolationWindowExtrapolated = 0;
+    if (ratio <= REALTIME_ROOM_HIGH_EXTRAPOLATION_RATIO) return;
+    const now = monotonicNow();
+    if (this.#lastExtrapolationWarningAt !== undefined && now - this.#lastExtrapolationWarningAt < 5_000) return;
+    this.#lastExtrapolationWarningAt = now;
+    this.#warn({ type: "high_extrapolation_ratio", ratio });
   }
 
   #renderClockAnchor?: { now: number; tick: number };
@@ -1054,7 +1351,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     const estimatedTick = this.#renderClockTick(now, fixedStepMs);
     const error = latest.simulationTick - estimatedTick;
     this.#renderClockAnchor = { now, tick: estimatedTick };
-    const snapshotIntervalTicks = Math.max(1, Math.round(this.#snapshotIntervalMs / fixedStepMs));
+    const snapshotIntervalTicks = Math.max(1, Math.round(this.#effectiveSnapshotIntervalMs() / fixedStepMs));
     const correctionPerTick = clamp(
       error / snapshotIntervalTicks,
       -REALTIME_ROOM_MAX_CLOCK_NUDGE,
@@ -1073,13 +1370,16 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     if (this.#options.interpolationDelayMs !== undefined) {
       return Math.max(0, this.#options.interpolationDelayMs);
     }
-    // Adapt to whichever jitter signal is currently worse: ordered-input RTT
-    // jitter (useful before any snapshot has arrived) or observed
-    // snapshot-arrival jitter (a direct measurement of how uneven the actual
-    // presentation feed is). This lowers delay when arrival is stable and
-    // temporarily raises it when snapshots become uneven.
+    // Adapt to whichever signal implies the largest buffer is needed:
+    // ordered-input RTT jitter (useful before any snapshot has arrived),
+    // observed snapshot-arrival jitter (how uneven the feed is), or a
+    // buffer over the *measured* accepted-snapshot interval (not the
+    // configured target) so a room configured for e.g. 30 Hz but actually
+    // only delivering ~8 Hz buffers for the ~125ms reality instead of
+    // assuming the configured ~33ms is what's arriving.
     return Math.max(
       REALTIME_ROOM_MIN_INTERPOLATION_DELAY_MS,
+      this.#effectiveSnapshotIntervalMs() * REALTIME_ROOM_INTERPOLATION_BUFFER_INTERVALS,
       this.#smoothedRttMs / 2 + Math.max(this.#jitterMs, this.#snapshotJitterMs),
     );
   }
@@ -1138,6 +1438,38 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#unsubscribe = this.#host.onMessage((message) => this.#onV1Message(message));
     this.#unsubscribeRealtime = this.#host.onRealtimeMessage((message) => this.#onV2Message(message));
     this.#unsubscribeConnection = this.#host.onConnection?.((event) => this.#onConnectionEvent(event));
+    this.#armGuestReportTimer();
+  }
+
+  /**
+   * While connected as a guest, periodically sends a bounded transport-
+   * health report to the host (see RealtimeRoomHost.sendRealtimeGuestReport)
+   * so a host-side adaptive rate controller can react to the worst-placed
+   * guest, not only its own send/ack cadence. A no-op whenever this client
+   * is currently the host.
+   */
+  #armGuestReportTimer(): void {
+    if (this.#guestReportTimer) return;
+    this.#guestReportTimer = setInterval(() => {
+      if (this.isHost) return;
+      if (this.#connection !== "connected") return;
+      if (!this.#roomId) return;
+      const effectiveIntervalMs = this.#smoothedSnapshotIntervalMs;
+      void this.#host
+        .sendRealtimeGuestReport({
+          roundSequence: this.#roundSequence,
+          effectiveSnapshotHz: effectiveIntervalMs ? 1000 / effectiveIntervalMs : undefined,
+          arrivalJitterMs: this.#snapshotJitterMs || undefined,
+          sequenceGaps: this.#diagnostics.snapshotSequenceGaps,
+          extrapolatedFrameRatio:
+            this.#diagnostics.framesRendered > 0
+              ? this.#diagnostics.extrapolatedFrames / this.#diagnostics.framesRendered
+              : 0,
+          latestAuthoritativeTick: this.#latestSnapshot?.simulationTick,
+        })
+        .catch(() => undefined);
+    }, REALTIME_ROOM_GUEST_REPORT_INTERVAL_MS);
+    this.#guestReportTimer.unref?.();
   }
 
   #unbind(): void {
@@ -1234,6 +1566,19 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         message.code === "RATE_LIMITED" ? "rate_limited" : message.code === "STALE_VERSION" ? "stale" : "rejected",
         message.message,
       );
+      if (message.operation === "realtime_snapshot") {
+        this.#diagnostics.snapshotsRejected += 1;
+        if (message.hostSnapshotSequence !== undefined) this.#releasePendingSnapshot(message.hostSnapshotSequence);
+        this.#reduceSnapshotHz();
+        if (message.code === "RATE_LIMITED") {
+          this.#warn({ type: "runtime_rate_limited", operation: "realtime_snapshot", retryAfterMs: message.retryAfterMs });
+          if (message.retryAfterMs) this.#snapshotRateLimitedUntil = monotonicNow() + message.retryAfterMs;
+        }
+        this.#attemptFlush();
+      } else if (message.operation === "realtime_input" && message.code === "RATE_LIMITED") {
+        this.#diagnostics.inputRateLimited += 1;
+        this.#warn({ type: "runtime_rate_limited", operation: "realtime_input", retryAfterMs: message.retryAfterMs });
+      }
       this.#emit();
       return;
     }
@@ -1264,6 +1609,12 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         this.#sampledSinceLastSnapshot = true;
         this.#seenEffectIds.clear();
         this.#seenEffectOrder = [];
+        this.#extrapolationWindowCount = 0;
+        this.#extrapolationWindowExtrapolated = 0;
+        // Harmless for a guest (its own pending-submission map is always
+        // empty); clears any leftover host-side pacing state from a stale
+        // prior round (e.g. this client was the host before a migration).
+        this.#resetSnapshotPacingState();
       }
       if (this.#latestSnapshot && message.simulationTick <= this.#latestSnapshot.simulationTick) return;
       if (this.#latestSnapshot && !this.#sampledSinceLastSnapshot) {
@@ -1303,8 +1654,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
       this.#hostId = message.hostId || this.#hostId;
       if (this.#playerId === message.hostId) {
         this.#diagnostics.snapshotsAcked += 1;
-        this.#inFlightSnapshots = Math.max(0, this.#inFlightSnapshots - 1);
-        this.#attemptFlush();
+        this.#onSnapshotAccepted(message.hostSnapshotSequence, receivedAt);
       }
       const acked = message.processedInputCursors?.[this.#playerId];
       if (acked !== undefined) this.#applyAck(acked);
@@ -1379,6 +1729,19 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         this.#setConnection("connected");
       }
       this.#emit();
+      return;
+    }
+    if (message.type === "realtime_guest_report") {
+      if (!this.isHost) return;
+      if (message.roundSequence !== this.#roundSequence) return;
+      if (message.extrapolatedFrameRatio > this.#worstGuestExtrapolationRatio) {
+        this.#worstGuestExtrapolationRatio = message.extrapolatedFrameRatio;
+      }
+      if (message.extrapolatedFrameRatio > REALTIME_ROOM_HIGH_EXTRAPOLATION_RATIO) {
+        this.#warn({ type: "high_extrapolation_ratio", ratio: message.extrapolatedFrameRatio });
+        this.#reduceSnapshotHz();
+        this.#attemptFlush();
+      }
       return;
     }
     if (message.type === "realtime_input") {
@@ -1468,7 +1831,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         // extrapolation so a large gap (e.g. after a reconnect) cannot cause
         // an unbounded replay.
         const fixedStepMs = 1000 / this.#simulationHz;
-        const snapshotIntervalTicks = Math.max(1, Math.round(this.#snapshotIntervalMs / fixedStepMs));
+        const snapshotIntervalTicks = Math.max(1, Math.round(this.#effectiveSnapshotIntervalMs() / fixedStepMs));
         const maxReplaySteps = REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS * snapshotIntervalTicks;
         const heldSteps = clamp(
           previousPredictedTick >= 0 ? previousPredictedTick - snapshotTick : 1,
@@ -1512,6 +1875,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
 
   async #sendLatestInput(): Promise<void> {
     if (!this.#latestInput || !this.#roomId) return;
+    this.#lastInputSentAt = monotonicNow();
     const inputSequence = ++this.#inputSequence;
     const targetTick = Math.max(0, (this.#latestSnapshot?.simulationTick ?? 0) + 1);
     try {
@@ -1523,6 +1887,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         clientSendTime: Date.now(),
       });
       this.#diagnostics.inputsSent += 1;
+      this.#diagnostics.inputsTransmitted += 1;
     } catch {
       this.#diagnostics.inputsDropped += 1;
     }
@@ -1559,7 +1924,23 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
       this.#snapshotFlushTimer = undefined;
     }
     if (!this.#pendingSnapshot) return;
-    if (this.#inFlightSnapshots >= this.#maxInFlightSnapshots) return;
+    if (this.#snapshotRateLimitedUntil !== undefined) {
+      const remaining = this.#snapshotRateLimitedUntil - monotonicNow();
+      if (remaining > 0) {
+        this.#snapshotFlushTimer = setTimeout(() => this.#attemptFlush(), remaining);
+        this.#snapshotFlushTimer.unref?.();
+        return;
+      }
+      this.#snapshotRateLimitedUntil = undefined;
+    }
+    if (this.#pendingSnapshotSubmissions.size >= this.#maxInFlightSnapshots) {
+      // Backpressure: capacity is fully saturated. No retry timer is armed
+      // here — whichever submission resolves next (accepted echo, error,
+      // or ack timeout) calls #attemptFlush() again once it frees a slot.
+      if (this.#backpressureStartedAt === undefined) this.#backpressureStartedAt = monotonicNow();
+      return;
+    }
+    this.#endBackpressureWindow();
     const elapsed = monotonicNow() - this.#lastSnapshotSentAt;
     if (elapsed < this.#snapshotIntervalMs) {
       this.#snapshotFlushTimer = setTimeout(() => this.#attemptFlush(), this.#snapshotIntervalMs - elapsed);
@@ -1569,12 +1950,13 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     const next = this.#pendingSnapshot;
     this.#pendingSnapshot = undefined;
     this.#hostSnapshotSequence += 1;
+    const hostSnapshotSequence = this.#hostSnapshotSequence;
     this.#lastSentSimulationTick = next.simulationTick;
     const sentAt = monotonicNow();
     const priorSentAt = this.#lastSnapshotSentAt;
     this.#lastSnapshotSentAt = sentAt;
-    this.#inFlightSnapshots += 1;
     this.#diagnostics.snapshotsSent += 1;
+    this.#diagnostics.snapshotsAttempted += 1;
     if (priorSentAt > 0) {
       const sendIntervalMs = sentAt - priorSentAt;
       if (sendIntervalMs > 0) {
@@ -1588,6 +1970,17 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         }
       }
     }
+    const timeoutMs = Math.max(
+      REALTIME_ROOM_SNAPSHOT_ACK_TIMEOUT_FLOOR_MS,
+      this.#snapshotIntervalMs * REALTIME_ROOM_SNAPSHOT_ACK_TIMEOUT_FACTOR,
+    );
+    const timeoutTimer = setTimeout(() => this.#onSnapshotAckTimeout(hostSnapshotSequence), timeoutMs);
+    timeoutTimer.unref?.();
+    this.#pendingSnapshotSubmissions.set(hostSnapshotSequence, { simulationTick: next.simulationTick, sentAt, timeoutTimer });
+    this.#diagnostics.maxInFlightObserved = Math.max(
+      this.#diagnostics.maxInFlightObserved,
+      this.#pendingSnapshotSubmissions.size,
+    );
     const processedInputCursors: Record<string, number> = {};
     for (const [playerId, cursor] of this.#hostProcessedCursors) {
       if (cursor >= 0) processedInputCursors[playerId] = cursor;
@@ -1597,13 +1990,144 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         authorityEpoch: this.#authorityEpoch,
         roundSequence: this.#roundSequence,
         simulationTick: next.simulationTick,
-        hostSnapshotSequence: this.#hostSnapshotSequence,
+        hostSnapshotSequence,
         hostSendTime: Date.now(),
         processedInputCursors,
       })
       .catch(() => {
-        this.#inFlightSnapshots = Math.max(0, this.#inFlightSnapshots - 1);
+        // Never reached the runtime (transport-level failure): release
+        // this specific submission immediately rather than leaving it to
+        // time out, and try the newest pending state right away.
+        this.#releasePendingSnapshot(hostSnapshotSequence);
+        this.#diagnostics.snapshotsRejected += 1;
+        this.#cleanSendStreak = 0;
+        this.#attemptFlush();
       });
+  }
+
+  #endBackpressureWindow(): void {
+    if (this.#backpressureStartedAt === undefined) return;
+    const durationMs = monotonicNow() - this.#backpressureStartedAt;
+    this.#backpressureStartedAt = undefined;
+    this.#diagnostics.snapshotBackpressureDurationMs += durationMs;
+    if (durationMs >= REALTIME_ROOM_SUSTAINED_BACKPRESSURE_MS) {
+      this.#warn({ type: "snapshot_backpressure", durationMs });
+      this.#reduceSnapshotHz();
+    }
+  }
+
+  /** Removes and returns a tracked submission (clearing its timeout timer), or undefined if it was already resolved. */
+  #releasePendingSnapshot(hostSnapshotSequence: number): PendingSnapshotSubmission | undefined {
+    const entry = this.#pendingSnapshotSubmissions.get(hostSnapshotSequence);
+    if (!entry) return undefined;
+    clearTimeout(entry.timeoutTimer);
+    this.#pendingSnapshotSubmissions.delete(hostSnapshotSequence);
+    return entry;
+  }
+
+  /**
+   * A submission received neither an accepted echo nor an explicit error
+   * within its ack timeout. This is the case the runtime's own "late or
+   * duplicate echo; ignore without rewinding stored state" behavior
+   * produces: a submission that arrives out of order relative to another
+   * in-flight one is silently dropped rather than rejected, so without
+   * this timeout its in-flight slot would never be released.
+   */
+  #onSnapshotAckTimeout(hostSnapshotSequence: number): void {
+    const entry = this.#releasePendingSnapshot(hostSnapshotSequence);
+    if (!entry) return;
+    this.#diagnostics.snapshotAckTimeouts += 1;
+    this.#cleanSendStreak = 0;
+    this.#warn({ type: "snapshot_ack_timeout", hostSnapshotSequence, timeoutMs: monotonicNow() - entry.sentAt });
+    this.#reduceSnapshotHz();
+    this.#attemptFlush();
+  }
+
+  #onSnapshotAccepted(hostSnapshotSequence: number | undefined, receivedAt: number): void {
+    let key = hostSnapshotSequence;
+    if (key === undefined) {
+      // Defensive fallback for a runtime that hasn't started echoing
+      // hostSnapshotSequence yet: release the oldest tracked entry so
+      // accounting still recovers instead of leaking a slot forever.
+      const oldest = this.#pendingSnapshotSubmissions.keys().next();
+      key = oldest.done ? undefined : oldest.value;
+    }
+    const entry = key !== undefined ? this.#releasePendingSnapshot(key) : undefined;
+    this.#diagnostics.snapshotsAccepted += 1;
+    if (entry) this.#recordAckLatency(receivedAt - entry.sentAt);
+    if (this.#lastAcceptedSnapshotAt !== undefined) {
+      const interval = receivedAt - this.#lastAcceptedSnapshotAt;
+      if (interval > 0) {
+        const instantHz = 1000 / interval;
+        this.#smoothedAcceptedSnapshotHz =
+          this.#smoothedAcceptedSnapshotHz === undefined
+            ? instantHz
+            : this.#smoothedAcceptedSnapshotHz * 0.8 + instantHz * 0.2;
+        this.#diagnostics.effectiveAcceptedSnapshotHz = this.#smoothedAcceptedSnapshotHz;
+      }
+    }
+    this.#lastAcceptedSnapshotAt = receivedAt;
+    this.#registerCleanSnapshotSend();
+    this.#attemptFlush();
+  }
+
+  #recordAckLatency(latencyMs: number): void {
+    if (latencyMs < 0) return;
+    this.#ackLatencySamples.push(latencyMs);
+    if (this.#ackLatencySamples.length > REALTIME_ROOM_MAX_ACK_LATENCY_SAMPLES) this.#ackLatencySamples.shift();
+  }
+
+  #setSnapshotHz(hz: number): void {
+    this.#currentSnapshotHz = clamp(hz, this.#snapshotHzFloor, this.#snapshotHzCeiling);
+    this.#snapshotIntervalMs = 1000 / this.#currentSnapshotHz;
+    this.#diagnostics.currentTargetSnapshotHz = this.#currentSnapshotHz;
+  }
+
+  /** AIMD decrease: applied immediately and fully on rejection, timeout, or sustained backpressure. No-op unless adaptiveRate is enabled. */
+  #reduceSnapshotHz(): void {
+    if (!this.#adaptiveRateEnabled) return;
+    this.#cleanSendStreak = 0;
+    const next = Math.max(this.#snapshotHzFloor, this.#currentSnapshotHz * REALTIME_ROOM_RATE_DECREASE_FACTOR);
+    if (next >= this.#currentSnapshotHz) return;
+    this.#setSnapshotHz(next);
+    this.#diagnostics.adaptiveRateReductions += 1;
+  }
+
+  /** AIMD increase: only after a sustained clean run, with a cooldown so an increase can never itself look like a stall right after a decrease. No-op unless adaptiveRate is enabled. */
+  #registerCleanSnapshotSend(): void {
+    if (!this.#adaptiveRateEnabled) return;
+    this.#cleanSendStreak += 1;
+    if (this.#cleanSendStreak < REALTIME_ROOM_RATE_INCREASE_STREAK) return;
+    if (this.#currentSnapshotHz >= this.#snapshotHzCeiling) return;
+    const now = monotonicNow();
+    if (
+      this.#lastRateIncreaseAt !== undefined &&
+      now - this.#lastRateIncreaseAt < REALTIME_ROOM_RATE_INCREASE_COOLDOWN_MS
+    ) {
+      return;
+    }
+    // A guest struggling with the current rate is a reason not to climb
+    // further, even though the host's own send/ack cadence looks clean.
+    if (this.#worstGuestExtrapolationRatio > REALTIME_ROOM_HIGH_EXTRAPOLATION_RATIO) return;
+    this.#cleanSendStreak = 0;
+    this.#lastRateIncreaseAt = now;
+    this.#setSnapshotHz(Math.min(this.#snapshotHzCeiling, this.#currentSnapshotHz + REALTIME_ROOM_RATE_INCREASE_STEP_HZ));
+    this.#diagnostics.adaptiveRateIncreases += 1;
+  }
+
+  /** Clears every pending snapshot submission's timeout timer and resets pacing/adaptive-rate state for a new round or identity. */
+  #resetSnapshotPacingState(): void {
+    for (const entry of this.#pendingSnapshotSubmissions.values()) clearTimeout(entry.timeoutTimer);
+    this.#pendingSnapshotSubmissions.clear();
+    this.#snapshotRateLimitedUntil = undefined;
+    this.#backpressureStartedAt = undefined;
+    this.#cleanSendStreak = 0;
+    this.#lastRateIncreaseAt = undefined;
+    this.#lastAcceptedSnapshotAt = undefined;
+    this.#smoothedAcceptedSnapshotHz = undefined;
+    this.#ackLatencySamples = [];
+    this.#worstGuestExtrapolationRatio = 0;
+    this.#setSnapshotHz(this.#initialSnapshotHz);
   }
 
   #applyV1Snapshot(message: ServerEnvelope): void {
@@ -1643,9 +2167,17 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
       clearInterval(this.#latestInputTimer);
       this.#latestInputTimer = undefined;
     }
+    if (this.#inputSendTimer) {
+      clearTimeout(this.#inputSendTimer);
+      this.#inputSendTimer = undefined;
+    }
     if (this.#snapshotFlushTimer) {
       clearTimeout(this.#snapshotFlushTimer);
       this.#snapshotFlushTimer = undefined;
+    }
+    if (this.#guestReportTimer) {
+      clearInterval(this.#guestReportTimer);
+      this.#guestReportTimer = undefined;
     }
   }
 
@@ -1678,13 +2210,17 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#lastRuntimeSnapshotSequence = undefined;
     this.#sampledSinceLastSnapshot = true;
     this.#pendingSnapshot = undefined;
-    this.#inFlightSnapshots = 0;
+    this.#resetSnapshotPacingState();
     this.#lastSentSimulationTick = -1;
     this.#hostSnapshotSequence = 0;
     this.#lastPublishCallAt = undefined;
     this.#smoothedEffectiveHz = undefined;
     this.#seenEffectIds.clear();
     this.#seenEffectOrder = [];
+    this.#extrapolationWindowCount = 0;
+    this.#extrapolationWindowExtrapolated = 0;
+    this.#lastExtrapolationWarningAt = undefined;
+    this.#lastInputSentAt = 0;
   }
 
   #isInactive(): boolean {

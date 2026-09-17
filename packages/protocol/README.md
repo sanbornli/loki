@@ -41,10 +41,10 @@ traffic on opcodes 10-16. It is unchanged by realtime support: `tickRate`,
 
 Protocol version 2 (`REALTIME_PROTOCOL_VERSION`) is a dedicated data plane
 for `RealtimeRoom`: continuous input streaming, host-authoritative snapshots,
-confirmed effects, and sync-on-migration, carried on opcodes 17-20
-(`REALTIME_OPCODES`) via
+confirmed effects, guest quality reports, and sync-on-migration, carried on
+opcodes 17-21 (`REALTIME_OPCODES`) via
 `RealtimeClientEnvelopeSchema`/`RealtimeServerEnvelopeSchema`. It is JavaScript-only
-in this release. A runtime accepts protocol version 2 only on opcodes 17-20
+in this release. A runtime accepts protocol version 2 only on opcodes 17-21
 and continues to require protocol version 1 on opcodes 10-16 in the same
 room; the two families never overlap and a v2 message is only ever routed to
 sessions that advertised `realtime_rooms` support during join, because older
@@ -61,6 +61,6 @@ Realtime traffic uses two independent fences instead of the single global
 
 Capabilities advertise the realtime contract additively: `realtime_rooms`,
 `realtimeProtocolVersion: 2`, and passthrough limits `maxRealtimeSnapshotHz`
-(25), `maxRealtimeInputHz` (20), and `maxRealtimeInFlightSnapshots` (8). A
+(30), `maxRealtimeInputHz` (20), and `maxRealtimeInFlightSnapshots` (8). A
 client must treat a missing `realtime_rooms` capability as "unsupported" and
 must not fall back to sending v2 envelopes.

@@ -36,17 +36,21 @@ var OP_ACTION_REJECT = 16;
 
 // Protocol-v2 realtime opcodes. These never overlap with the protocol-v1
 // opcodes above; a runtime requires protocolVersion 1 on 10-16 and
-// protocolVersion 2 on 17-20 in the same room.
+// protocolVersion 2 on 17-21 in the same room.
 var REALTIME_PROTOCOL_VERSION = 2;
 var OP_REALTIME_INPUT = 17;
 var OP_REALTIME_SNAPSHOT = 18;
 var OP_REALTIME_SYNC = 19;
 var OP_REALTIME_EFFECT = 20;
+var OP_REALTIME_GUEST_REPORT = 21;
 var REALTIME_INPUT_RATE_LIMIT = 20;
 var REALTIME_SNAPSHOT_RATE_LIMIT = 30;
 var REALTIME_MAX_IN_FLIGHT_SNAPSHOTS = 8;
 var REALTIME_SYNC_RATE_LIMIT = 5;
 var REALTIME_EFFECT_RATE_LIMIT = 30;
+// Guest reports are meant to be sent at roughly 1 Hz; allow a small burst
+// margin without letting a misbehaving client flood the host with them.
+var REALTIME_GUEST_REPORT_RATE_LIMIT = 3;
 var REALTIME_MAX_ORDERED_INPUTS = 32;
 var REALTIME_MAX_RETAINED_EFFECTS = 32;
 var REALTIME_HOST_AUTHORITY_GRACE_SECONDS = 5;
@@ -1529,20 +1533,36 @@ var broadcastRealtimeEnvelope = function (
   );
 };
 
-var sendRealtimeError = function (dispatcher, state, opCode, presence, code, message, retryAfterMs) {
+var OPCODE_OPERATIONS = {};
+OPCODE_OPERATIONS[OP_REALTIME_INPUT] = "realtime_input";
+OPCODE_OPERATIONS[OP_REALTIME_SNAPSHOT] = "realtime_snapshot";
+OPCODE_OPERATIONS[OP_REALTIME_EFFECT] = "realtime_effect";
+OPCODE_OPERATIONS[OP_REALTIME_SYNC] = "realtime_sync_request";
+OPCODE_OPERATIONS[OP_REALTIME_GUEST_REPORT] = "realtime_guest_report";
+
+// `extra.hostSnapshotSequence`, when supplied, echoes the specific
+// submission id a realtime_snapshot error responds to, so the host can
+// release exactly that pending entry from its tracked in-flight map
+// instead of only decrementing a generic counter.
+var sendRealtimeError = function (dispatcher, state, opCode, presence, code, message, retryAfterMs, extra) {
+  var fields = {
+    code: code,
+    message:
+      typeof message === "string" && message.length > 200
+        ? message.slice(0, 200)
+        : message,
+    retryAfterMs: retryAfterMs,
+    operation: OPCODE_OPERATIONS[opCode],
+  };
+  if (extra && extra.hostSnapshotSequence !== undefined) {
+    fields.hostSnapshotSequence = extra.hostSnapshotSequence;
+  }
   broadcastRealtimeEnvelope(
     dispatcher,
     state,
     opCode,
     "error",
-    {
-      code: code,
-      message:
-        typeof message === "string" && message.length > 200
-          ? message.slice(0, 200)
-          : message,
-      retryAfterMs: retryAfterMs,
-    },
+    fields,
     [presence],
     null,
     true,
@@ -1640,6 +1660,7 @@ var processRealtimeV2Message = function (logger, nk, dispatcher, state, message,
   expectedTypes[OP_REALTIME_SNAPSHOT] = "realtime_snapshot";
   expectedTypes[OP_REALTIME_SYNC] = "realtime_sync_request";
   expectedTypes[OP_REALTIME_EFFECT] = "realtime_effect";
+  expectedTypes[OP_REALTIME_GUEST_REPORT] = "realtime_guest_report";
   var expectedType = expectedTypes[opCode];
   if (!expectedType || !message.sender) return;
 
@@ -1819,16 +1840,25 @@ var processRealtimeV2Message = function (logger, nk, dispatcher, state, message,
       return;
     }
     if (input.authorityEpoch !== state.realtime.authorityEpoch) {
-      sendRealtimeError(dispatcher, state, opCode, message.sender, "STALE_VERSION", "stale authority epoch");
+      sendRealtimeError(
+        dispatcher, state, opCode, message.sender, "STALE_VERSION", "stale authority epoch", undefined,
+        { hostSnapshotSequence: input.hostSnapshotSequence },
+      );
       return;
     }
     if (input.roundSequence < state.realtime.roundSequence) {
-      sendRealtimeError(dispatcher, state, opCode, message.sender, "STALE_VERSION", "stale round");
+      sendRealtimeError(
+        dispatcher, state, opCode, message.sender, "STALE_VERSION", "stale round", undefined,
+        { hostSnapshotSequence: input.hostSnapshotSequence },
+      );
       return;
     }
     var snapshotRetry = realtimeRateLimit(state, senderId, "realtimeSnapshot", now, 1000, REALTIME_SNAPSHOT_RATE_LIMIT);
     if (snapshotRetry) {
-      sendRealtimeError(dispatcher, state, opCode, message.sender, "RATE_LIMITED", "realtime snapshot rate exceeded", snapshotRetry);
+      sendRealtimeError(
+        dispatcher, state, opCode, message.sender, "RATE_LIMITED", "realtime snapshot rate exceeded", snapshotRetry,
+        { hostSnapshotSequence: input.hostSnapshotSequence },
+      );
       return;
     }
     if (!state.realtime.active) {
@@ -1836,7 +1866,10 @@ var processRealtimeV2Message = function (logger, nk, dispatcher, state, message,
         return isRealtimeCapable(state, userId);
       });
       if (!allCapable) {
-        sendRealtimeError(dispatcher, state, opCode, message.sender, "INVALID_MESSAGE", "room has non-realtime members");
+        sendRealtimeError(
+          dispatcher, state, opCode, message.sender, "INVALID_MESSAGE", "room has non-realtime members", undefined,
+          { hostSnapshotSequence: input.hostSnapshotSequence },
+        );
         return;
       }
       state.realtime.active = true;
@@ -1878,6 +1911,7 @@ var processRealtimeV2Message = function (logger, nk, dispatcher, state, message,
         roundSequence: state.realtime.roundSequence,
         simulationTick: input.simulationTick,
         runtimeSnapshotSequence: state.realtime.runtimeSnapshotSequence,
+        hostSnapshotSequence: input.hostSnapshotSequence,
         processedInputCursors: input.processedInputCursors || {},
         hostSendTime: typeof input.hostSendTime === "number" ? input.hostSendTime : now,
         serverTime: now,
@@ -1945,6 +1979,43 @@ var processRealtimeV2Message = function (logger, nk, dispatcher, state, message,
     return;
   }
 
+  if (opCode === OP_REALTIME_GUEST_REPORT) {
+    var guestReportRetry = realtimeRateLimit(
+      state, senderId, "realtimeGuestReport", now, 1000, REALTIME_GUEST_REPORT_RATE_LIMIT,
+    );
+    if (guestReportRetry) {
+      sendRealtimeError(dispatcher, state, opCode, message.sender, "RATE_LIMITED", "realtime guest report rate exceeded", guestReportRetry);
+      return;
+    }
+    if (input.roundSequence !== state.realtime.roundSequence) {
+      // Stale-round report from before a beginRound() reset; drop silently.
+      return;
+    }
+    if (!state.hostId || !state.members[state.hostId] || !isRealtimeCapable(state, state.hostId)) {
+      return;
+    }
+    var guestReportHostTarget = memberTarget(state.hostId, state.members[state.hostId]);
+    broadcastRealtimeEnvelope(
+      dispatcher,
+      state,
+      OP_REALTIME_GUEST_REPORT,
+      "realtime_guest_report",
+      {
+        senderId: senderId,
+        roundSequence: input.roundSequence,
+        effectiveSnapshotHz: input.effectiveSnapshotHz,
+        arrivalJitterMs: input.arrivalJitterMs,
+        sequenceGaps: input.sequenceGaps,
+        extrapolatedFrameRatio: input.extrapolatedFrameRatio,
+        latestAuthoritativeTick: input.latestAuthoritativeTick,
+      },
+      [guestReportHostTarget],
+      null,
+      true,
+    );
+    return;
+  }
+
   if (opCode === OP_REALTIME_SYNC) {
     var syncRetry = realtimeRateLimit(state, senderId, "realtimeSync", now, 1000, REALTIME_SYNC_RATE_LIMIT);
     if (syncRetry) {
@@ -1986,7 +2057,8 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
     opCode === OP_REALTIME_INPUT ||
     opCode === OP_REALTIME_SNAPSHOT ||
     opCode === OP_REALTIME_SYNC ||
-    opCode === OP_REALTIME_EFFECT
+    opCode === OP_REALTIME_EFFECT ||
+    opCode === OP_REALTIME_GUEST_REPORT
   ) {
     processRealtimeV2Message(logger, nk, dispatcher, state, message, opCode);
     return;

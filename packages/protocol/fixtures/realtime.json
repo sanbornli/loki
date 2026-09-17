@@ -69,6 +69,18 @@
       "roomId": "00000000-0000-4000-8000-000000000001",
       "sequence": 5,
       "type": "realtime_sync_request"
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 6,
+      "type": "realtime_guest_report",
+      "roundSequence": 0,
+      "effectiveSnapshotHz": 12,
+      "arrivalJitterMs": 8,
+      "sequenceGaps": 0,
+      "extrapolatedFrameRatio": 0.05,
+      "latestAuthoritativeTick": 12
     }
   ],
   "serverReplay": [
@@ -96,6 +108,7 @@
       "roundSequence": 0,
       "simulationTick": 12,
       "runtimeSnapshotSequence": 1,
+      "hostSnapshotSequence": 1,
       "processedInputCursors": { "player-a": 1 },
       "hostSendTime": 995,
       "serverTime": 1010,
@@ -156,7 +169,22 @@
       "sequence": 5,
       "type": "error",
       "code": "STALE_VERSION",
-      "message": "stale round"
+      "message": "stale round",
+      "operation": "realtime_snapshot",
+      "hostSnapshotSequence": 2
+    },
+    {
+      "protocolVersion": 2,
+      "roomId": "00000000-0000-4000-8000-000000000001",
+      "sequence": 6,
+      "type": "realtime_guest_report",
+      "senderId": "player-a",
+      "roundSequence": 0,
+      "effectiveSnapshotHz": 12,
+      "arrivalJitterMs": 8,
+      "sequenceGaps": 0,
+      "extrapolatedFrameRatio": 0.05,
+      "latestAuthoritativeTick": 12
     }
   ]
 }

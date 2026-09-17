@@ -75,6 +75,39 @@ test("createEntityCompositor renders the local entity from corrected prediction 
   assert.equal(reconciled?.cars.remote?.x, 100);
 });
 
+test("createEntityCompositor's bulk setEntities is preferred over setEntity and copies the entity collection once", () => {
+  const compositor = createEntityCompositor<MultiCarState, Car>({
+    listEntityIds: (state) => Object.keys(state.cars),
+    getEntity: (state, id) => state.cars[id],
+    setEntity: () => {
+      throw new Error("setEntity must not be called when setEntities is provided");
+    },
+    setEntities: (state, entities) => {
+      const cars = { ...state.cars };
+      for (const [id, car] of entities) cars[id] = car;
+      return { cars };
+    },
+    isLocalEntity: (id) => id === "local",
+  });
+
+  const result = compositor({
+    interpolated: { cars: { local: { x: 0 }, remote: { x: 100 } } },
+    correctedPredicted: { cars: { local: { x: 42 }, remote: { x: 999 } } },
+  });
+  assert.equal(result?.cars.local?.x, 42);
+  assert.equal(result?.cars.remote?.x, 100);
+});
+
+test("createEntityCompositor requires setEntity or setEntities", () => {
+  assert.throws(() =>
+    createEntityCompositor<MultiCarState, Car>({
+      listEntityIds: (state) => Object.keys(state.cars),
+      getEntity: (state, id) => state.cars[id],
+      isLocalEntity: () => false,
+    }),
+  );
+});
+
 test("createLocalPrediction leaves every non-local entity untouched, predicting only the local one", () => {
   const predict = createLocalPrediction<MultiCarState, Car, MultiCarInput>({
     localEntityId: () => "a",

@@ -288,7 +288,16 @@ export const REALTIME_OPCODES = {
   snapshot: 18,
   sync: 19,
   effect: 20,
+  guestReport: 21,
 } as const;
+
+export const RealtimeOperationSchema = z.enum([
+  "realtime_input",
+  "realtime_snapshot",
+  "realtime_effect",
+  "realtime_sync_request",
+  "realtime_guest_report",
+]);
 
 export const RealtimeDeliverySchema = z.enum(["latest", "ordered"]);
 
@@ -360,6 +369,22 @@ export const RealtimeClientEnvelopeSchema = z.discriminatedUnion("type", [
     ...RealtimeEnvelopeBase,
     type: z.literal("realtime_sync_request"),
   }),
+  // A guest's own bounded, low-frequency measurement of transport health
+  // (arrival cadence, jitter, missing sequence numbers, how often it had to
+  // extrapolate past the newest snapshot), routed only to the current host
+  // so a host-side adaptive rate controller can react to the worst-placed
+  // guest instead of only its own send/ack cadence. Loki never learns
+  // anything about game state from this; it is transport telemetry only.
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_guest_report"),
+    roundSequence: z.number().int().nonnegative(),
+    effectiveSnapshotHz: z.number().nonnegative().optional(),
+    arrivalJitterMs: z.number().nonnegative().optional(),
+    sequenceGaps: z.number().int().nonnegative(),
+    extrapolatedFrameRatio: z.number().min(0).max(1),
+    latestAuthoritativeTick: RealtimeTickSchema.optional(),
+  }),
 ]);
 
 export const RealtimeServerEnvelopeSchema = z.discriminatedUnion("type", [
@@ -383,6 +408,11 @@ export const RealtimeServerEnvelopeSchema = z.discriminatedUnion("type", [
     roundSequence: z.number().int().nonnegative(),
     simulationTick: RealtimeTickSchema,
     runtimeSnapshotSequence: z.number().int().nonnegative(),
+    // Echoes the host's own submission id, so the host can correlate this
+    // broadcast (its accepted-echo) against the specific pending
+    // publishSnapshot() call it released capacity for, instead of only
+    // decrementing a generic in-flight counter.
+    hostSnapshotSequence: z.number().int().nonnegative().optional(),
     processedInputCursors: z.record(z.string(), z.number().int().nonnegative()).default({}),
     hostSendTime: z.number().int().nonnegative(),
     serverTime: z.number().int().nonnegative(),
@@ -421,9 +451,29 @@ export const RealtimeServerEnvelopeSchema = z.discriminatedUnion("type", [
     code: ErrorCodeSchema,
     message: z.string().max(200),
     retryAfterMs: z.number().int().positive().optional(),
+    // Which realtime operation this error responds to, and (for
+    // realtime_snapshot) the specific hostSnapshotSequence it was
+    // submitted with, so a client can release the exact pending
+    // submission it tracked instead of guessing from a generic counter.
+    operation: RealtimeOperationSchema.optional(),
+    hostSnapshotSequence: z.number().int().nonnegative().optional(),
+  }),
+  // Routed only to the current host: one guest's bounded transport-health
+  // report (see the client-side realtime_guest_report envelope above).
+  z.object({
+    ...RealtimeEnvelopeBase,
+    type: z.literal("realtime_guest_report"),
+    senderId: z.string().min(1).max(128),
+    roundSequence: z.number().int().nonnegative(),
+    effectiveSnapshotHz: z.number().nonnegative().optional(),
+    arrivalJitterMs: z.number().nonnegative().optional(),
+    sequenceGaps: z.number().int().nonnegative(),
+    extrapolatedFrameRatio: z.number().min(0).max(1),
+    latestAuthoritativeTick: RealtimeTickSchema.optional(),
   }),
 ]);
 
+export type RealtimeOperation = z.infer<typeof RealtimeOperationSchema>;
 export type RealtimeDelivery = z.infer<typeof RealtimeDeliverySchema>;
 export type RealtimeRetainedInput = z.infer<typeof RealtimeRetainedInputSchema>;
 export type RealtimeRetainedEffect = z.infer<typeof RealtimeRetainedEffectSchema>;

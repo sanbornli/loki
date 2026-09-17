@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   LokiClient,
   RealtimeRoomError,
-  REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS,
   REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS,
   REALTIME_ROOM_MAX_ORDERED_INPUTS,
   REALTIME_ROOM_MAX_SNAPSHOT_HZ,
@@ -17,7 +16,7 @@ type RacerInput = { throttle: number } | { action: "boost" };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("host publishSnapshot at 60Hz coalesces to the default 10 Hz cap and bounds in-flight to 3", async () => {
+test("host publishSnapshot at 60Hz coalesces to the default 30 Hz cap and bounds in-flight to 8", async () => {
   const bus = new RealtimeBus();
   const { client } = await connectedClient(bus);
   const room = client.createRealtimeRoom<RacerState, RacerInput>({});
@@ -30,11 +29,11 @@ test("host publishSnapshot at 60Hz coalesces to the default 10 Hz cap and bounds
   }
   await sleep(5);
   const snapshot = room.getSnapshot();
-  assert.ok(snapshot.pendingSnapshotCount <= REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS + 1);
-  assert.ok((snapshot.diagnostics?.snapshotsSent ?? 0) <= REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS);
+  assert.ok(snapshot.pendingSnapshotCount <= REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS + 1);
+  assert.ok((snapshot.diagnostics?.snapshotsSent ?? 0) <= REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS);
 });
 
-test("snapshotHz 30 paces faster than the default 10 Hz cap and raises in-flight headroom", async () => {
+test("snapshotHz 10 paces slower than the default 30 Hz cap and lowers in-flight headroom", async () => {
   const bus = new RealtimeBus();
   const { client } = await connectedClient(bus);
   const room = client.createRealtimeRoom<RacerState, RacerInput>({
@@ -51,15 +50,18 @@ test("snapshotHz 30 paces faster than the default 10 Hz cap and raises in-flight
   assert.ok((fast.diagnostics?.snapshotsSent ?? 0) >= 2);
   assert.ok((fast.pendingSnapshotCount ?? 0) <= REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS + 1);
 
-  const defaultBus = new RealtimeBus();
-  const { client: defaultClient } = await connectedClient(defaultBus);
-  const defaultRoom = defaultClient.createRealtimeRoom<RacerState, RacerInput>({ diagnostics: true });
-  await defaultRoom.create();
-  defaultRoom.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  const slowBus = new RealtimeBus();
+  const { client: slowClient } = await connectedClient(slowBus);
+  const slowRoom = slowClient.createRealtimeRoom<RacerState, RacerInput>({
+    snapshotHz: 10,
+    diagnostics: true,
+  });
+  await slowRoom.create();
+  slowRoom.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
   await sleep(5);
-  defaultRoom.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
+  slowRoom.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
   await sleep(45);
-  assert.equal(defaultRoom.getSnapshot().diagnostics?.snapshotsSent, 1);
+  assert.equal(slowRoom.getSnapshot().diagnostics?.snapshotsSent, 1);
 });
 
 test("stale-round and stale-authority snapshots do not roll back stored state", async () => {
@@ -155,16 +157,23 @@ test("setInput coalesces to latest and resends held controls on an interval", as
   const { client: guestClient } = await connectedClient(bus);
   const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ inputHz: 20 });
   const created = await hostRoom.create();
-  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({ inputHz: 20 });
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({ inputHz: 20, diagnostics: true });
   await guestRoom.join({ inviteCode: created.inviteCode });
 
+  // The first call transmits immediately (no prior send to be paced
+  // against); the next two arrive within the same ~50ms (20 Hz) window and
+  // are coalesced away, network transmission carries only the newest value.
   guestRoom.setInput({ throttle: 10 });
   guestRoom.setInput({ throttle: 50 });
   guestRoom.setInput({ throttle: 100 });
+  assert.equal(guestRoom.getSnapshot().diagnostics?.inputsCoalesced, 2);
   await sleep(5);
   const guestId = guestClient.playerId!;
-  const inputs = hostRoom.inputsForTick(1);
-  assert.deepEqual(inputs.latest[guestId], { throttle: 100 });
+  assert.deepEqual(hostRoom.inputsForTick(1).latest[guestId], { throttle: 10 });
+
+  // The coalesced value flushes once the pacing interval elapses.
+  await sleep(60);
+  assert.deepEqual(hostRoom.inputsForTick(2).latest[guestId], { throttle: 100 });
 });
 
 test("host local inputs bypass the network but enter the same tick input set", async () => {
@@ -878,13 +887,13 @@ test("publish cadence diagnostics flag back-to-back calls and host frame stalls,
   room.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
   await sleep(1);
   // A call an instant later than the first is well within the same cadence
-  // window at the default 10 Hz (100ms), so it should be flagged.
+  // window at the default 30 Hz (~33ms), so it should be flagged.
   room.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
   assert.ok(warnings.some((event) => event.type === "back_to_back_publish"));
 
   await sleep(120);
   // A long gap simulating a stalled host frame loop. The stall threshold is
-  // max(3 * snapshotInterval, 150ms) = 300ms at the default 10 Hz.
+  // max(3 * snapshotInterval, 150ms) = 150ms at the default 30 Hz.
   room.publishSnapshot({ positions: { self: 3 } }, { simulationTick: 3 });
   await sleep(500);
   room.publishSnapshot({ positions: { self: 4 } }, { simulationTick: 4 });
@@ -956,4 +965,157 @@ test("a reconnecting guest replays retained confirmed effects it missed, deduped
   await guestRoom.reconnect();
   await sleep(10);
   assert.equal(guestEffects.length, 1);
+});
+
+test("a silently-dropped snapshot submission (late/duplicate echo the runtime never responds to) times out and releases its in-flight slot", async () => {
+  const bus = new RealtimeBus();
+  const { client } = await connectedClient(bus);
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({
+    snapshotHz: REALTIME_ROOM_MAX_SNAPSHOT_HZ,
+    diagnostics: true,
+  });
+  await room.create();
+
+  bus.dropNextSnapshot = true;
+  room.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+  // The submission never received an accepted echo or an error, so it's
+  // still tracked as in flight immediately after sending.
+  assert.equal(room.getSnapshot().pendingSnapshotCount, 1);
+
+  // The ack timeout floor is 1000ms; wait past it.
+  await sleep(1100);
+  const diagnostics = room.getSnapshot().diagnostics;
+  assert.equal(diagnostics?.snapshotAckTimeouts, 1);
+  assert.equal(room.getSnapshot().pendingSnapshotCount, 0);
+
+  // Capacity is released, so a newer state can still be sent afterward.
+  room.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
+  await sleep(5);
+  assert.ok((room.getSnapshot().diagnostics?.snapshotsAttempted ?? 0) >= 2);
+});
+
+test("a RATE_LIMITED snapshot rejection releases the specific pending submission and backs off for retryAfterMs", async () => {
+  const bus = new RealtimeBus();
+  const { client } = await connectedClient(bus);
+  const warnings: Array<{ type: string }> = [];
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({
+    snapshotHz: REALTIME_ROOM_MAX_SNAPSHOT_HZ,
+    diagnostics: true,
+    onDiagnosticWarning: (event) => warnings.push(event),
+  });
+  await room.create();
+
+  bus.nextSnapshotError = { code: "RATE_LIMITED", message: "realtime snapshot rate exceeded", retryAfterMs: 200 };
+  room.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+
+  const diagnostics = room.getSnapshot().diagnostics;
+  assert.equal(diagnostics?.snapshotsRejected, 1);
+  assert.equal(room.getSnapshot().pendingSnapshotCount, 0);
+  assert.ok(warnings.some((event) => event.type === "runtime_rate_limited"));
+
+  // A newer state queued immediately after must wait out the backoff
+  // instead of retrying immediately.
+  room.publishSnapshot({ positions: { self: 2 } }, { simulationTick: 2 });
+  await sleep(50);
+  assert.equal(room.getSnapshot().state?.positions.self, undefined);
+  await sleep(200);
+  assert.equal(room.getSnapshot().state?.positions.self, 2);
+});
+
+test("adaptiveRate reduces the target snapshot rate on an ack timeout and never exceeds the configured ceiling", async () => {
+  const bus = new RealtimeBus();
+  const { client } = await connectedClient(bus);
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({
+    snapshotHz: 20,
+    adaptiveRate: true,
+    initialSnapshotHz: 12,
+    minSnapshotHz: 4,
+    diagnostics: true,
+  });
+  await room.create();
+
+  assert.equal(room.getSnapshot().diagnostics?.currentTargetSnapshotHz, 12);
+  assert.equal(room.getSnapshot().diagnostics?.configuredMaxSnapshotHz, 20);
+
+  bus.dropNextSnapshot = true;
+  room.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(1100);
+
+  const diagnostics = room.getSnapshot().diagnostics;
+  assert.equal(diagnostics?.adaptiveRateReductions, 1);
+  assert.ok((diagnostics?.currentTargetSnapshotHz ?? 12) < 12);
+  assert.ok((diagnostics?.currentTargetSnapshotHz ?? 0) <= 20);
+});
+
+test("without adaptiveRate, publishSnapshot keeps sending at the fixed configured rate even after a rejection", async () => {
+  const bus = new RealtimeBus();
+  const { client } = await connectedClient(bus);
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({
+    snapshotHz: 20,
+    diagnostics: true,
+  });
+  await room.create();
+
+  bus.dropNextSnapshot = true;
+  room.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(1100);
+
+  assert.equal(room.getSnapshot().diagnostics?.currentTargetSnapshotHz, 20);
+  assert.equal(room.getSnapshot().diagnostics?.adaptiveRateReductions, 0);
+});
+
+test("guest presentation adapts interpolation delay toward the measured accepted interval, not the configured target", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: REALTIME_ROOM_MAX_SNAPSHOT_HZ });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({});
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  const initialDelay = guestRoom.getSnapshot().interpolationDelayMs;
+
+  // Simulate a host that's configured for a fast rate but is actually only
+  // delivering every ~150ms (well above the configured ~33ms interval).
+  let tick = 0;
+  for (let index = 0; index < 6; index += 1) {
+    tick += 1;
+    hostRoom.publishSnapshot({ positions: { self: tick } }, { simulationTick: tick });
+    await sleep(150);
+  }
+
+  const adaptedDelay = guestRoom.getSnapshot().interpolationDelayMs;
+  assert.ok(adaptedDelay > initialDelay, `expected delay to grow past ${initialDelay}, got ${adaptedDelay}`);
+});
+
+test("a guest's high-extrapolation report reduces the host's adaptive target rate", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({
+    snapshotHz: 20,
+    adaptiveRate: true,
+    initialSnapshotHz: 12,
+    minSnapshotHz: 4,
+    diagnostics: true,
+  });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({});
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { self: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+
+  await guestClient.sendRealtimeGuestReport({
+    roundSequence: 0,
+    sequenceGaps: 0,
+    extrapolatedFrameRatio: 0.9,
+  });
+  await sleep(5);
+
+  const diagnostics = hostRoom.getSnapshot().diagnostics;
+  assert.ok((diagnostics?.currentTargetSnapshotHz ?? 12) < 12);
+  assert.ok((diagnostics?.adaptiveRateReductions ?? 0) >= 1);
 });

@@ -88,10 +88,15 @@ const AGENT_INSTRUCTIONS = `# Loki integration rules
   a parallel input queue, RTT estimator, snapshot pacer, stale-round
   rejection, input ledger, interpolation buffer, or reconnect netcode. Keep
   one game-owned render loop, keep authoritative snapshots compact and
-  self-contained, publish at a chosen rate up to the runtime's cap (30 Hz;
-  default 10 Hz), and report selected rates plus observed diagnostics as
-  evidence. Do not claim Loki supplies physics, collision, rendering
-  optimization, or competitive integrity for realtime rooms.
+  self-contained. \`snapshotHz\` (default/cap 30) is a ceiling, not a delivery
+  guarantee; start conservative (\`adaptiveRate: true\` with
+  \`initialSnapshotHz\` around 12-15) or use \`calibrateRealtimeRoom()\` against
+  a real two-player pair to pick a profile, rather than defaulting to the
+  highest rate. \`game.json\` \`tickRate\` is separate and does not need to
+  match \`snapshotHz\`. Report the selected rates plus observed diagnostics
+  (including acceptance/rejection ratios) as evidence. Do not claim Loki
+  supplies physics, collision, rendering optimization, or competitive
+  integrity for realtime rooms.
 - Do not implement competing reconnect behavior for \`visibilitychange\`,
   \`pagehide\`, \`pageshow\`, \`blur\`, \`focus\`, \`online\`, or \`offline\`.
   Never leave, close, disconnect, reload, or replace a room because the page is
@@ -470,7 +475,7 @@ export async function initializeProject(
             enabled: true,
             authority: "host",
             maxPlayers: 8,
-            tickRate: 10,
+            tickRate: 30,
           },
           networkAllowlist: [],
         },

@@ -332,6 +332,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.doesNotMatch(creator, /Editorial Studio \/ 03/);
   assert.match(creator, /\.auth-panel \.form-actions \{[\s\S]*display: grid/);
   assert.match(creator, /class="auth-hero"/);
+  assert.doesNotMatch(creator, /\.auth-hero::after/);
   assert.match(creator, /class="auth-stage"/);
   assert.match(creator, /Create\. Deploy\. Multiplayer\./);
   assert.match(creator, /grid-template-columns: minmax\(0, 1\.5fr\) minmax\(0, 1fr\)/);
@@ -344,7 +345,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.3\.6"/);
+  assert.match(creator, /"0\.3\.7"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);

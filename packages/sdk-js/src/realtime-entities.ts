@@ -11,8 +11,22 @@ export type EntitySelectors<State, EntityState> = {
   listEntityIds(state: State): string[];
   /** Reads one entity's state out of a full State. Returning undefined skips that entity for this source. */
   getEntity(state: State, entityId: string): EntityState | undefined;
-  /** Returns a full State equal to `into` but with `entityId` set to `entity`. Must not mutate `into`. */
-  setEntity(into: State, entityId: string, entity: EntityState): State;
+  /**
+   * Per-entity overlay: called once per entity being composed this frame.
+   * Simple, but can be allocation-heavy for games with many entities if it
+   * spreads/clones the whole entity collection on every call. Provide
+   * `setEntities` instead for performance-sensitive games; `setEntities`
+   * is preferred over `setEntity` when both are supplied.
+   */
+  setEntity?(into: State, entityId: string, entity: EntityState): State;
+  /**
+   * Bulk overlay: called at most once per composeRenderState() sample with
+   * every entity being overlaid this frame (the local entity's corrected
+   * prediction mixed with every remote entity's interpolation), so the
+   * game can copy its entity collection exactly once per frame instead of
+   * once per entity. Preferred over `setEntity` when both are supplied.
+   */
+  setEntities?(into: State, entities: ReadonlyMap<string, EntityState>): State;
   /** True if `entityId` is the local player's own entity. */
   isLocalEntity(entityId: string): boolean;
 };
@@ -36,19 +50,33 @@ export type EntitySelectors<State, EntityState> = {
 export function createEntityCompositor<State, EntityState>(
   selectors: EntitySelectors<State, EntityState>,
 ): (states: RealtimeRoomRenderStates<State>) => State | undefined {
-  const { listEntityIds, getEntity, setEntity, isLocalEntity } = selectors;
+  const { listEntityIds, getEntity, setEntity, setEntities, isLocalEntity } = selectors;
+  if (!setEntity && !setEntities) {
+    throw new Error("createEntityCompositor requires setEntity or setEntities");
+  }
   return (states: RealtimeRoomRenderStates<State>): State | undefined => {
     const base = states.interpolated ?? states.latestAuthoritative ?? states.correctedPredicted ?? states.predicted;
     if (base === undefined) return undefined;
     const localSource = states.correctedPredicted ?? states.predicted;
     const remoteSource = states.interpolated ?? states.latestAuthoritative;
+    if (setEntities) {
+      const entities = new Map<string, EntityState>();
+      for (const entityId of listEntityIds(base)) {
+        const source = isLocalEntity(entityId) ? localSource : remoteSource;
+        if (source === undefined) continue;
+        const entity = getEntity(source, entityId);
+        if (entity === undefined) continue;
+        entities.set(entityId, entity);
+      }
+      return entities.size > 0 ? setEntities(base, entities) : base;
+    }
     let result: State = base;
     for (const entityId of listEntityIds(base)) {
       const source = isLocalEntity(entityId) ? localSource : remoteSource;
       if (source === undefined) continue;
       const entity = getEntity(source, entityId);
       if (entity === undefined) continue;
-      result = setEntity(result, entityId, entity);
+      result = setEntity!(result, entityId, entity);
     }
     return result;
   };

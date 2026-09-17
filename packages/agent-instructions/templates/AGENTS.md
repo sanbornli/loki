@@ -73,26 +73,49 @@
   `RealtimeRoom`'s callbacks (predict/interpolate/extrapolate/blendCorrection/
   shouldCorrect/composeRenderState) rather than writing a parallel input queue, RTT estimator, snapshot pacer,
   stale-round rejection, input ledger, interpolation buffer, or reconnect
-  netcode; the SDK already owns all of that. Keep one game-owned render loop
-  driven by `advanceFrame()`/`getRenderState()`. Keep authoritative snapshots
-  compact and self-contained (no references to transient local-only state).
-  Host publishes snapshots at a chosen rate up to the runtime's cap (30 Hz;
-  default 10 Hz); do not exceed it. `publishSnapshot()` already coalesces
-  multiple calls made within the same synchronous turn to a single send; do
-  not build a separate coalescing layer for that. A game that needs the
-  higher cadence must pass `snapshotHz` and set `tickRate` to match;
-  otherwise Loki stays at 10 Hz. Report the selected snapshot/input rates
-  and the observed diagnostics (RTT, jitter, reconnect/migration duration,
-  dropped/coalesced frames, and any `onDiagnosticWarning` cadence warnings)
-  as evidence, not assumptions.
+  netcode; the SDK already owns all of that, including per-submission
+  in-flight accounting (a rejected or silently-dropped snapshot always
+  releases its slot) and genuine `inputHz` pacing for `setInput()` (call it
+  every frame; the SDK paces/coalesces the network send). Keep one
+  game-owned render loop driven by `advanceFrame()`/`getRenderState()`
+  (call each at most once per rendered frame). Keep authoritative
+  snapshots compact and self-contained (no references to transient
+  local-only state).
+- `snapshotHz` (default/cap 30) is a ceiling, not a delivery guarantee. Do
+  not default to the highest rate. Start conservative — pass
+  `adaptiveRate: true` with `initialSnapshotHz` around 12-15 and
+  `minSnapshotHz` around 8, or an explicit low fixed `snapshotHz` — and
+  raise it only with diagnostic evidence. Prefer `calibrateRealtimeRoom()`
+  over guessing: it exercises candidate rates against a real two-client
+  `RealtimeRoom` pair and recommends the lowest one that stays
+  transport-healthy (optionally combined with the game's own quality
+  judgment via its `evaluate` callback), producing one `RealtimeProfile`
+  to write into `createRealtimeRoom()`. `game.json` `tickRate` is a
+  separate, deployment-time setting; calibration can inform it but does
+  not need to match `snapshotHz`. `publishSnapshot()` already coalesces
+  multiple calls made within the same synchronous turn to a single send;
+  do not build a separate coalescing layer for that. Report the calibrated
+  or selected snapshot/input rates and the observed diagnostics (RTT,
+  jitter, acceptance/rejection ratios, reconnect/migration duration,
+  dropped/coalesced frames, and any `onDiagnosticWarning` events) as
+  evidence, not assumptions.
 - For multi-entity games, prefer the `createEntityCompositor`/
   `createLocalPrediction` helpers over hand-writing `composeRenderState`/
   `predict` selection logic; they cover the "predict/compose the local
   entity, interpolate the rest" plumbing while the game still supplies the
-  selectors for its own State shape. Use `sendEffect()`/`onConfirmedEffect()`
-  to confirm authoritative events (e.g. collisions) with a stable id instead
-  of a custom event-confirmation channel, so speculative local particles or
-  audio can be deduped against the confirmed outcome.
+  selectors for its own State shape. Use `setEntities` (bulk, once per
+  frame) over `setEntity` (once per entity) for games with many entities.
+  Use `sendEffect()`/`onConfirmedEffect()` to confirm authoritative events
+  (e.g. collisions) with a stable id instead of a custom
+  event-confirmation channel, so speculative local particles or audio can
+  be deduped against the confirmed outcome.
+- For hosted sandbox games, call `createHostedLokiClient({ projectId })`
+  once at page boot and reuse the client it returns for every
+  Create/Join. It installs the `loki:init` listener and requests the
+  session immediately, rather than deferring authentication to a
+  Create/Join button click — deferring it risks the hosted shell's own
+  ~15s "Connecting…" timeout elapsing first. Do not hand-write that
+  handshake.
 - Do not claim Loki supplies game physics, collision resolution, rendering
   optimization, or competitive/anti-cheat integrity for `createRealtimeRoom()`
   games. Loki owns transport, sequencing, fencing, and delivery only; the game
@@ -151,3 +174,20 @@
   interrupted gestures, hide/restore, temporary offline recovery, host
   migration, and return after an extended background period when the available
   test environment supports them.
+- For `createRealtimeRoom()` games, run one required two-client calibration
+  test to get real diagnostics rather than tuning by feel: two distinct
+  player identities (two isolated browser contexts/profiles, or two
+  real players — two tabs sharing one signed-in player are not two
+  players) driving the game's real `predict`/`interpolate`/`setInput`/
+  `publishSnapshot` wiring through `calibrateRealtimeRoom()` or an
+  equivalent sweep, reading Loki's own diagnostics (not a
+  game-invented HUD) as the shared signal. Prefer running it against the
+  real hosted play URL (through `createHostedLokiClient()`'s handshake);
+  if browser automation cannot drive the hosted iframe, run it against a
+  local/preview build with two real player sessions injected instead. If
+  that test skipped the hosted iframe, also run one short hosted-shell
+  smoke check (one page load of the real play URL, confirming the
+  handshake completes and a room can be created before the shell's own
+  timeout) so a working calibration cannot ship alongside a broken
+  hosted bootstrap. Both feed one committed `RealtimeProfile`; do not
+  keep two different configurations for the same mode.

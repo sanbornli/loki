@@ -1,7 +1,7 @@
 // Validates RealtimeRoom against three deterministic game-shape adapters
 // (racer, Snake, and a simultaneous-input grid/Bomberman-style game) so the
 // abstraction is proven against more than one genre before increasing the
-// snapshot cap past the default 10 Hz. These are harness adapters, not polished games:
+// snapshot cap past the default 30 Hz. These are harness adapters, not polished games:
 // each test owns its own simulation, callbacks and rendering; RealtimeRoom
 // only ever sees plain JSON state/input and never branches on game genre.
 //

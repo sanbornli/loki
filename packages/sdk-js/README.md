@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.3.6
+npm install @lokiplay/sdk@0.3.7
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -12,10 +12,17 @@ Use `FirstPartyTransport` for production. It defaults to
 endpoint overrides are available for local and staging environments. The
 public API exposes Loki protocol values only—Nakama objects are never returned.
 
-Hosted sandbox games receive a `MessagePort` in the `loki:init` message. Pass
-that port and nonce to `hostedGameSessionProvider` so session exchange occurs
-through the approved parent bridge without adding Loki infrastructure to the
-game manifest allowlist.
+Hosted sandbox games receive a `MessagePort` in the `loki:init` message. Call
+`createHostedLokiClient({ projectId })` once at page boot rather than
+hand-writing that handshake: it installs the `loki:init` listener
+immediately, replies, and requests the session as soon as the handshake
+arrives — not deferred until the player clicks Create/Join, which is what
+lets the hosted shell's own ~15s "Connecting…" timeout elapse before the
+game ever asked for a session. Reuse the client it returns for every
+subsequent `createRoom()`/`joinRoom()`. Pass `fallbackTransport` (e.g. a
+`FirstPartyTransport` configured for local dev) to run outside the hosted
+shell. Lower-level access remains available via `hostedGameSessionProvider`
+if a game needs to build its own `FirstPartyTransport`.
 
 `LokiClient` supports rooms, invite resolution, matchmaking, actions, events,
 host state, snapshots, presence, chat, private scores, token refresh, reconnect,
@@ -177,8 +184,11 @@ const room = client.createRealtimeRoom<RacerState, RacerInput>({
 const created = await room.create();
 // or: await room.join({ inviteCode });
 
-// Host loop: publish the latest simulated state; Loki paces/coalesces sends
-// up to the runtime's snapshot cap (30 Hz; default 10 Hz).
+// Host loop: publish the latest simulated state. `snapshotHz` (default 30,
+// also the runtime cap) is a ceiling, not a delivery guarantee — Loki
+// paces/coalesces calls, tracks each submission until it's accepted,
+// rejected, or times out, and never lets a dropped submission permanently
+// consume in-flight budget (see "Tuning defaults and diagnostics" below).
 room.publishSnapshot(currentState, { simulationTick });
 
 // Every client: continuous latest-wins input (throttle, aim, movement axis).
@@ -269,6 +279,12 @@ const room = client.createRealtimeRoom<RacerState, RacerInput>({
 closes over the whole state and accidentally advances every entity (guessing
 other players' controls) instead of just the local one.
 
+For many entities, prefer `setEntities(state, entities)` (a `Map`) over
+`setEntity(state, id, entity)`: `setEntities` is called at most once per
+frame with every entity being overlaid, so the game copies its entity
+collection once instead of once per entity. `setEntities` is used instead
+of `setEntity` whenever both are supplied.
+
 ### Confirmed effects
 
 Speculative local effects (collision particles, impact audio) need to be
@@ -306,18 +322,52 @@ from the latest known state instead of a blank one.
 
 ### Tuning defaults and diagnostics
 
-Snapshot publication defaults to 10 Hz and is capped at 30 Hz
-(`publishSnapshot()` paces and coalesces calls faster than that). A room
-that opts into a higher `snapshotHz` also gets a larger in-flight snapshot
-budget so RTT does not stall the higher cadence. Input queues are bounded
+`snapshotHz` (default and cap 30 Hz) is a ceiling, never a promise of
+delivery. `simulationHz` (default 60) is the game's own local step rate and
+is independent of it — a game commonly runs simulation at 60 Hz while
+publishing snapshots far less often. `inputHz` (default/cap 20) is the
+network transmission rate for `setInput()`'s continuous control, also
+independent of both. None of `simulationHz`/`snapshotHz`/`inputHz` need to
+match the deployed `game.json` `tickRate` (a separate, deployment-time
+Nakama room-loop setting).
+
+**A higher configured `snapshotHz` is not automatically better.** A room
+configured for 30 Hz that only actually gets ~8 Hz delivered (a slow guest,
+a saturated in-flight budget, sustained rate limiting) presents *worse*
+than a room honestly configured near what it can sustain, because
+interpolation/extrapolation assume the configured cadence unless enough
+arrival samples exist to correct that assumption (see below). Start with a
+conservative rate (`adaptiveRate: true`, or an explicit low `snapshotHz`)
+and raise it only with diagnostic evidence — ideally from
+`calibrateRealtimeRoom()` (see "Adaptive rate and calibration" below) —
+rather than assuming the cap is the right default for every game.
+
+Every `publishSnapshot()` submission is tracked individually
+(by a runtime-assigned `hostSnapshotSequence`) until it is accepted,
+explicitly rejected, or times out; a submission that never resolves either
+way (the runtime's own "late/duplicate echo, dropped silently, no rewind, no
+response" behavior for out-of-order in-flight submissions) still releases
+its in-flight slot once its ack timeout elapses, so it can never
+permanently saturate the in-flight budget. Input queues are also bounded
 (`REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS`, `REALTIME_ROOM_MAX_ORDERED_INPUTS`)
 so a latency spike cannot grow memory unboundedly; oldest-first entries are
 dropped once a bound is hit. `RealtimeRoomError` reports backpressure and
 capability failures (e.g. joining a realtime room with a non-realtime-capable
-transport). Use the room's diagnostics to observe RTT, jitter, and
+transport). A runtime `RATE_LIMITED` response to a snapshot submission backs
+the next flush off for `retryAfterMs` instead of retrying immediately.
+
+`setInput()` updates local prediction immediately (safe to call every
+render frame) but paces network transmission to at most once per `inputHz`
+interval; calls faster than that only replace the pending value
+(`inputsCoalesced`) and the most recent one is sent once the interval
+elapses, and held controls are still periodically refreshed at the same
+cadence. A game no longer needs its own input-rate throttle in front of
+`setInput()`.
+
+Use the room's diagnostics to observe RTT, jitter, acceptance/rejection, and
 reconnect/migration duration when tuning simulation and snapshot rates for a
-specific game; report the rates actually used along with this evidence rather
-than assuming defaults are sufficient for every game.
+specific game; report the rates actually used along with this evidence
+rather than assuming defaults are sufficient for every game.
 
 `diagnostics: true` also exposes: `renderClockRate` (the current ±5%
 playback-rate nudge applied to keep the guest's render clock aligned with the
@@ -357,7 +407,7 @@ game would otherwise have to implement itself.
 measured from `publishSnapshot()`'s own call times (distinct from the
 runtime/guest-side cadence numbers above, which measure the wire):
 `snapshotPublishCalls`, `lastSnapshotPublishIntervalMs`,
-`effectiveSnapshotHz` (the smoothed actual send rate observed on the wire),
+`effectiveSnapshotHz` (the smoothed rate of attempted sends),
 `missedSnapshotWindows`, `hostFrameStallCount`, and `lastHostFrameStallMs`.
 These flag problems Loki cannot fix itself — the host's own frame loop
 stalling, or calling `publishSnapshot()` faster than its configured rate
@@ -368,10 +418,93 @@ const room = client.createRealtimeRoom<RacerState, RacerInput>({
   onDiagnosticWarning(event) {
     // event.type: "back_to_back_publish" | "host_frame_stall"
     //           | "missed_snapshot_window" | "low_effective_snapshot_rate"
+    //           | "snapshot_ack_timeout" | "snapshot_backpressure"
+    //           | "runtime_rate_limited" | "high_extrapolation_ratio"
     console.warn("[loki]", event);
   },
 });
 ```
+
+Host-only, per-submission accounting: `snapshotsAttempted` (equivalent to
+`snapshotsSent`, named for clarity: attempts, not runtime acceptance),
+`snapshotsAccepted`, `snapshotsRejected` (explicit runtime errors),
+`snapshotAckTimeouts` (submissions that never resolved either way and were
+released speculatively), `snapshotBackpressureDurationMs` (cumulative time
+spent with the in-flight budget fully saturated), `maxInFlightObserved`,
+`effectiveAcceptedSnapshotHz` (smoothed rate of *accepted* echoes — falls
+behind `effectiveSnapshotHz` when the runtime is dropping/rejecting
+submissions), `snapshotAcceptanceRatio`, and `snapshotAckP95Ms`.
+Input accounting: `inputCalls` (every `setInput()` call), `inputsTransmitted`
+(paced network sends of that continuous control), and `inputRateLimited`.
+Guest-only: `guestEffectiveSnapshotHz` (this client's own observed accepted
+arrival rate, independent of what the host is configured/targeting to
+send).
+
+### Adaptive rate and calibration
+
+By default `snapshotHz` is a fixed target (matching prior behavior). Opt
+into an AIMD controller instead — start conservative, climb slowly on
+sustained clean acknowledgements, back off immediately and further on
+rejection, timeout, or sustained backpressure — with `adaptiveRate: true`:
+
+```ts
+const room = client.createRealtimeRoom<RacerState, RacerInput>({
+  snapshotHz: 30, // ceiling: never exceeded
+  adaptiveRate: true,
+  initialSnapshotHz: 12, // start conservative
+  minSnapshotHz: 8, // floor
+});
+```
+
+`currentTargetSnapshotHz`/`configuredMaxSnapshotHz`, and
+`adaptiveRateReductions`/`adaptiveRateIncreases`, report the controller's
+live target and how often it has adjusted. A guest also sends the host a
+bounded, low-frequency (~1 Hz) transport-health report (arrival rate,
+jitter, missing sequence numbers, extrapolation ratio); a struggling guest
+can trigger a reduction (and blocks further increases) even when the host's
+own send/ack cadence looks clean, without the host ever seeing guest state
+or controls.
+
+Rather than guessing a starting rate, use `calibrateRealtimeRoom()` to try
+candidate rates against a real two-client `RealtimeRoom` pair and recommend
+the lowest one that stays transport-healthy (optionally combined with the
+game's own quality judgment):
+
+```ts
+import { calibrateRealtimeRoom } from "@lokiplay/sdk";
+
+const { recommended, samples } = await calibrateRealtimeRoom<RacerState, RacerInput>({
+  snapshotHzCandidates: [8, 12, 15, 20, 25, 30], // lowest first
+  simulationHz: 60,
+  durationMsPerCandidate: 20_000,
+  createHostRoom: (candidate) =>
+    hostClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: candidate.snapshotHz, diagnostics: true }),
+  createGuestRoom: () => guestClient.createRealtimeRoom<RacerState, RacerInput>({ diagnostics: true }),
+  driveHost: (host, tick) => host.publishSnapshot(simulateOneStep(tick), { simulationTick: tick }),
+  driveGuest: (guest) => guest.setInput(representativeControl()),
+  // Optional: Loki can't judge visual quality itself (e.g. a ball/paddle
+  // error), so pass it if the game measures one.
+  evaluate: ({ host, guest }) => ({ acceptable: guest.extrapolatedFrames / guest.framesRendered < 0.2 }),
+});
+```
+
+`calibrateRealtimeRoom()` is game-agnostic: it only reads transport
+diagnostics from the rooms `createHostRoom`/`createGuestRoom` build (which
+must pass `diagnostics: true`) and calls the game's own `driveHost`/
+`driveGuest`/`evaluate` callbacks — it never inspects `State`. `hostClient`
+and `guestClient` need two distinct authenticated identities (two real
+players, or two isolated test/browser sessions); two tabs sharing one
+signed-in player are not two players. The result is one `RealtimeProfile`
+(`schemaVersion`, `simulationHz`, `snapshotHz`, `inputHz`,
+`interpolationDelayMs`, `correctionMs`, `adaptiveRate`, `minSnapshotHz`,
+`initialSnapshotHz`) to write into `createRealtimeRoom()`; `game.json`
+`tickRate` stays separate and is not part of this profile.
+
+For calibrating against a *hosted* build (the real player path, including
+`createHostedLokiClient()`'s handshake) rather than a headless pair, drive
+`createHostRoom`/`createGuestRoom` from two isolated browser contexts
+instead of two in-process clients — the mechanics above are identical, only
+where the two `RealtimeRoom`s live changes.
 
 ### Migrating from hand-rolled racer networking
 

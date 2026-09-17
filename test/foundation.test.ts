@@ -115,7 +115,7 @@ test("protocol rejects malformed and unsupported client messages", () => {
 test("protocol v2 realtime envelopes stay disjoint from v1 and reject cross-version messages", () => {
   const roomId = crypto.randomUUID();
   assert.equal(REALTIME_PROTOCOL_VERSION, 2);
-  assert.deepEqual(REALTIME_OPCODES, { input: 17, snapshot: 18, sync: 19, effect: 20 });
+  assert.deepEqual(REALTIME_OPCODES, { input: 17, snapshot: 18, sync: 19, effect: 20, guestReport: 21 });
   assert.deepEqual(DEFAULT_REALTIME_LIMITS, {
     maxRealtimeSnapshotHz: 30,
     maxRealtimeInputHz: 20,

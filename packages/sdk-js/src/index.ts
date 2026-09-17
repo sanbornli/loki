@@ -28,6 +28,7 @@ import {
 } from "./synchronized-room.js";
 import { RealtimeRoom, type RealtimeRoomOptions } from "./realtime-room.js";
 import { createEntityCompositor, createLocalPrediction } from "./realtime-entities.js";
+import { calibrateRealtimeRoom } from "./realtime-calibration.js";
 
 export {
   SYNCHRONIZED_ROOM_ACTION_TTL_MS,
@@ -92,6 +93,15 @@ export type {
 
 export { createEntityCompositor, createLocalPrediction };
 export type { EntitySelectors, LocalPredictionSelectors } from "./realtime-entities.js";
+
+export { calibrateRealtimeRoom };
+export type {
+  RealtimeCalibrationCandidate,
+  RealtimeCalibrationOptions,
+  RealtimeCalibrationResult,
+  RealtimeCalibrationSample,
+  RealtimeProfile,
+} from "./realtime-calibration.js";
 
 export { dequantize, quantize };
 export {
@@ -347,6 +357,7 @@ export class LokiClient {
         sendRealtimeInput: (payload, extras) => this.sendRealtimeInput(payload, extras),
         sendRealtimeSnapshot: (state, extras) => this.sendRealtimeSnapshot(state, extras),
         sendRealtimeEffect: (payload, extras) => this.sendRealtimeEffect(payload, extras),
+        sendRealtimeGuestReport: (report) => this.sendRealtimeGuestReport(report),
         requestRealtimeSync: () => this.requestRealtimeSync(),
         onMessage: (listener) => this.onMessage(listener),
         onRealtimeMessage: (listener) => this.onRealtimeMessage(listener),
@@ -715,6 +726,33 @@ export class LokiClient {
     await this.#transport.sendRealtime(message);
   }
 
+  async sendRealtimeGuestReport(
+    report: {
+      roundSequence: number;
+      effectiveSnapshotHz?: number;
+      arrivalJitterMs?: number;
+      sequenceGaps: number;
+      extrapolatedFrameRatio: number;
+      latestAuthoritativeTick?: number;
+    },
+  ): Promise<void> {
+    if (!this.#roomId) throw new Error("join a room before sending a realtime guest report");
+    if (!this.#transport.sendRealtime) throw new Error("realtime rooms are unsupported by this transport");
+    const message = RealtimeClientEnvelopeSchema.parse({
+      protocolVersion: REALTIME_PROTOCOL_VERSION,
+      roomId: this.#roomId,
+      sequence: ++this.#realtimeSendSequence,
+      type: "realtime_guest_report",
+      roundSequence: report.roundSequence,
+      effectiveSnapshotHz: report.effectiveSnapshotHz,
+      arrivalJitterMs: report.arrivalJitterMs,
+      sequenceGaps: report.sequenceGaps,
+      extrapolatedFrameRatio: report.extrapolatedFrameRatio,
+      latestAuthoritativeTick: report.latestAuthoritativeTick,
+    });
+    await this.#transport.sendRealtime(message);
+  }
+
   async requestRealtimeSync(): Promise<void> {
     if (!this.#roomId) throw new Error("join a room before requesting realtime sync");
     if (!this.#transport.sendRealtime) throw new Error("realtime rooms are unsupported by this transport");
@@ -1025,7 +1063,9 @@ export class FirstPartyTransport implements LokiTransport {
           ? REALTIME_OPCODES.snapshot
           : message.type === "realtime_effect"
             ? REALTIME_OPCODES.effect
-            : REALTIME_OPCODES.sync;
+            : message.type === "realtime_guest_report"
+              ? REALTIME_OPCODES.guestReport
+              : REALTIME_OPCODES.sync;
     await socket.sendMatchState(
       message.roomId,
       opCode,
@@ -1215,4 +1255,102 @@ export function hostedGameSessionProvider(
       port.postMessage({ type: "loki:session", nonce, requestId });
     });
   };
+}
+
+export type CreateHostedLokiClientOptions = {
+  projectId: string;
+  /**
+   * How long to wait for the hosted shell's `loki:init` handshake before
+   * giving up (or falling back to `fallbackTransport`). The shell's own
+   * "Connecting…" timeout is ~15s from iframe load; this defaults well
+   * under that so a fallback (or a clear error) can still resolve in time.
+   */
+  timeoutMs?: number;
+  /**
+   * Used only if no `loki:init` handshake arrives within `timeoutMs` (e.g.
+   * running the game directly outside the Loki hosted shell, such as a
+   * local dev server). Without this, a missing handshake throws instead
+   * of silently hanging.
+   */
+  fallbackTransport?: LokiTransport;
+  /** For tests or non-DOM environments; defaults to the global `window`. */
+  windowRef?: Pick<Window, "addEventListener" | "removeEventListener">;
+  /** Overrides how the hosted-path transport is constructed once a `loki:init` handshake is received; mainly for tests. Defaults to `new FirstPartyTransport({ sessionProvider })`. */
+  createTransport?: (sessionProvider: FirstPartyTransportOptions["sessionProvider"]) => LokiTransport;
+};
+
+/**
+ * Owns the entire hosted-shell session handshake so a game does not have
+ * to hand-write timing-sensitive `loki:init`/`loki:ready`/`loki:session`
+ * bridge code, or accidentally defer authentication until a Create/Join
+ * button click (which is what let the shell's own ~15s handshake timeout
+ * elapse before the game ever requested a session). Call this once at
+ * page boot; the listener for `loki:init` is installed before any other
+ * work runs, and the session is requested as soon as the handshake
+ * arrives — not deferred to the first `createRoom()`/`joinRoom()` call.
+ * Reuse the returned, already-authenticated `LokiClient` for every
+ * subsequent Create/Join.
+ */
+export async function createHostedLokiClient(
+  options: CreateHostedLokiClientOptions,
+): Promise<LokiClient> {
+  const target = options.windowRef ?? (typeof window !== "undefined" ? window : undefined);
+  const init = target ? await waitForHostedInit(target, options.timeoutMs ?? 10_000) : undefined;
+  if (!init) {
+    if (!options.fallbackTransport) {
+      throw new Error(
+        target
+          ? "createHostedLokiClient: no loki:init handshake was received within timeoutMs, and no fallbackTransport was configured for non-hosted environments"
+          : "createHostedLokiClient: no browser window is available, and no fallbackTransport was configured for non-hosted environments",
+      );
+    }
+    const client = new LokiClient({ projectId: options.projectId, transport: options.fallbackTransport });
+    await client.authenticate("local");
+    return client;
+  }
+  const { port, nonce } = init;
+  try {
+    // A cosmetic readiness signal the hosted shell's own status UI reacts
+    // to; the actual authentication handshake below happens over the same
+    // port via hostedGameSessionProvider and does not wait for this.
+    port.postMessage({ type: "loki:ready", nonce });
+  } catch {
+    // Non-fatal.
+  }
+  const sessionProvider = hostedGameSessionProvider(port, nonce);
+  const transport = options.createTransport
+    ? options.createTransport(sessionProvider)
+    : new FirstPartyTransport({ sessionProvider });
+  const client = new LokiClient({ projectId: options.projectId, transport });
+  await client.authenticate("hosted");
+  return client;
+}
+
+function waitForHostedInit(
+  target: Pick<Window, "addEventListener" | "removeEventListener">,
+  timeoutMs: number,
+): Promise<{ port: MessagePort; nonce: string } | undefined> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: { port: MessagePort; nonce: string } | undefined): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      target.removeEventListener("message", onMessage as EventListener);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(undefined), timeoutMs);
+    const onMessage = (event: MessageEvent): void => {
+      const data = event.data as { type?: string; nonce?: string } | undefined;
+      if (!data || data.type !== "loki:init" || typeof data.nonce !== "string") return;
+      const port = (event as MessageEvent & { ports?: MessagePort[] }).ports?.[0];
+      // The hosted shell retries loki:init every ~500ms with a fresh port
+      // until it sees any reply on one of them; only the first one this
+      // client observes is ever used, so later retries are naturally
+      // ignored once we've already resolved.
+      if (!port) return;
+      finish({ port, nonce: data.nonce });
+    };
+    target.addEventListener("message", onMessage as EventListener);
+  });
 }

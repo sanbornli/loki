@@ -30,6 +30,12 @@ export class RealtimeBus {
   members = new Map<string, { transport: FakeRealtimeTransport; capable: boolean; sessionId: string }>();
   v1Sequence = 0;
   v2Sequence = 0;
+  // Test hooks for exercising snapshot in-flight accounting: one-shot,
+  // consumed by the next realtime_snapshot submission only.
+  nextSnapshotError?: { code: string; message: string; retryAfterMs?: number };
+  dropNextSnapshot = false;
+  nextInputError?: { code: string; message: string; retryAfterMs?: number };
+  guestReports: Array<{ senderId: string; roundSequence: number; extrapolatedFrameRatio: number }> = [];
 
   join(transport: FakeRealtimeTransport, playerId: string, capable: boolean): JoinedRoom {
     const sessionId = crypto.randomUUID();
@@ -97,6 +103,15 @@ export class RealtimeBus {
 
   sendRealtime(senderId: string, message: RealtimeClientEnvelope): void {
     if (message.type === "realtime_input") {
+      if (this.nextInputError) {
+        const error = this.nextInputError;
+        this.nextInputError = undefined;
+        this.#sendV2Error(senderId, error.code, error.message, {
+          operation: "realtime_input",
+          retryAfterMs: error.retryAfterMs,
+        });
+        return;
+      }
       const host = this.members.get(this.hostId);
       if (!host) return;
       this.#deliverV2(host.transport, {
@@ -117,21 +132,43 @@ export class RealtimeBus {
     }
     if (message.type === "realtime_snapshot") {
       if (senderId !== this.hostId) {
-        this.#sendV2Error(senderId, "HOST_REQUIRED", "realtime host required");
+        this.#sendV2Error(senderId, "HOST_REQUIRED", "realtime host required", {
+          operation: "realtime_snapshot",
+          hostSnapshotSequence: message.hostSnapshotSequence,
+        });
+        return;
+      }
+      if (this.nextSnapshotError) {
+        const error = this.nextSnapshotError;
+        this.nextSnapshotError = undefined;
+        this.#sendV2Error(senderId, error.code, error.message, {
+          operation: "realtime_snapshot",
+          hostSnapshotSequence: message.hostSnapshotSequence,
+          retryAfterMs: error.retryAfterMs,
+        });
         return;
       }
       if (message.authorityEpoch !== this.authorityEpoch) {
-        this.#sendV2Error(senderId, "STALE_VERSION", "stale authority epoch");
+        this.#sendV2Error(senderId, "STALE_VERSION", "stale authority epoch", {
+          operation: "realtime_snapshot",
+          hostSnapshotSequence: message.hostSnapshotSequence,
+        });
         return;
       }
       if (message.roundSequence < this.roundSequence) {
-        this.#sendV2Error(senderId, "STALE_VERSION", "stale round");
+        this.#sendV2Error(senderId, "STALE_VERSION", "stale round", {
+          operation: "realtime_snapshot",
+          hostSnapshotSequence: message.hostSnapshotSequence,
+        });
         return;
       }
       if (!this.active) {
         const allCapable = [...this.members.values()].every((member) => member.capable);
         if (!allCapable) {
-          this.#sendV2Error(senderId, "INVALID_MESSAGE", "room has non-realtime members");
+          this.#sendV2Error(senderId, "INVALID_MESSAGE", "room has non-realtime members", {
+            operation: "realtime_snapshot",
+            hostSnapshotSequence: message.hostSnapshotSequence,
+          });
           return;
         }
         this.active = true;
@@ -156,6 +193,14 @@ export class RealtimeBus {
         simulationTick: message.simulationTick,
         hostSnapshotSequence: message.hostSnapshotSequence,
       };
+      if (this.dropNextSnapshot) {
+        // Simulates the runtime's real "late/duplicate echo dropped
+        // silently, no rewind, no response" behavior: the state above is
+        // still stored, but nothing is broadcast, so this submission never
+        // resolves until the sender's own ack timeout releases it.
+        this.dropNextSnapshot = false;
+        return;
+      }
       const targets = [...this.members.values()].filter((member) => member.capable);
       for (const member of targets) {
         this.#deliverV2(member.transport, {
@@ -168,6 +213,7 @@ export class RealtimeBus {
           roundSequence: this.roundSequence,
           simulationTick: message.simulationTick,
           runtimeSnapshotSequence: this.runtimeSnapshotSequence,
+          hostSnapshotSequence: message.hostSnapshotSequence,
           processedInputCursors: message.processedInputCursors,
           hostSendTime: message.hostSendTime,
           serverTime: Date.now(),
@@ -217,6 +263,29 @@ export class RealtimeBus {
       }
       return;
     }
+    if (message.type === "realtime_guest_report") {
+      this.guestReports.push({
+        senderId,
+        roundSequence: message.roundSequence,
+        extrapolatedFrameRatio: message.extrapolatedFrameRatio,
+      });
+      const host = this.members.get(this.hostId);
+      if (!host) return;
+      this.#deliverV2(host.transport, {
+        protocolVersion: 2,
+        roomId: this.roomId,
+        sequence: this.v2Sequence++,
+        type: "realtime_guest_report",
+        senderId,
+        roundSequence: message.roundSequence,
+        effectiveSnapshotHz: message.effectiveSnapshotHz,
+        arrivalJitterMs: message.arrivalJitterMs,
+        sequenceGaps: message.sequenceGaps,
+        extrapolatedFrameRatio: message.extrapolatedFrameRatio,
+        latestAuthoritativeTick: message.latestAuthoritativeTick,
+      });
+      return;
+    }
     if (message.type === "realtime_sync_request") {
       const member = this.members.get(senderId);
       if (!member) return;
@@ -241,7 +310,12 @@ export class RealtimeBus {
     }
   }
 
-  #sendV2Error(playerId: string, code: string, message: string): void {
+  #sendV2Error(
+    playerId: string,
+    code: string,
+    message: string,
+    extra?: { operation?: string; hostSnapshotSequence?: number; retryAfterMs?: number },
+  ): void {
     const member = this.members.get(playerId);
     if (!member) return;
     this.#deliverV2(member.transport, {
@@ -251,6 +325,9 @@ export class RealtimeBus {
       type: "error",
       code: code as never,
       message,
+      operation: extra?.operation as never,
+      hostSnapshotSequence: extra?.hostSnapshotSequence,
+      retryAfterMs: extra?.retryAfterMs,
     });
   }
 
