@@ -1135,7 +1135,10 @@ test("authoritative sampling counts a hold/freeze separately from extrapolation"
   await guestRoom.join({ inviteCode: created.inviteCode });
 
   hostRoom.publishSnapshot({ positions: { host: 1 } }, { simulationTick: 1 });
-  await sleep(5);
+  for (let attempt = 0; attempt < 20 && !guestRoom.getSnapshot().state; attempt += 1) {
+    await sleep(5);
+  }
+  assert.ok(guestRoom.getSnapshot().state, "guest must have an authoritative snapshot before sampling");
   const t0 = 1_000;
   guestRoom.getRenderState(t0);
   guestRoom.getRenderState(t0 + 500);
@@ -1161,7 +1164,10 @@ test("clamped extrapolation also increments heldAuthoritativeFrames", async () =
   });
   await guestRoom.join({ inviteCode: created.inviteCode });
   hostRoom.publishSnapshot({ positions: { host: 1 } }, { simulationTick: 1 });
-  await sleep(5);
+  for (let attempt = 0; attempt < 20 && !guestRoom.getSnapshot().state; attempt += 1) {
+    await sleep(5);
+  }
+  assert.ok(guestRoom.getSnapshot().state, "guest must have an authoritative snapshot before sampling");
   const t0 = 1_000;
   guestRoom.getRenderState(t0);
   guestRoom.getRenderState(t0 + 20);
