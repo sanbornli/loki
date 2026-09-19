@@ -8,6 +8,7 @@
     "packages/*"
   ],
   "scripts": {
+    "pretest": "node scripts/sync-agent-instructions.mjs",
     "test": "tsx --test test/*.test.ts",
     "nakama:up": "sh -c 'if docker compose version >/dev/null 2>&1; then docker compose -f infra/compose.yaml up -d --wait; else docker-compose -f infra/compose.yaml up -d --wait; fi'",
     "nakama:down": "sh -c 'if docker compose version >/dev/null 2>&1; then docker compose -f infra/compose.yaml down; else docker-compose -f infra/compose.yaml down; fi'",

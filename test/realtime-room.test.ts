@@ -1119,3 +1119,56 @@ test("a guest's high-extrapolation report reduces the host's adaptive target rat
   assert.ok((diagnostics?.currentTargetSnapshotHz ?? 12) < 12);
   assert.ok((diagnostics?.adaptiveRateReductions ?? 0) >= 1);
 });
+
+test("authoritative sampling counts a hold/freeze separately from extrapolation", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: 10 });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    diagnostics: true,
+    interpolationDelayMs: 0,
+    simulationHz: 60,
+    interpolate: (_from, to) => to,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  hostRoom.publishSnapshot({ positions: { host: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+  const t0 = 1_000;
+  guestRoom.getRenderState(t0);
+  guestRoom.getRenderState(t0 + 500);
+  const held = guestRoom.getSnapshot().diagnostics;
+  assert.ok((held?.heldAuthoritativeFrames ?? 0) >= 1);
+  assert.equal(held?.extrapolatedFrames, 0);
+  await hostRoom.leave().catch(() => undefined);
+  await guestRoom.leave().catch(() => undefined);
+});
+
+test("clamped extrapolation also increments heldAuthoritativeFrames", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: 10 });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    diagnostics: true,
+    interpolationDelayMs: 0,
+    simulationHz: 60,
+    interpolate: (_from, to) => to,
+    extrapolate: (state) => state,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+  hostRoom.publishSnapshot({ positions: { host: 1 } }, { simulationTick: 1 });
+  await sleep(5);
+  const t0 = 1_000;
+  guestRoom.getRenderState(t0);
+  guestRoom.getRenderState(t0 + 20);
+  guestRoom.getRenderState(t0 + 500);
+  const extra = guestRoom.getSnapshot().diagnostics;
+  assert.ok((extra?.extrapolatedFrames ?? 0) >= 1);
+  assert.ok((extra?.heldAuthoritativeFrames ?? 0) >= 1);
+  await hostRoom.leave().catch(() => undefined);
+  await guestRoom.leave().catch(() => undefined);
+});

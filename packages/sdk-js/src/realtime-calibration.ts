@@ -1,32 +1,37 @@
-import type { RealtimeRoom, RealtimeRoomDiagnostics } from "./realtime-room.js";
+import {
+  REALTIME_ROOM_DEFAULT_INITIAL_SNAPSHOT_HZ,
+  REALTIME_ROOM_DEFAULT_MIN_SNAPSHOT_HZ,
+  REALTIME_ROOM_MAX_INPUT_HZ,
+  REALTIME_ROOM_SUSTAINED_BACKPRESSURE_MS,
+  type RealtimeRoom,
+  type RealtimeRoomDiagnostics,
+} from "./realtime-room.js";
 
 /**
- * A single snapshot/input rate combination to try. Loki only ever measures
- * transport health for a candidate (acceptance ratio, extrapolation ratio,
- * ack latency, jitter); it has no visibility into whether the resulting
- * motion actually looks acceptable for a particular game — that's what the
- * optional `evaluate()` callback in RealtimeCalibrationOptions is for.
+ * A single snapshot/input rate combination to try. Loki measures
+ * transport health and authoritative hold/freeze frames; it never
+ * inspects game State. Optional `evaluate()` can only veto a rate.
  */
 export type RealtimeCalibrationCandidate = {
   snapshotHz: number;
   inputHz?: number;
 };
 
-/** Transport-health-plus-optional-game-quality evidence for one candidate. */
+/** Transport-health-plus-optional-veto evidence for one candidate. */
 export type RealtimeCalibrationSample = {
   candidate: RealtimeCalibrationCandidate;
   hostDiagnostics: RealtimeRoomDiagnostics;
   guestDiagnostics: RealtimeRoomDiagnostics;
   acceptable: boolean;
-  /** Lower is better. Built from transport-health signals, optionally overridden/combined with evaluate()'s score. */
+  /** Lower is better. Reporting only; the picker does not use this. */
   score: number;
+  rejectionReasons: string[];
 };
 
 /**
  * A committed rate/tuning profile a game writes into `createRealtimeRoom()`
  * after calibration. `tickRate` (a deployment-time `game.json` field, not a
- * `RealtimeRoom` option) is intentionally not part of this profile —
- * calibration can inform what to set it to, but it is applied separately.
+ * `RealtimeRoom` option) is intentionally not part of this profile.
  */
 export type RealtimeProfile = {
   schemaVersion: 1;
@@ -40,13 +45,22 @@ export type RealtimeProfile = {
   initialSnapshotHz?: number;
 };
 
+export const REALTIME_CALIBRATION_MIN_ACCEPTANCE_RATIO = 0.95;
+export const REALTIME_CALIBRATION_MIN_DELIVERY_RATIO = 0.9;
+export const REALTIME_CALIBRATION_MAX_EXTRAPOLATION_RATIO = 0.1;
+export const REALTIME_CALIBRATION_MAX_HOLD_RATIO = 0.1;
+export const REALTIME_CALIBRATION_MAX_ACK_P95_MS = 200;
+export const REALTIME_CALIBRATION_ACK_CLIFF_FACTOR = 2;
+/** Relative ack cliffs ignore sub-delta noise on an otherwise clean path. */
+export const REALTIME_CALIBRATION_ACK_CLIFF_MIN_DELTA_MS = 50;
+export const REALTIME_CALIBRATION_MAX_REJECTION_RATIO = 0.05;
+export const REALTIME_CALIBRATION_MAX_SEQUENCE_GAP_RATIO = 0.05;
+
 export type RealtimeCalibrationOptions<State, Input> = {
   /**
-   * Candidate maximum snapshot rates to try, in the order given. List them
-   * lowest-to-highest to bias the recommendation toward the lowest rate
-   * that stays acceptable (matching "start conservative, only raise the
-   * rate with evidence"), rather than the highest rate that merely
-   * survives.
+   * Candidate maximum snapshot rates to try. Order does not affect the
+   * recommendation. Each candidate room must run at that fixed
+   * `snapshotHz` with `adaptiveRate: false`.
    */
   snapshotHzCandidates: number[];
   /** Applied to every candidate; defaults to REALTIME_ROOM_MAX_INPUT_HZ. */
@@ -54,7 +68,7 @@ export type RealtimeCalibrationOptions<State, Input> = {
   simulationHz: number;
   /** How long to exercise each candidate (real time) before measuring it. */
   durationMsPerCandidate: number;
-  /** Builds a fresh host RealtimeRoom for one candidate. The game wires its own predict/interpolate/state generation; pass `diagnostics: true`. */
+  /** Builds a fresh host RealtimeRoom for one candidate. The game wires its own predict/interpolate/state generation; pass `diagnostics: true` and `adaptiveRate: false`. */
   createHostRoom(candidate: RealtimeCalibrationCandidate): Promise<RealtimeRoom<State, Input>> | RealtimeRoom<State, Input>;
   /** Builds a fresh guest RealtimeRoom for the same candidate, to join the host's room. Pass `diagnostics: true`. */
   createGuestRoom(candidate: RealtimeCalibrationCandidate): Promise<RealtimeRoom<State, Input>> | RealtimeRoom<State, Input>;
@@ -63,48 +77,209 @@ export type RealtimeCalibrationOptions<State, Input> = {
   /** Drives one guest input/render step for this candidate. Called on the same fixed interval. */
   driveGuest?(guest: RealtimeRoom<State, Input>, tick: number, now: number): void;
   /**
-   * Optional game-supplied quality judgment for a candidate (e.g. a
-   * measured ball/paddle/heading error). Loki cannot judge this itself;
-   * without it, only transport-health thresholds decide acceptability.
+   * Optional game-supplied veto for a candidate (e.g. a measured
+   * ball/paddle/heading error). Cannot withhold a recommendation: if
+   * every candidate is vetoed, calibration still returns the Loki floor.
    */
   evaluate?(sample: {
     candidate: RealtimeCalibrationCandidate;
     host: RealtimeRoomDiagnostics;
     guest: RealtimeRoomDiagnostics;
   }): { acceptable: boolean; score?: number } | undefined;
-  /** Minimum host snapshotsAccepted/snapshotsAttempted to consider a candidate transport-healthy. Defaults to 0.95. */
   minAcceptanceRatio?: number;
-  /** Maximum guest extrapolatedFrames/framesRendered to consider a candidate transport-healthy. Defaults to 0.3. */
+  minDeliveryRatio?: number;
   maxExtrapolationRatio?: number;
+  maxHoldRatio?: number;
+  maxAckP95Ms?: number;
+  ackCliffFactor?: number;
+  maxRejectionRatio?: number;
+  maxSequenceGapRatio?: number;
   correctionMs?: number;
   interpolationDelayMs?: number;
-  adaptiveRate?: boolean;
-  minSnapshotHz?: number;
-  initialSnapshotHz?: number;
 };
 
 export type RealtimeCalibrationResult = {
   recommended: RealtimeProfile;
   samples: RealtimeCalibrationSample[];
+  /** True when no candidate passed the gates and the Loki floor profile was used. */
+  usedFallback: boolean;
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+const ratioAgainstRequest = (measured: number | undefined, requested: number): number | undefined => {
+  if (measured === undefined || !Number.isFinite(measured) || requested <= 0) return undefined;
+  return measured / requested;
+};
+
+export type RealtimeCalibrationGateOptions = {
+  minAcceptanceRatio?: number;
+  minDeliveryRatio?: number;
+  maxExtrapolationRatio?: number;
+  maxHoldRatio?: number;
+  maxRejectionRatio?: number;
+  maxSequenceGapRatio?: number;
+};
+
+/**
+ * Loki-owned per-candidate gates (acceptance, delivery, extrapolation,
+ * hold/freeze, backpressure). Ack-latency cliffs are applied after all
+ * samples exist via `applyAckLatencyCliffs`.
+ */
+export function qualifyRealtimeCalibrationSample(
+  candidate: RealtimeCalibrationCandidate,
+  host: RealtimeRoomDiagnostics,
+  guest: RealtimeRoomDiagnostics,
+  options: RealtimeCalibrationGateOptions = {},
+): { rejectionReasons: string[]; score: number } {
+  const minAcceptanceRatio = options.minAcceptanceRatio ?? REALTIME_CALIBRATION_MIN_ACCEPTANCE_RATIO;
+  const minDeliveryRatio = options.minDeliveryRatio ?? REALTIME_CALIBRATION_MIN_DELIVERY_RATIO;
+  const maxExtrapolationRatio = options.maxExtrapolationRatio ?? REALTIME_CALIBRATION_MAX_EXTRAPOLATION_RATIO;
+  const maxHoldRatio = options.maxHoldRatio ?? REALTIME_CALIBRATION_MAX_HOLD_RATIO;
+  const maxRejectionRatio = options.maxRejectionRatio ?? REALTIME_CALIBRATION_MAX_REJECTION_RATIO;
+  const maxSequenceGapRatio = options.maxSequenceGapRatio ?? REALTIME_CALIBRATION_MAX_SEQUENCE_GAP_RATIO;
+  const requested = candidate.snapshotHz;
+  const rejectionReasons: string[] = [];
+
+  const acceptanceRatio = host.snapshotAcceptanceRatio ?? 0;
+  if (acceptanceRatio < minAcceptanceRatio) rejectionReasons.push("acceptance");
+
+  const guestDelivery = ratioAgainstRequest(guest.guestEffectiveSnapshotHz, requested);
+  const hostDelivery = ratioAgainstRequest(host.effectiveAcceptedSnapshotHz, requested);
+  const guestDelivered = guestDelivery !== undefined && guestDelivery >= minDeliveryRatio;
+  const hostDelivered = hostDelivery !== undefined && hostDelivery >= minDeliveryRatio;
+  // Guest arrival is required: host accepted-echo can look healthy while
+  // the guest is starving. If both rates exist, both must pass.
+  if (
+    !guestDelivered ||
+    (hostDelivery !== undefined && !hostDelivered) ||
+    (hostDelivery === undefined && host.snapshotsAccepted === 0)
+  ) {
+    rejectionReasons.push("delivery");
+  }
+
+  const framesRendered = guest.framesRendered;
+  const extrapolationRatio = framesRendered > 0 ? guest.extrapolatedFrames / framesRendered : 0;
+  if (extrapolationRatio > maxExtrapolationRatio) rejectionReasons.push("extrapolation");
+
+  const holdRatio = framesRendered > 0 ? guest.heldAuthoritativeFrames / framesRendered : 0;
+  if (holdRatio > maxHoldRatio) rejectionReasons.push("hold");
+
+  const attempted = host.snapshotsAttempted;
+  const rejectionRatio = attempted > 0 ? host.snapshotsRejected / attempted : 0;
+  if (rejectionRatio > maxRejectionRatio) rejectionReasons.push("rejected");
+  if (host.snapshotAckTimeouts > 0) rejectionReasons.push("ack_timeout");
+  if (host.snapshotBackpressureDurationMs > REALTIME_ROOM_SUSTAINED_BACKPRESSURE_MS) {
+    rejectionReasons.push("backpressure");
+  }
+  const gapDenom = Math.max(guest.snapshotsAcked, host.snapshotsAccepted, 1);
+  if (guest.snapshotSequenceGaps / gapDenom > maxSequenceGapRatio) rejectionReasons.push("sequence_gaps");
+
+  const transportPenalty = (1 - acceptanceRatio) * 100 + extrapolationRatio * 50 + holdRatio * 50;
+  const score = transportPenalty + requested * 0.01;
+  return { rejectionReasons, score };
+}
+
+/**
+ * Rejects a still-qualified candidate whose ack p95 exceeds the Loki cap
+ * or is a cliff versus the best lower qualified rate.
+ */
+export function applyAckLatencyCliffs(
+  samples: RealtimeCalibrationSample[],
+  options: { maxAckP95Ms?: number; ackCliffFactor?: number; ackCliffMinDeltaMs?: number } = {},
+): void {
+  const maxAckP95Ms = options.maxAckP95Ms ?? REALTIME_CALIBRATION_MAX_ACK_P95_MS;
+  const ackCliffFactor = options.ackCliffFactor ?? REALTIME_CALIBRATION_ACK_CLIFF_FACTOR;
+  const ackCliffMinDeltaMs = options.ackCliffMinDeltaMs ?? REALTIME_CALIBRATION_ACK_CLIFF_MIN_DELTA_MS;
+  const locallyQualified = samples.filter((sample) => sample.acceptable);
+
+  for (const sample of locallyQualified) {
+    const ack = sample.hostDiagnostics.snapshotAckP95Ms;
+    if (ack === undefined) {
+      if (sample.hostDiagnostics.snapshotsAccepted > 0) {
+        sample.acceptable = false;
+        sample.rejectionReasons.push("ack_missing");
+      }
+      continue;
+    }
+    if (ack > maxAckP95Ms) {
+      sample.acceptable = false;
+      sample.rejectionReasons.push("ack_cap");
+      continue;
+    }
+    const lowerAcks = locallyQualified
+      .filter(
+        (other) =>
+          other.candidate.snapshotHz < sample.candidate.snapshotHz &&
+          other.hostDiagnostics.snapshotAckP95Ms !== undefined,
+      )
+      .map((other) => other.hostDiagnostics.snapshotAckP95Ms as number);
+    if (lowerAcks.length === 0) continue;
+    const minLower = Math.min(...lowerAcks);
+    const cliffAt = Math.max(minLower * ackCliffFactor, minLower + ackCliffMinDeltaMs);
+    if (ack >= cliffAt) {
+      sample.acceptable = false;
+      sample.rejectionReasons.push("ack_cliff");
+    }
+  }
+}
+
+export function buildRecommendedRealtimeProfile(
+  samples: RealtimeCalibrationSample[],
+  options: {
+    simulationHz: number;
+    inputHz?: number;
+    interpolationDelayMs?: number;
+    correctionMs?: number;
+  },
+): { recommended: RealtimeProfile; usedFallback: boolean } {
+  const qualified = samples.filter((sample) => sample.acceptable);
+  const usedFallback = qualified.length === 0;
+  const snapshotHz = usedFallback
+    ? REALTIME_ROOM_DEFAULT_MIN_SNAPSHOT_HZ
+    : Math.max(...qualified.map((sample) => sample.candidate.snapshotHz));
+  const inputHz =
+    qualified[0]?.candidate.inputHz ?? options.inputHz ?? REALTIME_ROOM_MAX_INPUT_HZ;
+  const recommended: RealtimeProfile = {
+    schemaVersion: 1,
+    simulationHz: options.simulationHz,
+    snapshotHz,
+    inputHz,
+    interpolationDelayMs: options.interpolationDelayMs,
+    correctionMs: options.correctionMs,
+    adaptiveRate: true,
+    minSnapshotHz: REALTIME_ROOM_DEFAULT_MIN_SNAPSHOT_HZ,
+    initialSnapshotHz: usedFallback
+      ? REALTIME_ROOM_DEFAULT_MIN_SNAPSHOT_HZ
+      : Math.min(REALTIME_ROOM_DEFAULT_INITIAL_SNAPSHOT_HZ, snapshotHz),
+  };
+  return { recommended, usedFallback };
+}
+
 /**
  * Exercises each candidate snapshot rate against a real two-client
- * RealtimeRoom pair (built by the caller via `createHostRoom`/
- * `createGuestRoom`, so this works against a hosted match, a local test
- * transport, or anything else RealtimeRoom already supports) and
- * recommends the lowest-resource rate that stays transport-healthy (and,
- * if `evaluate()` is supplied, judged acceptable by the game). Loki never
- * inspects game state; every judgment beyond transport counters comes from
- * the caller's own `driveHost`/`driveGuest`/`evaluate` callbacks.
+ * RealtimeRoom pair and recommends the highest rate that is actually
+ * delivered without a Loki-owned cliff. If every completed candidate
+ * fails the gates, returns the Loki floor profile (8 Hz, adaptive)
+ * instead of throwing. Throws only when the harness is broken
+ * (empty list, incomplete candidate, no diagnostics, no guest frames,
+ * or a candidate run with adaptiveRate enabled).
  */
 export async function calibrateRealtimeRoom<State, Input>(
   options: RealtimeCalibrationOptions<State, Input>,
 ): Promise<RealtimeCalibrationResult> {
-  const minAcceptanceRatio = options.minAcceptanceRatio ?? 0.95;
-  const maxExtrapolationRatio = options.maxExtrapolationRatio ?? 0.3;
+  if (options.snapshotHzCandidates.length === 0) {
+    throw new Error("calibrateRealtimeRoom: no candidates were provided");
+  }
+
+  const gateOptions: RealtimeCalibrationGateOptions = {
+    minAcceptanceRatio: options.minAcceptanceRatio,
+    minDeliveryRatio: options.minDeliveryRatio,
+    maxExtrapolationRatio: options.maxExtrapolationRatio,
+    maxHoldRatio: options.maxHoldRatio,
+    maxRejectionRatio: options.maxRejectionRatio,
+    maxSequenceGapRatio: options.maxSequenceGapRatio,
+  };
   const fixedStepMs = 1000 / options.simulationHz;
   const samples: RealtimeCalibrationSample[] = [];
 
@@ -134,44 +309,53 @@ export async function calibrateRealtimeRoom<State, Input>(
           "calibrateRealtimeRoom requires createHostRoom/createGuestRoom to pass { diagnostics: true }",
         );
       }
+      if (
+        hostDiagnostics.configuredMaxSnapshotHz !== snapshotHz ||
+        hostDiagnostics.currentTargetSnapshotHz !== snapshotHz
+      ) {
+        throw new Error(
+          "calibrateRealtimeRoom requires each candidate to run at a fixed snapshotHz (adaptiveRate: false)",
+        );
+      }
+      if (guestDiagnostics.framesRendered === 0) {
+        throw new Error(
+          "calibrateRealtimeRoom: guest rendered no frames; increase durationMsPerCandidate",
+        );
+      }
 
-      const acceptanceRatio = hostDiagnostics.snapshotAcceptanceRatio ?? 0;
-      const extrapolationRatio =
-        guestDiagnostics.framesRendered > 0
-          ? guestDiagnostics.extrapolatedFrames / guestDiagnostics.framesRendered
-          : 0;
-      const transportHealthy = acceptanceRatio >= minAcceptanceRatio && extrapolationRatio <= maxExtrapolationRatio;
       const judged = options.evaluate?.({ candidate, host: hostDiagnostics, guest: guestDiagnostics });
+      const { rejectionReasons, score } = qualifyRealtimeCalibrationSample(
+        candidate,
+        hostDiagnostics,
+        guestDiagnostics,
+        gateOptions,
+      );
+      if (judged?.acceptable === false) rejectionReasons.push("evaluate");
 
-      const acceptable = transportHealthy && (judged?.acceptable ?? true);
-      // Lower is better: transport-health penalty plus the game's own
-      // score (if any). Rewards a low snapshotHz slightly so ties prefer
-      // the cheaper candidate even if evaluate() doesn't discriminate.
-      const transportPenalty = (1 - acceptanceRatio) * 100 + extrapolationRatio * 50;
-      const score = transportPenalty + (judged?.score ?? 0) + snapshotHz * 0.01;
-
-      samples.push({ candidate, hostDiagnostics, guestDiagnostics, acceptable, score });
+      samples.push({
+        candidate,
+        hostDiagnostics,
+        guestDiagnostics,
+        acceptable: rejectionReasons.length === 0,
+        score: score + (judged?.score ?? 0),
+        rejectionReasons,
+      });
     } finally {
       await host.leave().catch(() => undefined);
       await guest.leave().catch(() => undefined);
     }
   }
 
-  const firstAcceptable = samples.find((sample) => sample.acceptable);
-  const best =
-    firstAcceptable ?? samples.slice().sort((a, b) => a.score - b.score)[0];
-  if (!best) throw new Error("calibrateRealtimeRoom: no candidates were provided");
+  applyAckLatencyCliffs(samples, {
+    maxAckP95Ms: options.maxAckP95Ms,
+    ackCliffFactor: options.ackCliffFactor,
+  });
 
-  const recommended: RealtimeProfile = {
-    schemaVersion: 1,
+  const { recommended, usedFallback } = buildRecommendedRealtimeProfile(samples, {
     simulationHz: options.simulationHz,
-    snapshotHz: best.candidate.snapshotHz,
-    inputHz: best.candidate.inputHz ?? options.inputHz ?? 20,
+    inputHz: options.inputHz,
     interpolationDelayMs: options.interpolationDelayMs,
     correctionMs: options.correctionMs,
-    adaptiveRate: options.adaptiveRate ?? false,
-    minSnapshotHz: options.minSnapshotHz,
-    initialSnapshotHz: options.initialSnapshotHz,
-  };
-  return { recommended, samples };
+  });
+  return { recommended, samples, usedFallback };
 }

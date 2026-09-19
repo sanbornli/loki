@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.3.7
+npm install @lokiplay/sdk@0.3.8
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -374,7 +374,8 @@ playback-rate nudge applied to keep the guest's render clock aligned with the
 host's tick cadence — see `REALTIME_ROOM_MAX_CLOCK_NUDGE`), `renderClockDriftTicks`
 (the error observed at the last nudge), `framesRendered` /
 `extrapolatedFrames` (compare these to see how often rendering had to
-extrapolate past the newest snapshot), and `reconciliations` /
+extrapolate past the newest snapshot), `heldAuthoritativeFrames` (frames
+that held the last snapshot instead — a freeze), and `reconciliations` /
 `correctionsStarted` / `correctionsCompleted` / `correctionsSuppressed`
 (every reconcile against a prior prediction counts as a `reconciliation`;
 it becomes a started correction unless `shouldCorrect` returns false, in
@@ -467,38 +468,44 @@ or controls.
 
 Rather than guessing a starting rate, use `calibrateRealtimeRoom()` to try
 candidate rates against a real two-client `RealtimeRoom` pair and recommend
-the lowest one that stays transport-healthy (optionally combined with the
-game's own quality judgment):
+the highest rate that is actually delivered without a Loki-owned cliff
+(acceptance, delivery match, extrapolation, held authoritative frames, ack
+latency, backpressure). Optional `evaluate()` can only veto a rate:
 
 ```ts
 import { calibrateRealtimeRoom } from "@lokiplay/sdk";
 
 const { recommended, samples } = await calibrateRealtimeRoom<RacerState, RacerInput>({
-  snapshotHzCandidates: [8, 12, 15, 20, 25, 30], // lowest first
+  snapshotHzCandidates: [8, 12, 15, 20, 25, 30],
   simulationHz: 60,
   durationMsPerCandidate: 20_000,
   createHostRoom: (candidate) =>
-    hostClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: candidate.snapshotHz, diagnostics: true }),
+    hostClient.createRealtimeRoom<RacerState, RacerInput>({
+      snapshotHz: candidate.snapshotHz,
+      adaptiveRate: false,
+      diagnostics: true,
+    }),
   createGuestRoom: () => guestClient.createRealtimeRoom<RacerState, RacerInput>({ diagnostics: true }),
   driveHost: (host, tick) => host.publishSnapshot(simulateOneStep(tick), { simulationTick: tick }),
   driveGuest: (guest) => guest.setInput(representativeControl()),
-  // Optional: Loki can't judge visual quality itself (e.g. a ball/paddle
-  // error), so pass it if the game measures one.
-  evaluate: ({ host, guest }) => ({ acceptable: guest.extrapolatedFrames / guest.framesRendered < 0.2 }),
 });
 ```
 
-`calibrateRealtimeRoom()` is game-agnostic: it only reads transport
-diagnostics from the rooms `createHostRoom`/`createGuestRoom` build (which
-must pass `diagnostics: true`) and calls the game's own `driveHost`/
-`driveGuest`/`evaluate` callbacks — it never inspects `State`. `hostClient`
-and `guestClient` need two distinct authenticated identities (two real
-players, or two isolated test/browser sessions); two tabs sharing one
-signed-in player are not two players. The result is one `RealtimeProfile`
-(`schemaVersion`, `simulationHz`, `snapshotHz`, `inputHz`,
-`interpolationDelayMs`, `correctionMs`, `adaptiveRate`, `minSnapshotHz`,
-`initialSnapshotHz`) to write into `createRealtimeRoom()`; `game.json`
-`tickRate` stays separate and is not part of this profile.
+`calibrateRealtimeRoom()` is game-agnostic: it only reads diagnostics from
+the rooms `createHostRoom`/`createGuestRoom` build (which must pass
+`diagnostics: true` and run each candidate at a fixed `snapshotHz`) and
+calls the game's own `driveHost`/`driveGuest`/`evaluate` callbacks — it
+never inspects `State`. `hostClient` and `guestClient` need two distinct
+authenticated identities (two real players, or two isolated test/browser
+sessions); two tabs sharing one signed-in player are not two players. The
+result is one `RealtimeProfile` (`schemaVersion`, `simulationHz`,
+`snapshotHz` as the ceiling, `inputHz`, `interpolationDelayMs`,
+`correctionMs`, `adaptiveRate: true`, `minSnapshotHz: 8`,
+`initialSnapshotHz` 12 or the ceiling if lower) to write into
+`createRealtimeRoom()` only. If no candidate qualifies, the profile is the
+Loki floor (8 Hz, adaptive). If the sweep is incomplete, calibration
+throws. `game.json` `tickRate` stays a separate Nakama room-loop setting
+and must not be copied from `snapshotHz`.
 
 For calibrating against a *hosted* build (the real player path, including
 `createHostedLokiClient()`'s handshake) rather than a headless pair, drive

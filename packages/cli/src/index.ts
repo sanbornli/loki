@@ -17,124 +17,13 @@ import { fileURLToPath } from "node:url";
 import { zipSync } from "fflate";
 import { GameManifestSchema } from "../../protocol/src/index.js";
 
-const AGENT_INSTRUCTIONS = `# Loki integration rules
-
-- Install and use \`@lokiplay/sdk\`; do not import Nakama APIs into game code.
-- Production multiplayer runs only from a Loki-hosted finished browser build.
-- Upload \`game.json\`, \`index.html\`, and static assets. Do not upload source-only
-  repositories, backend processes, secrets, creator ad scripts, or localhost
-  dependencies.
-- MVP multiplayer is host-authoritative. Loki controls identity, tenant
-  boundaries, membership, matchmaking, sequencing, snapshots, and host
-  migration.
-- Never trust or override the \`projectId\`, player identity, room membership, or
-  sequence returned by Loki.
-- Create rooms with \`createRoom()\` and join with \`joinRoom({ inviteCode })\`.
-  Games must not invent Loki room keys.
-- Installing the SDK does not add a create/join screen. If the game has no
-  usable room-entry flow, add one before shipping: a minimal lobby (create
-  room, join with invite, copy invite, start when ready) or an automatic
-  flow (plain URL creates a room; invite or deep-link URL joins it). The
-  Loki overlay shows room status, players, invite copy, and chat only; it
-  does not create or join rooms. Players still need loading, waiting, and
-  error states.
-- Before configuring Loki multiplayer, inspect the game's source, existing UI,
-  configuration, documentation, tests, and finished build. Locate its game
-  modes, seats, local-player handling, AI opponents, teams, start conditions,
-  turn or update loop, win conditions, reconnect behavior, and existing
-  networking code.
-- Do not infer multiplayer requirements from the game's name, genre,
-  appearance, or common rules. A chess, pool, racing, or strategy game may
-  support different player and team arrangements.
-- Determine requirements separately for every supported game mode. Do not
-  collapse multiple modes into one profile.
-- Record evidence for each conclusion and distinguish observed facts from
-  creator decisions. If any material field is ambiguous, stop and ask the
-  creator. Never silently choose a player count, team arrangement, simulation
-  model, authority model, update frequency, persistence policy, or
-  matchmaking flow.
-- Determine and confirm for each mode: minimum, recommended, and maximum
-  players; number of teams, team size, and whether players share control;
-  private invite, lobby, matchmaking, or asynchronous entry; whether late
-  joining and spectators are allowed; turn-based, event-driven, continuous
-  realtime, or hybrid simulation; sequential or simultaneous input; required
-  authoritative update frequency and latency sensitivity; session duration
-  and persistence requirements; host-authoritative trust tolerance or
-  server-authority requirement.
-- Classify simulation from how authoritative state progresses, not from
-  visual animation. A game animated at 60 FPS may still be turn-based or
-  event-driven.
-- Preserve existing game modes and rules. Add online settings and entry UI
-  from the confirmed profile, including mode selection, team or seat
-  selection, readiness, player limits, invite and join behavior, waiting
-  states, and start conditions.
-- Do not invent new \`game.json\` fields. Current manifests accept only
-  \`enabled\`, \`authority\`, \`maxPlayers\`, and \`tickRate\`. Report the richer
-  profile in the final report: values, supporting evidence, and
-  creator-confirmed decisions.
-- After confirming each mode's profile, choose \`createSynchronizedRoom()\` for
-  turn-based or event-driven state, or \`createRealtimeRoom()\` for continuous
-  host-authoritative simulation. Choose by how authoritative state actually
-  progresses, not by genre or animation smoothness.
-- \`createSynchronizedRoom()\`: keep synchronized state JSON-compatible and use
-  finite safe integers. Reducers must be synchronous, deterministic, and fast,
-  with no rendering, timers, network calls, or I/O.
-- Subscribe to synchronized snapshots for state, members, authority, and
-  connection status. Keep the same client and room instance while interrupted.
-  Let Loki own lifecycle detection, socket replacement, reconnect retries,
-  snapshot recovery, and unresolved-action replay.
-- \`createRealtimeRoom()\`: integrate the game's existing simulation through its
-  predict/interpolate/extrapolate/blendCorrection callbacks instead of writing
-  a parallel input queue, RTT estimator, snapshot pacer, stale-round
-  rejection, input ledger, interpolation buffer, or reconnect netcode. Keep
-  one game-owned render loop, keep authoritative snapshots compact and
-  self-contained. \`snapshotHz\` (default/cap 30) is a ceiling, not a delivery
-  guarantee; start conservative (\`adaptiveRate: true\` with
-  \`initialSnapshotHz\` around 12-15) or use \`calibrateRealtimeRoom()\` against
-  a real two-player pair to pick a profile, rather than defaulting to the
-  highest rate. \`game.json\` \`tickRate\` is separate and does not need to
-  match \`snapshotHz\`. Report the selected rates plus observed diagnostics
-  (including acceptance/rejection ratios) as evidence. Do not claim Loki
-  supplies physics, collision, rendering optimization, or competitive
-  integrity for realtime rooms.
-- Do not implement competing reconnect behavior for \`visibilitychange\`,
-  \`pagehide\`, \`pageshow\`, \`blur\`, \`focus\`, \`online\`, or \`offline\`.
-  Never leave, close, disconnect, reload, or replace a room because the page is
-  hidden or offline. Call \`leave()\` only from an explicit Leave/End Game action.
-- Call \`dispatch()\` only while connection is \`connected\`. During
-  \`suspended\`, \`reconnecting\`, or \`resynchronizing\`, lock authoritative
-  input, preserve the rendered state, show a reconnecting message, and wait for
-  an authoritative snapshot. Do not assume host authority survives reconnect.
-- Do not repeat unresolved actions under new IDs. Treat \`indeterminate\` and
-  "authoritative confirmation timed out" as unknown outcomes, not proof of
-  failure. Treat \`room_closed\` as terminal and resolve \`leave_failed\` before
-  starting another room with that client.
-- Include the viewport metadata
-  \`width=device-width, initial-scale=1, viewport-fit=cover\`; do not globally
-  disable zoom. Fill the visible viewport with a 100vh fallback followed by
-  100dvh, account for safe-area insets, and avoid document scrolling in play.
-- Recalculate layout from the game container on resize,
-  \`visualViewport.resize\`, and orientation changes. Preserve logical
-  coordinates rather than hard-coding desktop pixels.
-- For canvas games, separate CSS size from backing resolution, cap
-  \`devicePixelRatio\` at a reasonable value such as 2, and resize and redraw
-  without replacing the canvas node.
-- Use Pointer Events across touch and desktop input. Restrict
-  \`touch-action: none\` to direct-manipulation playfields, use pointer capture
-  for drag/aim gestures, handle cancellation, provide 44x44 CSS-pixel primary
-  targets, and do not depend on hover.
-- Use one controlled \`requestAnimationFrame\` loop. Pause or throttle rendering
-  while hidden without leaving the room, resume from the latest authoritative
-  snapshot, cap canvas resolution, and avoid large per-frame allocations.
-- Loki-hosted games run in a sandbox iframe with a strict CSP. Do not use
-  inline \`<script>\` tags, inline event handlers, Google Fonts or other remote
-  stylesheets, or \`<form>\` submissions. Put JavaScript and fonts in same-origin
-  files and use \`<button type="button">\` for create/join controls.
-- Connect and ship with \`npx lokiplay connect --project <uuid>\` followed by
-  \`npx lokiplay ship\`. Run \`npx lokiplay validate\` before deployment.
-- Report whether mobile Safari and Android Chrome were tested. Do not claim
-  real-device testing unless it actually occurred.
-`;
+// Single source of truth: packages/agent-instructions/templates/AGENTS.md.
+// This file is a synced copy (see scripts/sync-agent-instructions.mjs and
+// test/layer-one.test.ts's equality check) so a freshly scaffolded game's
+// AGENTS.md can never silently drift from the canonical instructions.
+const AGENT_INSTRUCTIONS_TEMPLATE_PATH = fileURLToPath(
+  new URL("./AGENTS.template.md", import.meta.url),
+);
 
 export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
 export type Framework =
@@ -484,7 +373,8 @@ export async function initializeProject(
       )}\n`,
     );
   }
-  await writeFile(path.join(directory, "AGENTS.md"), AGENT_INSTRUCTIONS);
+  const agentInstructions = await readFile(AGENT_INSTRUCTIONS_TEMPLATE_PATH, "utf8");
+  await writeFile(path.join(directory, "AGENTS.md"), agentInstructions);
   if (input.projectId) {
     await mkdir(path.join(directory, ".loki"), { recursive: true });
     await writeFile(

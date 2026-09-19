@@ -1,6 +1,6 @@
 {
   "name": "@lokiplay/protocol",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Shared schemas, message types, and hashing utilities for Loki.",
   "license": "MIT",
   "repository": {

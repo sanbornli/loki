@@ -155,6 +155,13 @@ export type RealtimeRoomDiagnostics = {
   snapshotsCoalesced: number;
   snapshotsAcked: number;
   extrapolatedFrames: number;
+  /**
+   * Guest-only: frames where the render tick was ahead of the latest
+   * snapshot and the authoritative sampler had to hold (no extrapolate
+   * callback, or past the max extrapolation window). This is the freeze
+   * path; it is not counted in `extrapolatedFrames`.
+   */
+  heldAuthoritativeFrames: number;
   framesRendered: number;
   /** Times #reconcile() recomputed a predicted state against a prior one, whether or not it produced a visible correction. */
   reconciliations: number;
@@ -659,6 +666,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     snapshotsCoalesced: 0,
     snapshotsAcked: 0,
     extrapolatedFrames: 0,
+    heldAuthoritativeFrames: 0,
     framesRendered: 0,
     reconciliations: 0,
     correctionsStarted: 0,
@@ -1194,7 +1202,8 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
    * Call this (or `getRenderState()`, which calls it internally) at most
    * once per rendered frame with that frame's `now`: each call advances
    * frame-scoped diagnostics counters (`framesRendered`,
-   * `extrapolatedFrames`) and can complete an in-flight correction, so
+   * `extrapolatedFrames`, `heldAuthoritativeFrames`) and can complete an
+   * in-flight correction, so
    * calling it more than once per frame double-counts that bookkeeping
    * and can end a correction a frame early.
    */
@@ -1273,15 +1282,24 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
       return latest.state;
     }
     if (targetTick > latest.simulationTick) {
-      const extraTicks = Math.min(
-        targetTick - latest.simulationTick,
-        REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS * Math.round(this.#effectiveSnapshotIntervalMs() / fixedStepMs),
+      const snapshotIntervalTicks = Math.max(
+        1,
+        Math.round(this.#effectiveSnapshotIntervalMs() / fixedStepMs),
       );
+      const maxExtraTicks = REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS * snapshotIntervalTicks;
+      const aheadTicks = targetTick - latest.simulationTick;
+      const extraTicks = Math.min(aheadTicks, maxExtraTicks);
       if (this.#options.extrapolate && extraTicks > 0) {
         this.#diagnostics.extrapolatedFrames += 1;
         this.#recordExtrapolationSample(true);
+        // Past the max window the pose is clamped: still a hold/freeze even
+        // though extrapolate() is invoked with the capped dt.
+        if (aheadTicks > maxExtraTicks) this.#diagnostics.heldAuthoritativeFrames += 1;
         return this.#options.extrapolate(latest.state, (extraTicks * fixedStepMs) / 1000);
       }
+      this.#diagnostics.heldAuthoritativeFrames += 1;
+      this.#recordExtrapolationSample(false);
+      return latest.state;
     }
     this.#recordExtrapolationSample(false);
     return latest.state;

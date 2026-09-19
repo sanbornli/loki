@@ -345,7 +345,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.3\.7"/);
+  assert.match(creator, /"0\.3\.8"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
@@ -639,11 +639,23 @@ test("CLI initializes, validates and archives finished builds", async () => {
     const validation = await validateBuildDirectory(directory);
     assert.ok(validation.files.includes("game.json"));
     const agents = await readFile(path.join(directory, "AGENTS.md"), "utf8");
+    // The scaffolded AGENTS.md must stay byte-identical to the single
+    // canonical source; a divergent hand-copy in packages/cli must fail
+    // here instead of silently shipping stale realtime/calibration
+    // guidance to newly initialized games.
+    const canonicalInstructions = await readFile(
+      new URL(
+        "../packages/agent-instructions/templates/AGENTS.md",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.equal(agents, canonicalInstructions);
     assert.match(agents, /Loki/);
     assert.match(agents, /inline `<script>`/);
     assert.match(agents, /Google Fonts/);
     assert.match(agents, /<form>/);
-    assert.match(agents, /Let Loki own lifecycle detection/);
+    assert.match(agents, /Let the SDK own browser lifecycle detection/);
     assert.match(agents, /usable room-entry flow/);
     assert.match(agents, /minimal lobby/);
     assert.match(agents, /Do not infer multiplayer requirements/);
