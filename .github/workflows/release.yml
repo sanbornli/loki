@@ -1,14 +1,14 @@
 name: Release
 
 # Runtime-first rollout:
-# 1. Deploy Nakama config/runtime (infra/nakama) to the live environment.
-# 2. Pass live integration and recovery (nakama-live below).
+# 1. Pass local Nakama integration and recovery (nakama-live).
+# 2. Apply production API migrations, then deploy Nakama, API, and web
+#    from the repository root. Nakama's Railway rootDirectory is
+#    infra/nakama — uploading that folder alone fails the metal builder.
 # 3. Publish npm packages and the Kotlin Maven artifact in parallel.
 # 4. Verify Swift and Unity from the public tag without waiting for Maven.
-# 5. Deploy web so creator/agent install instructions match the released
-#    package versions (web is not Git-connected; a tag alone does not ship it).
-# 6. Create the GitHub release after npm + Swift + Unity + web.
-# 7. Kotlin/Maven Central verification continues independently after publish.
+# 5. Create the GitHub release after npm + Swift + Unity + production deploys.
+# 6. Kotlin/Maven Central verification continues independently after publish.
 
 on:
   push:
@@ -33,7 +33,6 @@ jobs:
       - run: npm ci
       - name: Require live runtime before package publish
         run: |
-          echo "Deploy infra/nakama config and modules before tagging 0.2.0."
           npm run nakama:up
           npm run test:nakama
       - if: always()
@@ -238,25 +237,57 @@ jobs:
           done
           npx tsx scripts/verify-native-registry-install.ts --ecosystem kotlin
 
-  deploy-web:
+  deploy-production:
     needs: [nakama-live]
     runs-on: ubuntu-latest
     environment: release
-    timeout-minutes: 20
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
       - name: Install Railway CLI
         run: npm install -g @railway/cli
+      # Workspace/account tokens must be RAILWAY_API_TOKEN. RAILWAY_TOKEN is
+      # only for project tokens and returns Unauthorized for this secret.
+      - name: Apply production API migrations
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway run --service api \
+            --project e59d29d4-a7f0-4d4f-a082-3097f31a0c3a \
+            --environment production \
+            -- npm run db:migrate
+      - name: Deploy Nakama from the repository root
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --service nakama --ci --yes \
+            --project e59d29d4-a7f0-4d4f-a082-3097f31a0c3a \
+            --environment production
+      - name: Deploy API
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --service api --ci --yes \
+            --project e59d29d4-a7f0-4d4f-a082-3097f31a0c3a \
+            --environment production
       - name: Deploy web with the released package versions
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           railway up --service web --ci --yes \
             --project e59d29d4-a7f0-4d4f-a082-3097f31a0c3a \
             --environment production
 
   github-release:
-    needs: [publish-npm, verify-swift, verify-unity, deploy-web]
+    needs: [publish-npm, verify-swift, verify-unity, deploy-production]
     runs-on: ubuntu-latest
     environment: release
     steps:
