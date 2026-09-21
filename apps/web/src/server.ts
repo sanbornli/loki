@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
 import type {
   ArtifactReadStore,
@@ -13,6 +14,7 @@ import type {
 } from "../../api/src/platform.js";
 import { renderCreatorPage } from "./creator-page.js";
 import { renderDevicePage } from "./device-page.js";
+import { buildLlmsFull, isDocsRoute, llmsTxt, renderDocsPage } from "./docs-page.js";
 import { isMarketingRoute, renderMarketingPage } from "./marketing-page.js";
 import { renderOperatorPage } from "./operator-page.js";
 import { gameSecurityHeaders, renderPlayerShell } from "./player.js";
@@ -36,6 +38,19 @@ export interface WebDependencies {
   productConfig?: ProductPageConfig;
   readiness?(): Promise<Record<string, boolean>>;
   log?(record: Record<string, unknown>): void;
+}
+
+let cachedLlmsFull: string | undefined;
+
+async function docsMachineText(pathname: string): Promise<string> {
+  if (pathname === "/llms.txt") return `${llmsTxt.trim()}\n`;
+  if (cachedLlmsFull) return cachedLlmsFull;
+  const agentsPath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../packages/agent-instructions/templates/AGENTS.md",
+  );
+  cachedLlmsFull = `${buildLlmsFull(await readFile(agentsPath, "utf8")).trim()}\n`;
+  return cachedLlmsFull;
 }
 
 const mimeTypes: Record<string, string> = {
@@ -64,7 +79,11 @@ function fail(response: ServerResponse, status: number, message: string): void {
 }
 
 function requestHostname(request: IncomingMessage): string {
-  const host = request.headers.host ?? "";
+  const forwarded = request.headers["x-forwarded-host"];
+  const host =
+    (typeof forwarded === "string" ? forwarded.split(",", 1)[0] : undefined) ??
+    request.headers.host ??
+    "";
   return host.replace(/:\d+$/, "").replace(/\.$/, "").toLowerCase();
 }
 
@@ -126,9 +145,21 @@ export function createWebHandler(dependencies: WebDependencies) {
       const hostname = requestHostname(request);
       const playerHost = hostname === "play.lokiplay.cc";
       const creatorHost = hostname === "app.lokiplay.cc";
+      const docsHost = hostname === "docs.lokiplay.cc";
       let productPage: string | undefined;
       if (request.method === "GET" && dependencies.productConfig) {
-        if (url.pathname === "/") {
+        if (docsHost && (url.pathname === "/llms.txt" || url.pathname === "/llms-full.txt")) {
+          response.writeHead(200, {
+            "content-type": "text/plain; charset=utf-8",
+            "cache-control": "public, max-age=60, stale-while-revalidate=300",
+            "x-content-type-options": "nosniff",
+          });
+          response.end(await docsMachineText(url.pathname));
+          return;
+        }
+        if (docsHost && (url.pathname === "/" || isDocsRoute(url.pathname))) {
+          productPage = renderDocsPage(dependencies.productConfig, url.pathname);
+        } else if (url.pathname === "/") {
           productPage = playerHost
             ? renderPlayerPlatformPage(dependencies.productConfig)
             : creatorHost
@@ -139,6 +170,7 @@ export function createWebHandler(dependencies: WebDependencies) {
         } else if (
           !playerHost &&
           !creatorHost &&
+          !docsHost &&
           isMarketingRoute(url.pathname)
         ) {
           productPage = renderMarketingPage(
@@ -175,11 +207,19 @@ export function createWebHandler(dependencies: WebDependencies) {
         response.end(productPage);
         return;
       }
-      const play = url.pathname.match(/^\/play\/([0-9a-f-]{36})$/i);
-      if (request.method === "GET" && play) {
-        const projectId = play[1]!;
+      const playUuid = url.pathname.match(/^\/play\/([0-9a-f-]{36})$/i);
+      const playSlugs = url.pathname.match(
+        /^\/play\/([a-z0-9-]{3,48})\/([a-z0-9-]{3,48})$/i,
+      );
+      if (request.method === "GET" && (playUuid || playSlugs)) {
+        const project = playUuid
+          ? await dependencies.platform.playableProject(playUuid[1]!)
+          : await dependencies.platform.playableProjectBySlugs(
+              playSlugs![1]!,
+              playSlugs![2]!,
+            );
+        const projectId = project.id;
         const playInvite = await dependencies.authorizePlay(request, projectId);
-        const project = await dependencies.platform.playableProject(projectId);
         const deployment = await dependencies.deployments.get(
           projectId,
           project.activeDeploymentId!,

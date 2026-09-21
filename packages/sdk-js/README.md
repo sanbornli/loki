@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.3.8
+npm install @lokiplay/sdk@0.4.0
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
@@ -29,7 +29,15 @@ host state, snapshots, presence, chat, private scores, token refresh, reconnect,
 and host-migration messages. Loki creates every room and issues the shareable
 invite code. New rooms issue a 6-digit code. `0.2.0` 16-character hex codes
 still join. Call `createRoom()` and `joinRoom({ inviteCode })` and do not invent
-room keys.
+room keys. `create()` stays invite-only unless the game passes
+`{ visibility: "public" }`. Public rooms can be listed with
+`listPublicRooms()` and joined with `joinPublic({ roomId })` when the runtime
+advertises `public_room_browser`. A public summary includes only an opaque
+`roomId`, occupancy, joinable, and an optional bounded `modeLabel`. The SDK
+does not add a public lobby screen; the game must build the browser and all
+loading, empty, joining, full-room, waiting, readiness, and error states.
+The Loki overlay does not list, create, or join public rooms. Do not make
+every room public.
 
 Prefer `createSynchronizedRoom()` for shared state. Supply opaque state, opaque
 actions, and a reducer. Loki sequences actions, commits only from the current
@@ -43,7 +51,8 @@ Generic integration steps:
 1. Install the exact published SDK version for this release.
 2. Define this project's state and action schemas.
 3. Define a synchronous, deterministic, JSON-compatible reducer.
-4. Create or join with `create()` or `join({ inviteCode })`.
+4. Create or join with `create()`, `join({ inviteCode })`, or, when the game
+   enables public discovery, `listPublicRooms()` and `joinPublic({ roomId })`.
 5. Subscribe to snapshots for state, members, authority, and connection.
 6. Dispatch actions and wait for authoritative confirmation.
 7. Render connection and `lastError` from the snapshot.

@@ -26,6 +26,10 @@ type RoomRecord = {
   projectId: string;
   inviteCode: string;
   hostId: string;
+  visibility: "public" | "private" | "unlisted" | "matchmaking";
+  modeLabel?: string;
+  maxPlayers: number;
+  closed: boolean;
   version: number;
   sequence: number;
   state: unknown;
@@ -86,6 +90,7 @@ class MemoryTransport implements LokiTransport {
   #failLeave = false;
   #failJoinSnapshot = false;
   #omitCapabilities = false;
+  #omitPublicRoomBrowser = false;
   #failReconnectSticky = false;
   #failSend = false;
   #rejectLeave = false;
@@ -103,7 +108,11 @@ class MemoryTransport implements LokiTransport {
     return { playerId: this.#playerId };
   }
 
-  async createRoom(input: { projectId: string }): Promise<JoinedRoom> {
+  async createRoom(input: {
+    projectId: string;
+    visibility?: "public" | "private" | "unlisted";
+    modeLabel?: string;
+  }): Promise<JoinedRoom> {
     if (this.#enterHold) await this.#enterHold;
     if (this.#failCreate) {
       this.#failCreate = false;
@@ -118,6 +127,10 @@ class MemoryTransport implements LokiTransport {
       roomId: crypto.randomUUID(),
       projectId: input.projectId,
       inviteCode,
+      visibility: input.visibility ?? "matchmaking",
+      modeLabel: input.modeLabel,
+      maxPlayers: 16,
+      closed: false,
       hostId: this.#requirePlayer(),
       version: 0,
       sequence: 0,
@@ -145,6 +158,61 @@ class MemoryTransport implements LokiTransport {
       throw new Error("TENANT_MISMATCH: tenant mismatch");
     }
     if (room.suspended) throw new Error("ROOM_NOT_FOUND: project suspended");
+    if (room.closed) throw new Error("ROOM_NOT_FOUND: room not found");
+    return this.#enter(room);
+  }
+
+  async listPublicRooms(
+    input: { limit?: number; projectId?: string } = {},
+  ): Promise<{
+    rooms: Array<{
+      roomId: string;
+      playerCount: number;
+      maxPlayers: number;
+      joinable: boolean;
+      modeLabel?: string;
+    }>;
+  }> {
+    const projectId = input.projectId ?? this.#projectId;
+    if (!projectId) throw new Error("authenticate before listing public rooms");
+    this.#projectId = projectId;
+    const limit = input.limit ?? 50;
+    const listed: Array<{
+      roomId: string;
+      playerCount: number;
+      maxPlayers: number;
+      joinable: boolean;
+      modeLabel?: string;
+    }> = [];
+    for (const room of rooms.values()) {
+      if (listed.length >= limit) break;
+      if (room.projectId !== projectId) continue;
+      if (room.visibility !== "public") continue;
+      if (room.closed || room.suspended) continue;
+      const playerCount = room.members.size;
+      if (playerCount < 1 || playerCount >= room.maxPlayers) continue;
+      listed.push({
+        roomId: room.roomId,
+        playerCount,
+        maxPlayers: room.maxPlayers,
+        joinable: true,
+        ...(room.modeLabel ? { modeLabel: room.modeLabel } : {}),
+      });
+    }
+    return { rooms: listed };
+  }
+
+  async joinPublicRoom(input: { projectId: string; roomId: string }): Promise<JoinedRoom> {
+    if (this.#enterHold) await this.#enterHold;
+    this.#projectId = input.projectId;
+    const room = rooms.get(input.roomId);
+    if (!room || room.closed || room.suspended) {
+      throw new Error("ROOM_NOT_FOUND: room not found");
+    }
+    if (room.projectId !== input.projectId || room.visibility !== "public") {
+      throw new Error("ROOM_NOT_FOUND: room not found");
+    }
+    if (room.members.size >= room.maxPlayers) throw new Error("ROOM_FULL: room full");
     return this.#enter(room);
   }
 
@@ -590,6 +658,18 @@ class MemoryTransport implements LokiTransport {
     this.#omitCapabilities = true;
   }
 
+  omitPublicRoomBrowser(): void {
+    this.#omitPublicRoomBrowser = true;
+  }
+
+  limitCapacity(maxPlayers: number): void {
+    if (this.#room) this.#room.maxPlayers = maxPlayers;
+  }
+
+  closeRoom(): void {
+    if (this.#room) this.#room.closed = true;
+  }
+
   failNextReconnect(): void {
     this.#failReconnect = true;
   }
@@ -750,7 +830,12 @@ class MemoryTransport implements LokiTransport {
       membershipRevision: room.membershipRevision,
       ...(this.#omitCapabilities
         ? {}
-        : { capabilities: DEFAULT_RUNTIME_CAPABILITIES }),
+        : {
+            capabilities: {
+              ...DEFAULT_RUNTIME_CAPABILITIES,
+              ...(this.#omitPublicRoomBrowser ? { public_room_browser: false } : {}),
+            },
+          }),
     });
   }
 
@@ -1473,6 +1558,8 @@ test("MCP advertises synchronized rooms and flags manual synchronization", async
   assert.match(requirements.guidance, /Let Loki own lifecycle reconnect/);
   assert.match(requirements.guidance, /usable room-entry flow/);
   assert.match(requirements.guidance, /minimal lobby/);
+  assert.match(requirements.guidance, /does not add a public lobby screen/);
+  assert.match(requirements.guidance, /do not make every room public/);
   assert.match(requirements.guidance, /do not infer player counts/);
   assert.match(requirements.guidance, /stop to ask the creator/);
   assert.match(requirements.guidance, /Do not invent new game\.json fields/);
@@ -1878,4 +1965,168 @@ test("old runtimes without synchronized_rooms capabilities fail fast", async () 
   });
   await assert.rejects(room.create(), /synchronized_rooms/);
   assert.equal(room.getSnapshot().connection, "failed");
+});
+
+const opaqueRoom = (client: LokiClient) =>
+  client.createSynchronizedRoom<OpaqueState, OpaqueAction>({
+    initialState: { n: 0 },
+    reduce: (state, action) => ({ n: state.n + action.d }),
+  });
+
+test("public rooms are listed and private rooms stay hidden", async () => {
+  const projectId = crypto.randomUUID();
+  const host = new LokiClient({ projectId, transport: new MemoryTransport() });
+  const browser = new LokiClient({ projectId, transport: new MemoryTransport() });
+  await host.authenticate("token");
+  await browser.authenticate("token");
+  const hostRoom = opaqueRoom(host);
+  const created = await hostRoom.create({
+    visibility: "public",
+    modeLabel: "casual",
+  });
+  const listed = await browser.listPublicRooms();
+  assert.equal(listed.rooms.length, 1);
+  assert.equal(listed.rooms[0]?.roomId, created.roomId);
+  assert.equal(listed.rooms[0]?.playerCount, 1);
+  assert.equal(listed.rooms[0]?.maxPlayers, 16);
+  assert.equal(listed.rooms[0]?.joinable, true);
+  assert.equal(listed.rooms[0]?.modeLabel, "casual");
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(listed.rooms[0], "inviteCode"),
+    false,
+  );
+
+  for (const visibility of ["private", "unlisted"] as const) {
+    const client = new LokiClient({ projectId, transport: new MemoryTransport() });
+    await client.authenticate("token");
+    await opaqueRoom(client).create({ visibility });
+  }
+  const defaultClient = new LokiClient({
+    projectId,
+    transport: new MemoryTransport(),
+  });
+  await defaultClient.authenticate("token");
+  const inviteOnly = await opaqueRoom(defaultClient).create();
+  assert.match(inviteOnly.inviteCode, /^[0-9]{6}$/);
+  const after = await browser.listPublicRooms();
+  assert.equal(after.rooms.length, 1);
+  assert.equal(after.rooms[0]?.roomId, created.roomId);
+
+  const foreign = new LokiClient({
+    projectId: crypto.randomUUID(),
+    transport: new MemoryTransport(),
+  });
+  await foreign.authenticate("token");
+  assert.deepEqual(await foreign.listPublicRooms(), { rooms: [] });
+  await assert.rejects(
+    foreign.joinPublicRoom({ roomId: created.roomId }),
+    /ROOM_NOT_FOUND/,
+  );
+  await assert.rejects(browser.listPublicRooms({ limit: 0 }), /Too small|limit/i);
+  await assert.rejects(browser.listPublicRooms({ limit: 51 }), /Too big|limit/i);
+});
+
+test("public join works for synchronized rooms and keeps invite join", async () => {
+  const projectId = crypto.randomUUID();
+  const host = new LokiClient({ projectId, transport: new MemoryTransport() });
+  const guest = new LokiClient({ projectId, transport: new MemoryTransport() });
+  const invited = new LokiClient({ projectId, transport: new MemoryTransport() });
+  await host.authenticate("token");
+  await guest.authenticate("token");
+  await invited.authenticate("token");
+  const hostRoom = opaqueRoom(host);
+  const created = await hostRoom.create({ visibility: "public" });
+  const guestRoom = opaqueRoom(guest);
+  await guestRoom.joinPublic({ roomId: created.roomId });
+  assert.equal(guestRoom.members.length, 2);
+  await guestRoom.reconnect();
+  assert.equal(guestRoom.getSnapshot().connection, "connected");
+  await hostRoom.dispatch({ d: 3 });
+  assert.deepEqual(guestRoom.getSnapshot().state, { n: 3 });
+  const invitedRoom = opaqueRoom(invited);
+  await invitedRoom.join({ inviteCode: created.inviteCode });
+  assert.equal(invitedRoom.members.length, 3);
+  await hostRoom.leave();
+  assert.equal(guestRoom.getSnapshot().hostId, guest.playerId);
+});
+
+test("full and closed public rooms cannot be joined", async () => {
+  const projectId = crypto.randomUUID();
+  const hostTransport = new MemoryTransport();
+  const host = new LokiClient({ projectId, transport: hostTransport });
+  const guest = new LokiClient({ projectId, transport: new MemoryTransport() });
+  await host.authenticate("token");
+  await guest.authenticate("token");
+  const created = await opaqueRoom(host).create({ visibility: "public" });
+  hostTransport.limitCapacity(1);
+  assert.deepEqual(await guest.listPublicRooms(), { rooms: [] });
+  await assert.rejects(
+    opaqueRoom(guest).joinPublic({ roomId: created.roomId }),
+    /ROOM_FULL/,
+  );
+
+  const openHostTransport = new MemoryTransport();
+  const openHost = new LokiClient({ projectId, transport: openHostTransport });
+  await openHost.authenticate("token");
+  const open = await opaqueRoom(openHost).create({ visibility: "public" });
+  openHostTransport.closeRoom();
+  await assert.rejects(
+    opaqueRoom(guest).joinPublic({ roomId: open.roomId }),
+    /ROOM_NOT_FOUND/,
+  );
+});
+
+test("concurrent public join loses the capacity race", async () => {
+  const projectId = crypto.randomUUID();
+  const hostTransport = new MemoryTransport();
+  const lateTransport = new MemoryTransport();
+  const host = new LokiClient({ projectId, transport: hostTransport });
+  const winner = new LokiClient({ projectId, transport: new MemoryTransport() });
+  const late = new LokiClient({ projectId, transport: lateTransport });
+  await host.authenticate("token");
+  await winner.authenticate("token");
+  await late.authenticate("token");
+  const created = await opaqueRoom(host).create({ visibility: "public" });
+  hostTransport.limitCapacity(2);
+  lateTransport.holdNextEnter();
+  const pending = opaqueRoom(late).joinPublic({ roomId: created.roomId });
+  await opaqueRoom(winner).joinPublic({ roomId: created.roomId });
+  lateTransport.releaseEnter();
+  await assert.rejects(pending, /ROOM_FULL/);
+});
+
+test("public room browser capability mismatch fails clearly", async () => {
+  const projectId = crypto.randomUUID();
+  const transport = new MemoryTransport();
+  const client = new LokiClient({ projectId, transport });
+  await client.authenticate("token");
+  transport.omitPublicRoomBrowser();
+  await assert.rejects(
+    opaqueRoom(client).create({ visibility: "public" }),
+    /public_room_browser/,
+  );
+
+  const bare: LokiTransport = {
+    async authenticate() {
+      return { playerId: crypto.randomUUID() };
+    },
+    async createRoom() {
+      throw new Error("unused");
+    },
+    async joinRoom() {
+      throw new Error("unused");
+    },
+    async send() {},
+    subscribe() {
+      return () => undefined;
+    },
+    async close() {},
+  };
+  const unsupported = new LokiClient({ projectId, transport: bare });
+  await unsupported.authenticate("token");
+  await assert.rejects(unsupported.listPublicRooms(), /public_room_browser/);
+  await assert.rejects(
+    unsupported.joinPublicRoom({ roomId: crypto.randomUUID() }),
+    /public_room_browser/,
+  );
 });

@@ -56,6 +56,7 @@ await Promise.all([
     "lovable-color.svg",
     "cursor-screen.jpg",
     "cursor-screen-prompt.jpg",
+    "phone-share.png",
   ].map((fileName) =>
     copyFile(
       resolve(repositoryRoot, "apps/web/src/assets/marketing", fileName),

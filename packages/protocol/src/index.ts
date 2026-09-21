@@ -31,10 +31,27 @@ export const GameManifestSchema = z
   })
   .strict();
 
+export const RoomVisibilitySchema = z.enum([
+  "private",
+  "unlisted",
+  "matchmaking",
+  "public",
+]);
+
+export const CreateRoomVisibilitySchema = z.enum([
+  "private",
+  "unlisted",
+  "public",
+]);
+
+export const ModeLabelSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._ -]{0,31}$/);
+
 export const RoomConfigSchema = z
   .object({
     roomKey: z.string().regex(/^[a-z0-9-]{1,64}$/),
-    visibility: z.enum(["private", "unlisted", "matchmaking"]),
+    visibility: RoomVisibilitySchema,
     maxPlayers: z.number().int().min(1).max(16),
     teamSize: z.number().int().min(1).max(16).optional(),
     tickRate: z.number().int().min(1).max(MAX_TICK_RATE),
@@ -76,6 +93,7 @@ export const CapabilitySchema = z.enum([
   "private_leaderboards",
   "synchronized_rooms",
   "realtime_rooms",
+  "public_room_browser",
 ]);
 
 export const ActionIdSchema = z
@@ -100,6 +118,7 @@ export const RuntimeCapabilityBlockSchema = z
   .object({
     synchronized_rooms: z.boolean().optional(),
     realtime_rooms: z.boolean().optional(),
+    public_room_browser: z.boolean().optional(),
     realtimeProtocolVersion: z.number().int().positive().optional(),
     limits: ProtocolLimitsSchema.optional(),
     minimumProtocolVersion: z.number().int().positive().optional(),
@@ -500,9 +519,55 @@ export const PlayerSessionClaimsSchema = z
   })
   .strict();
 
+export const CreateRoomOptionsSchema = z
+  .object({
+    visibility: CreateRoomVisibilitySchema.optional(),
+    modeLabel: ModeLabelSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (value) => value.modeLabel === undefined || value.visibility === "public",
+    "modeLabel is only valid for public rooms",
+  );
+
+export const PublicRoomSummarySchema = z
+  .object({
+    roomId: z.string().min(1).max(256),
+    playerCount: z.number().int().min(1).max(16),
+    maxPlayers: z.number().int().min(1).max(16),
+    joinable: z.boolean(),
+    modeLabel: ModeLabelSchema.optional(),
+  })
+  .strict();
+
+export const ListPublicRoomsInputSchema = z
+  .object({
+    limit: z.number().int().min(1).max(50).default(50),
+  })
+  .strict();
+
+export const ListPublicRoomsResultSchema = z
+  .object({
+    rooms: z.array(PublicRoomSummarySchema).max(50),
+  })
+  .strict();
+
+export const JoinPublicRoomInputSchema = z
+  .object({
+    roomId: z.string().min(1).max(256),
+  })
+  .strict();
+
 export type ProjectState = z.infer<typeof ProjectStateSchema>;
 export type GameManifest = z.infer<typeof GameManifestSchema>;
 export type RoomConfig = z.infer<typeof RoomConfigSchema>;
+export type RoomVisibility = z.infer<typeof RoomVisibilitySchema>;
+export type CreateRoomVisibility = z.infer<typeof CreateRoomVisibilitySchema>;
+export type CreateRoomOptions = z.infer<typeof CreateRoomOptionsSchema>;
+export type PublicRoomSummary = z.infer<typeof PublicRoomSummarySchema>;
+export type ListPublicRoomsInput = z.infer<typeof ListPublicRoomsInputSchema>;
+export type ListPublicRoomsResult = z.infer<typeof ListPublicRoomsResultSchema>;
+export type JoinPublicRoomInput = z.infer<typeof JoinPublicRoomInputSchema>;
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 export type Capability = z.infer<typeof CapabilitySchema>;
 export type ActionId = z.infer<typeof ActionIdSchema>;
@@ -522,6 +587,7 @@ export function actionIdentityKey(senderId: string, actionId: string): string {
 export const DEFAULT_RUNTIME_CAPABILITIES = {
   synchronized_rooms: true,
   realtime_rooms: true,
+  public_room_browser: true,
   realtimeProtocolVersion: REALTIME_PROTOCOL_VERSION,
   minimumProtocolVersion: PROTOCOL_VERSION,
   limits: {

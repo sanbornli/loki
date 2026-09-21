@@ -8,6 +8,11 @@ var PROJECT_COLLECTION = "_loki_projects";
 var INVITE_COLLECTION = "_loki_invites";
 var INVITE_FAIL_COLLECTION = "_loki_invite_fails";
 var ROOM_KEY_COLLECTION = "_loki_room_keys";
+var PUBLIC_ROOM_OPS_COLLECTION = "_loki_public_room_ops";
+var PUBLIC_ROOM_LIST_LIMIT = 30;
+var PUBLIC_ROOM_JOIN_LIMIT = 20;
+var PUBLIC_ROOM_OPS_WINDOW_MS = 60000;
+var PUBLIC_ROOM_LIST_MAX = 50;
 var DEFAULT_MAX_PLAYERS = 16;
 var DEFAULT_TICK_RATE = 5;
 var MAX_TICK_RATE = 30;
@@ -326,6 +331,7 @@ var runtimeCapabilities = function (state) {
   return {
     synchronized_rooms: true,
     realtime_rooms: true,
+    public_room_browser: true,
     realtimeProtocolVersion: REALTIME_PROTOCOL_VERSION,
     minimumProtocolVersion: PROTOCOL_VERSION,
     limits: {
@@ -609,14 +615,48 @@ var createInvite = function (nk, matchId, projectId, ttlSeconds) {
   throw codedError("SERVICE_UNAVAILABLE", "invite allocation failed");
 };
 
-var roomParams = function (projectId, roomKey, creatorId, config, source) {
+var validCreateVisibility = function (value) {
+  return value === "public" || value === "private" || value === "unlisted";
+};
+
+var validModeLabel = function (value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._ -]{0,31}$/.test(value);
+};
+
+var parseCreateRoomInput = function (payload) {
+  var input = parsePayload(payload);
+  if (input.visibility !== undefined && !validCreateVisibility(input.visibility)) {
+    throw codedError("INVALID_MESSAGE", "invalid visibility");
+  }
+  if (input.modeLabel !== undefined) {
+    if (input.visibility !== "public") {
+      throw codedError("INVALID_MESSAGE", "modeLabel is only valid for public rooms");
+    }
+    if (!validModeLabel(input.modeLabel)) {
+      throw codedError("INVALID_MESSAGE", "invalid modeLabel");
+    }
+  }
+  return input;
+};
+
+var roomParams = function (projectId, roomKey, creatorId, config, source, input) {
+  var visibility =
+    source === "matchmaking"
+      ? "matchmaking"
+      : input && validCreateVisibility(input.visibility)
+        ? input.visibility
+        : config.visibility;
   return {
     projectId: projectId,
     roomKey: roomKey,
     creatorId: creatorId || "",
     maxPlayers: config.maxPlayers,
     tickRate: config.tickRate,
-    visibility: source === "matchmaking" ? "matchmaking" : config.visibility,
+    visibility: visibility,
+    modeLabel:
+      visibility === "public" && input && validModeLabel(input.modeLabel)
+        ? input.modeLabel
+        : undefined,
     teamSize: config.teamSize,
     source: source,
   };
@@ -624,7 +664,7 @@ var roomParams = function (projectId, roomKey, creatorId, config, source) {
 
 var rpcCreateRoom = function (ctx, logger, nk, payload) {
   if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
-  parsePayload(payload);
+  var input = parseCreateRoomInput(payload);
   var projectId = tenantForUser(nk, ctx.userId);
   var config = requireActiveProject(nk, projectId);
   if (activeRoomCount(nk, projectId, config.concurrentRoomQuota) >= config.concurrentRoomQuota) {
@@ -637,7 +677,7 @@ var rpcCreateRoom = function (ctx, logger, nk, payload) {
   for (var attempt = 0; attempt < 8; attempt += 1) {
     roomKey = allocateRoomKey(nk);
     if (findRoomByKey(nk, projectId, roomKey)) continue;
-    params = roomParams(projectId, roomKey, ctx.userId, config, "rpc");
+    params = roomParams(projectId, roomKey, ctx.userId, config, "rpc", input);
     matchId = nk.matchCreate(MATCH_NAME, params);
     try {
       indexRoomKey(nk, projectId, roomKey, matchId);
@@ -728,6 +768,141 @@ var rpcJoinRoom = function (ctx, logger, nk, payload) {
     projectId: invite.projectId,
     inviteCode: invite.inviteCode,
     expiresAt: invite.expiresAt,
+  });
+};
+
+var requirePublicRoomBudget = function (nk, userId, kind, limit) {
+  var objects = nk.storageRead([
+    { collection: PUBLIC_ROOM_OPS_COLLECTION, key: userId + ":" + kind },
+  ]);
+  var now = nowMs();
+  var record =
+    objects && objects.length === 1 && objects[0].value
+      ? objects[0].value
+      : { windowStart: now, count: 0 };
+  if (
+    !integerInRange(record.windowStart, 0, 9007199254740991) ||
+    now - record.windowStart >= PUBLIC_ROOM_OPS_WINDOW_MS
+  ) {
+    record = { windowStart: now, count: 0 };
+  }
+  if (record.count >= limit) {
+    throw codedError("RATE_LIMITED", "too many public room " + kind + " requests");
+  }
+  record.count += 1;
+  try {
+    nk.storageWrite([
+      {
+        collection: PUBLIC_ROOM_OPS_COLLECTION,
+        key: userId + ":" + kind,
+        value: record,
+        version: objects && objects.length === 1 ? objects[0].version : "*",
+        permissionRead: 0,
+        permissionWrite: 0,
+      },
+    ]);
+  } catch (_) {
+    // Best-effort limiter; a write race must not block a valid request.
+  }
+};
+
+var parseMatchLabel = function (raw) {
+  if (!raw || typeof raw !== "string") return null;
+  try {
+    var label = JSON.parse(raw);
+    return label && typeof label === "object" ? label : null;
+  } catch (_) {
+    return null;
+  }
+};
+
+var publicRoomSummary = function (matchId, label, size) {
+  var playerCount = integerInRange(label.playerCount, 0, 16)
+    ? label.playerCount
+    : integerInRange(size, 0, 16)
+      ? size
+      : 0;
+  var maxPlayers = integerInRange(label.maxPlayers, 1, 16) ? label.maxPlayers : DEFAULT_MAX_PLAYERS;
+  if (playerCount < 1 || playerCount >= maxPlayers) return null;
+  var summary = {
+    roomId: matchId,
+    playerCount: playerCount,
+    maxPlayers: maxPlayers,
+    joinable: true,
+  };
+  if (validModeLabel(label.modeLabel)) summary.modeLabel = label.modeLabel;
+  return summary;
+};
+
+var rpcListPublicRooms = function (ctx, logger, nk, payload) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  var limit = input.limit === undefined ? PUBLIC_ROOM_LIST_MAX : input.limit;
+  if (!integerInRange(limit, 1, PUBLIC_ROOM_LIST_MAX)) {
+    throw codedError("INVALID_MESSAGE", "limit must be an integer between 1 and 50");
+  }
+  requirePublicRoomBudget(nk, ctx.userId, "list", PUBLIC_ROOM_LIST_LIMIT);
+  var projectId = tenantForUser(nk, ctx.userId);
+  requireActiveProject(nk, projectId);
+  var escapedProjectId = projectId.replace(/([+\-=&|>])/g, "\\$1");
+  var matches = nk.matchList(
+    limit,
+    true,
+    "",
+    1,
+    DEFAULT_MAX_PLAYERS,
+    "+label.projectId:" + escapedProjectId + " +label.visibility:public",
+  );
+  var rooms = [];
+  var index = 0;
+  while (matches && index < matches.length && rooms.length < limit) {
+    var match = matches[index];
+    index += 1;
+    var label = parseMatchLabel(match && match.label);
+    if (!label || label.projectId !== projectId || label.visibility !== "public") continue;
+    var summary = publicRoomSummary(match.matchId, label, match.size);
+    if (summary) rooms.push(summary);
+  }
+  return JSON.stringify({
+    ok: true,
+    code: "OK",
+    rooms: rooms,
+  });
+};
+
+var rpcJoinPublicRoom = function (ctx, logger, nk, payload) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var input = parsePayload(payload);
+  if (typeof input.roomId !== "string" || input.roomId.length < 1 || input.roomId.length > 256) {
+    throw codedError("INVALID_MESSAGE", "roomId is required");
+  }
+  requirePublicRoomBudget(nk, ctx.userId, "join", PUBLIC_ROOM_JOIN_LIMIT);
+  var projectId = tenantForUser(nk, ctx.userId);
+  requireActiveProject(nk, projectId);
+  var match;
+  try {
+    match = nk.matchGet(input.roomId);
+  } catch (_) {
+    throw codedError("ROOM_NOT_FOUND", "room not found");
+  }
+  if (!match) throw codedError("ROOM_NOT_FOUND", "room not found");
+  var label = parseMatchLabel(match.label);
+  if (!label || label.projectId !== projectId || label.visibility !== "public") {
+    throw codedError("ROOM_NOT_FOUND", "room not found");
+  }
+  var playerCount = integerInRange(label.playerCount, 0, 16)
+    ? label.playerCount
+    : integerInRange(match.size, 0, 16)
+      ? match.size
+      : 0;
+  var maxPlayers = integerInRange(label.maxPlayers, 1, 16) ? label.maxPlayers : DEFAULT_MAX_PLAYERS;
+  if (playerCount < 1) throw codedError("ROOM_NOT_FOUND", "room not found");
+  if (playerCount >= maxPlayers) throw codedError("ROOM_FULL", "room full");
+  return JSON.stringify({
+    ok: true,
+    code: "OK",
+    matchId: match.matchId || input.roomId,
+    projectId: projectId,
   });
 };
 
@@ -999,16 +1174,22 @@ var legacySnapshot = function (state) {
   };
 };
 
-var updateLabel = function (dispatcher, state) {
-  dispatcher.matchLabelUpdate(JSON.stringify({
+var roomLabel = function (state, playerCount) {
+  var label = {
     projectId: state.projectId,
     roomKey: state.roomKey,
-    playerCount: Object.keys(state.members).length,
+    playerCount: playerCount,
     maxPlayers: state.maxPlayers,
     tickRate: state.tickRate,
     visibility: state.visibility,
     teamSize: state.teamSize,
-  }));
+  };
+  if (state.modeLabel) label.modeLabel = state.modeLabel;
+  return JSON.stringify(label);
+};
+
+var updateLabel = function (dispatcher, state) {
+  dispatcher.matchLabelUpdate(roomLabel(state, Object.keys(state.members).length));
 };
 
 var matchInit = function (ctx, logger, nk, params) {
@@ -1033,6 +1214,7 @@ var matchInit = function (ctx, logger, nk, params) {
       maxPlayers: maxPlayers,
       tickRate: tickRate,
       visibility: params.visibility || config.visibility,
+      modeLabel: params.modeLabel || "",
       teamSize: teamSize,
       hostId: "",
       version: 0,
@@ -1063,15 +1245,18 @@ var matchInit = function (ctx, logger, nk, params) {
       },
     },
     tickRate: tickRate,
-    label: JSON.stringify({
-      projectId: params.projectId,
-      roomKey: params.roomKey,
-      playerCount: 0,
-      maxPlayers: maxPlayers,
-      tickRate: tickRate,
-      visibility: params.visibility || config.visibility,
-      teamSize: teamSize,
-    }),
+    label: roomLabel(
+      {
+        projectId: params.projectId,
+        roomKey: params.roomKey,
+        maxPlayers: maxPlayers,
+        tickRate: tickRate,
+        visibility: params.visibility || config.visibility,
+        modeLabel: params.modeLabel || "",
+        teamSize: teamSize,
+      },
+      0,
+    ),
   };
 };
 
@@ -2858,6 +3043,8 @@ var InitModule = function (ctx, logger, nk, initializer) {
   initializer.registerRpc("loki_tenant", rpcTenant);
   initializer.registerRpc("loki_create_room", rpcCreateRoom);
   initializer.registerRpc("loki_join_room", rpcJoinRoom);
+  initializer.registerRpc("loki_list_public_rooms", rpcListPublicRooms);
+  initializer.registerRpc("loki_join_public_room", rpcJoinPublicRoom);
   initializer.registerRpc("loki_resolve_invite", rpcResolveInvite);
   initializer.registerRpc("loki_room_snapshot", rpcRoomSnapshot);
   initializer.registerRpc("loki_leave_room", rpcLeaveRoom);

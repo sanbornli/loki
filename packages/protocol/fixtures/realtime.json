@@ -3,7 +3,7 @@
   "hello": {
     "protocolVersion": 1,
     "minimumProtocolVersion": 1,
-    "capabilities": ["rooms", "invites", "matchmaking", "host_migration", "reconnect", "presence", "chat", "private_leaderboards", "synchronized_rooms", "realtime_rooms"],
+    "capabilities": ["rooms", "invites", "matchmaking", "host_migration", "reconnect", "presence", "chat", "private_leaderboards", "synchronized_rooms", "realtime_rooms", "public_room_browser"],
     "limits": {
       "maxPlayersPerRoom": 16,
       "maxMessageBytes": 16384,

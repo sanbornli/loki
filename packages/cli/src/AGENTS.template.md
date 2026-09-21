@@ -11,7 +11,15 @@
 - Never trust or override the `projectId`, player identity, room membership, or
   sequence returned by Loki.
 - Create rooms with `createRoom()` and join with `joinRoom({ inviteCode })`.
-  Do not invent Loki room keys.
+  Do not invent Loki room keys. `create()` stays invite-only unless the
+  game explicitly passes `{ visibility: "public" }`. Do not make every room
+  public. Confirm for each mode whether entry is private invites, public
+  room browsing (`listPublicRooms` + `joinPublic`), automatic matchmaking,
+  or a combination. Loki’s SDK does not add a public lobby screen. If
+  public-room discovery is enabled, the game agent must build the room
+  browser and all loading, empty, joining, full-room, waiting, readiness,
+  and error states. The Loki overlay does not list, create, or join public
+  rooms.
 - Installing the SDK does not add a create/join screen. If the game has no
   usable room-entry flow, add one before shipping: a minimal lobby (create
   room, join with invite, copy invite, start when ready) or an automatic
@@ -36,7 +44,8 @@
   matchmaking flow.
 - Determine and confirm for each mode: minimum, recommended, and maximum
   players; number of teams, team size, and whether players share control;
-  private invite, lobby, matchmaking, or asynchronous entry; whether late
+  private invite, public room browsing, automatic matchmaking, a
+  combination, or asynchronous entry; whether late
   joining and spectators are allowed; turn-based, event-driven, continuous
   realtime, or hybrid simulation; sequential or simultaneous input; required
   authoritative update frequency and latency sensitivity; session duration

@@ -64,3 +64,12 @@ Capabilities advertise the realtime contract additively: `realtime_rooms`,
 (30), `maxRealtimeInputHz` (20), and `maxRealtimeInFlightSnapshots` (8). A
 client must treat a missing `realtime_rooms` capability as "unsupported" and
 must not fall back to sending v2 envelopes.
+
+Room visibility is `private`, `unlisted`, `matchmaking`, or `public`. Public
+rooms can be listed with `listPublicRooms` and joined with `joinPublic` when
+the runtime advertises `public_room_browser`. A public room summary contains
+only an opaque `roomId`, occupancy, whether the room is joinable, and an
+optional bounded `modeLabel`. Invite codes, player identities, and
+authoritative state are never included. `game.json` does not gain a visibility
+field; public browsing is enabled per room at create time. Clients must treat
+a missing `public_room_browser` capability as unsupported.

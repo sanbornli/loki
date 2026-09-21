@@ -19,6 +19,11 @@ import type {
   PlatformOperations,
   Project,
 } from "./platform.js";
+import {
+  playablePath,
+  validateOrganizationSlug,
+  validateProjectSlug,
+} from "./slugs.js";
 import { SessionTokenService } from "./tokens.js";
 
 type ProjectRow = {
@@ -183,20 +188,43 @@ export class PostgresPlatformService implements PlatformOperations {
     });
   }
 
-  async createOrganization(actorId: string, name: string): Promise<Organization> {
-    const normalizedName = name.trim();
+  async createOrganization(
+    actorId: string,
+    input: { name: string; slug: string },
+  ): Promise<Organization> {
+    const normalizedName = input.name.trim();
     if (!normalizedName) throw new Error("organization name required");
+    const slug = validateOrganizationSlug(input.slug);
     return transaction(this.pool, async (client) => {
-      const result = await client.query<{
+      const existing = await client.query(
+        "SELECT 1 FROM organizations WHERE slug = $1",
+        [slug],
+      );
+      if (existing.rowCount) throw new Error("slug already exists");
+      let result: { rows: Array<{
         id: string;
         name: string;
+        slug: string;
         created_at: Date | string;
-      }>(
-        `INSERT INTO organizations (name)
-         VALUES ($1)
-         RETURNING id, name, created_at`,
-        [normalizedName],
-      );
+      }> };
+      try {
+        result = await client.query(
+          `INSERT INTO organizations (name, slug)
+           VALUES ($1, $2)
+           RETURNING id, name, slug, created_at`,
+          [normalizedName, slug],
+        );
+      } catch (error) {
+        if (
+          typeof error === "object" &&
+          error &&
+          "code" in error &&
+          (error as { code?: string }).code === "23505"
+        ) {
+          throw new Error("slug already exists");
+        }
+        throw error;
+      }
       const row = result.rows[0]!;
       await client.query(
         `INSERT INTO organization_members (organization_id, account_id, role)
@@ -207,9 +235,14 @@ export class PostgresPlatformService implements PlatformOperations {
         actorId,
         organizationId: row.id,
         action: "organization.created",
-        detail: { name: row.name },
+        detail: { name: row.name, slug: row.slug },
       });
-      return { id: row.id, name: row.name, createdAt: iso(row.created_at) };
+      return {
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        createdAt: iso(row.created_at),
+      };
     });
   }
 
@@ -220,7 +253,7 @@ export class PostgresPlatformService implements PlatformOperations {
   ): Promise<Project> {
     const name = input.name.trim();
     if (!name) throw new Error("project name required");
-    if (!/^[a-z0-9-]{3,48}$/.test(input.slug)) throw new Error("invalid slug");
+    validateProjectSlug(input.slug);
     return transaction(this.pool, async (client) => {
       await requireMember(client, actorId, organizationId);
       const result = await client.query<ProjectRow>(
@@ -491,19 +524,59 @@ export class PostgresPlatformService implements PlatformOperations {
   async playableProject(
     projectId: string,
   ): Promise<Pick<Project, "id" | "name" | "slug" | "state" | "activeDeploymentId">> {
+    return this.#playableProject("projects.id = $1", [projectId]);
+  }
+
+  async playableProjectBySlugs(
+    organizationSlug: string,
+    projectSlug: string,
+  ): Promise<Pick<Project, "id" | "name" | "slug" | "state" | "activeDeploymentId">> {
+    try {
+      validateOrganizationSlug(organizationSlug);
+      validateProjectSlug(projectSlug);
+    } catch {
+      throw new Error("project is not playable");
+    }
+    return this.#playableProject(
+      "organizations.slug = $1 AND projects.slug = $2",
+      [organizationSlug.toLowerCase(), projectSlug.toLowerCase()],
+    );
+  }
+
+  async projectPlayPath(projectId: string): Promise<string> {
+    const result = await this.pool.query<{
+      project_slug: string;
+      organization_slug: string;
+    }>(
+      `SELECT projects.slug AS project_slug, organizations.slug AS organization_slug
+         FROM projects
+         JOIN organizations ON organizations.id = projects.organization_id
+        WHERE projects.id = $1`,
+      [projectId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("project not found");
+    return playablePath(row.organization_slug, row.project_slug);
+  }
+
+  async #playableProject(
+    where: string,
+    values: unknown[],
+  ): Promise<Pick<Project, "id" | "name" | "slug" | "state" | "activeDeploymentId">> {
     const result = await this.pool.query<ProjectRow>(
       `SELECT projects.* FROM projects
+        JOIN organizations ON organizations.id = projects.organization_id
         JOIN deployments
           ON deployments.id = projects.active_deployment_id
          AND deployments.project_id = projects.id
          AND deployments.status IN ('ready', 'ready_with_warnings')
        CROSS JOIN platform_controls
-        WHERE projects.id = $1
+        WHERE ${where}
           AND projects.state IN ('private', 'unlisted', 'published')
           AND projects.active_deployment_id IS NOT NULL
           AND projects.play_disabled_at IS NULL
           AND platform_controls.play_disabled_at IS NULL`,
-      [projectId],
+      values,
     );
     const row = result.rows[0];
     if (!row) throw new Error("project is not playable");

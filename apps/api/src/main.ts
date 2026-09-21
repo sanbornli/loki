@@ -178,9 +178,9 @@ const server = startApiServer(
     hostingAuth,
     guestResume,
     safety,
-    playableUrl(projectId) {
+    async playableUrl(projectId) {
       return new URL(
-        `/play/${projectId}`,
+        await platform.projectPlayPath(projectId),
         environment.LOKI_PUBLIC_WEB_ORIGIN!,
       ).toString();
     },

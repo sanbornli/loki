@@ -128,12 +128,15 @@ try {
     ...legalHeaders,
   };
 
-  const organization = await requestJson<{ id: string }>(
+  const organization = await requestJson<{ id: string; slug: string }>(
     `${environment.API_ORIGIN}/v1/organizations`,
     {
       method: "POST",
       headers: creatorHeaders,
-      body: JSON.stringify({ name: "Production Check" }),
+      body: JSON.stringify({
+        name: "Production Check",
+        slug: `check-studio-${id.slice(0, 8)}`,
+      }),
     },
   );
   organizationId = organization.id;
@@ -252,7 +255,7 @@ try {
   if (deployment.status !== "ready") {
     throw new Error(`deployment status was ${deployment.status}`);
   }
-  const expectedPlayableUrl = `${environment.WEB_ORIGIN}/play/${project.id}`;
+  const expectedPlayableUrl = `${environment.WEB_ORIGIN}/play/${organization.slug}/${slug}`;
   if (deployment.playableUrl !== expectedPlayableUrl) {
     throw new Error("deployment did not return the production playable URL");
   }

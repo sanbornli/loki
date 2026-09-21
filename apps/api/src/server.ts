@@ -34,7 +34,7 @@ export interface ApiDependencies {
   githubConnections?: GitHubConnectionOperations;
   githubAppSlug?: string;
   githubApp?: GitHubAppClient;
-  playableUrl?(projectId: string): string;
+  playableUrl?(projectId: string): string | Promise<string>;
   authenticateCreator(request: IncomingMessage): Promise<string>;
   authenticatePlayer?(request: IncomingMessage): Promise<string | undefined>;
   dashboard?: DashboardOperations;
@@ -507,7 +507,7 @@ export function createApiHandler(dependencies: ApiDependencies) {
         });
         json(response, deployment.status === "blocked" ? 422 : 201, {
           ...deployment,
-          playableUrl: dependencies.playableUrl?.(deployment.projectId),
+          playableUrl: await dependencies.playableUrl?.(deployment.projectId),
         });
         return;
       }
@@ -590,12 +590,17 @@ export function createApiHandler(dependencies: ApiDependencies) {
         const actorId = await dependencies.authenticateCreator(request);
         const input = JSON.parse(
           (await readBody(request, 8 * 1024)).toString("utf8"),
-        ) as { name?: string };
-        if (!input.name) throw new Error("organization name is required");
+        ) as { name?: string; slug?: string };
+        if (!input.name || !input.slug) {
+          throw new Error("name and slug are required");
+        }
         json(
           response,
           201,
-          await dependencies.platform.createOrganization(actorId, input.name),
+          await dependencies.platform.createOrganization(actorId, {
+            name: input.name,
+            slug: input.slug,
+          }),
         );
         return;
       }
@@ -805,7 +810,7 @@ export function createApiHandler(dependencies: ApiDependencies) {
         } else {
           json(response, 200, {
             ...deployment,
-            playableUrl: dependencies.playableUrl?.(deployment.projectId),
+            playableUrl: await dependencies.playableUrl?.(deployment.projectId),
           });
         }
         return;

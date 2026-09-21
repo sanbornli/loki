@@ -625,9 +625,9 @@ body.creator-auth .page-shell {
 const pageBody = `
   <a class="skip-link" href="#main-content">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="/" aria-label="Loki home">
+    <a class="brand" href="https://lokiplay.cc/" aria-label="Loki home">
       <span class="brand-mark" aria-hidden="true"></span>
-      <span>Loki / Creator</span>
+      <span>LOKI</span>
     </a>
     <p class="header-note">Independent games, released with intent</p>
     <div class="header-actions">
@@ -639,9 +639,9 @@ const pageBody = `
   <main class="page-shell" id="main-content">
     <section class="auth-layout" id="auth-view" aria-labelledby="auth-title">
       <div class="auth-hero">
-        <a class="brand" href="/" aria-label="Loki home">
+        <a class="brand" href="https://lokiplay.cc/" aria-label="Loki home">
           <span class="brand-mark" aria-hidden="true"></span>
-          <span>Loki / Creator</span>
+          <span>LOKI</span>
         </a>
         <div class="auth-copy">
           <h1 class="display" id="auth-title">Ship the world you made.</h1>
@@ -705,6 +705,11 @@ const pageBody = `
               <div class="field">
                 <label for="organization-name">Organization name</label>
                 <input id="organization-name" name="name" maxlength="80" autocomplete="organization" placeholder="Studio name" required>
+              </div>
+              <div class="field">
+                <label for="organization-slug">Studio slug</label>
+                <input id="organization-slug" name="slug" minlength="3" maxlength="48" pattern="[a-z0-9-]{3,48}" placeholder="studio-name" required>
+                <p class="field-help">Public path prefix. 3–48 lowercase letters, numbers, and hyphens.</p>
               </div>
               <div class="notice" id="organization-notice" role="status" aria-live="polite" hidden></div>
               <div class="form-actions">
@@ -987,9 +992,21 @@ const creatorScript = String.raw`
       }
     }
 
+    function organizationRecord(id) {
+      return state.organizations.find((item) => item && item.id === id) || {};
+    }
+
     function organizationName(id) {
-      const organization = state.organizations.find((item) => item && item.id === id);
-      return text(organization && organization.name, "Organization");
+      return text(organizationRecord(id).name, "Organization");
+    }
+
+    function playPathForProject(project) {
+      const orgSlug = text(organizationRecord(project && project.organizationId).slug, "");
+      const gameSlug = text(project && project.slug, "");
+      if (orgSlug && gameSlug) {
+        return "/play/" + encodeURIComponent(orgSlug) + "/" + encodeURIComponent(gameSlug);
+      }
+      return "/play/" + encodeURIComponent(text(project && project.id, ""));
     }
 
     function createProjectCard(project) {
@@ -1009,7 +1026,7 @@ const creatorScript = String.raw`
       }));
       titleGroup.appendChild(element("p", {
         className: "project-slug",
-        text: "/" + text(project && project.slug, "project")
+        text: playPathForProject(project)
       }));
       const pill = element("span", {
         className: "pill",
@@ -1045,7 +1062,7 @@ const creatorScript = String.raw`
       }
       if (playableStates.has(project && project.state) && project && project.activeDeploymentId) {
         const link = element("a", { className: "button button-quiet", text: "Open playable release" });
-        link.href = "/play/" + encodeURIComponent(projectId);
+        link.href = playPathForProject(project);
         link.target = "_blank";
         link.rel = "noopener";
         actions.appendChild(link);
@@ -1219,10 +1236,7 @@ const creatorScript = String.raw`
       );
       if (supplied) return supplied;
       if (!project || !project.activeDeploymentId || !playableStates.has(project.state)) return "";
-      return new URL(
-        "/play/" + encodeURIComponent(text(project.id, "")),
-        window.location.origin
-      ).toString();
+      return new URL(playPathForProject(project), window.location.origin).toString();
     }
 
     function configuredPackageVersion() {
@@ -1231,23 +1245,27 @@ const creatorScript = String.raw`
           productConfig.lokiplayVersion ||
           productConfig.packageVersion
         ),
-        "0.3.8"
+        "0.4.0"
       );
     }
 
     function configuredCliVersion() {
-      return text(productConfig && productConfig.cliVersion, "0.3.8");
+      return text(productConfig && productConfig.cliVersion, "0.4.0");
     }
 
     function agentPrompt(project) {
       const projectId = text(project && project.id, "");
       const projectName = text(project && project.name, "Untitled project");
       const projectSlug = text(project && project.slug, "project");
+      const organizationSlug = text(
+        organizationRecord(project && project.organizationId).slug,
+        ""
+      );
       const version = configuredPackageVersion();
       const cliVersion = configuredCliVersion();
       const apiUrl = String(productConfig.apiOrigin || "").replace(/\/+$/, "");
       const playerUrl = new URL(
-        "/play/" + encodeURIComponent(projectId),
+        playPathForProject(project),
         window.location.origin
       ).toString();
 
@@ -1256,7 +1274,8 @@ const creatorScript = String.raw`
         "",
         "Project",
         "- Name: " + projectName,
-        "- Slug: " + projectSlug,
+        "- Studio slug: " + (organizationSlug || "Unavailable"),
+        "- Game slug: " + projectSlug,
         "- Project ID: " + projectId,
         "- Loki package version: " + version,
         "- Loki CLI version: " + cliVersion,
@@ -1293,13 +1312,13 @@ const creatorScript = String.raw`
         "Host-authoritative requirements",
         "- Loki owns identity, project and tenant boundaries, room membership, matchmaking, event sequencing, snapshots, and host migration.",
         "- Never trust, replace, or override the projectId, player identity, membership, host assignment, sequence, or snapshots returned by Loki.",
-        "- Create rooms with createRoom() and join with joinRoom({ inviteCode }). Do not invent Loki room keys or pass player-typed codes to createRoom.",
+        "- Create rooms with createRoom() and join with joinRoom({ inviteCode }). Do not invent Loki room keys or pass player-typed codes to createRoom. create() stays invite-only unless the game explicitly passes { visibility: \"public\" }. Do not make every room public. Confirm for each mode whether entry is private invites, public room browsing (listPublicRooms + joinPublic), automatic matchmaking, or a combination. Loki's SDK does not add a public lobby screen. If public-room discovery is enabled, the game agent must build the room browser and all loading, empty, joining, full-room, waiting, readiness, and error states. The Loki overlay does not list, create, or join public rooms.",
         "- Installing the SDK does not add a create/join screen. If the game has no usable room-entry flow, add one before shipping: a minimal lobby (create room, join with invite, copy invite, start when ready) or an automatic flow (plain URL creates a room; invite or deep-link URL joins it). The Loki overlay shows room status, players, invite copy, and chat only; it does not create or join rooms. Players still need loading, waiting, and error states.",
         "- Before configuring Loki multiplayer, inspect the game's source, existing UI, configuration, documentation, tests, and finished build. Locate its game modes, seats, local-player handling, AI opponents, teams, start conditions, turn or update loop, win conditions, reconnect behavior, and existing networking code.",
         "- Do not infer multiplayer requirements from the game's name, genre, appearance, or common rules. A chess, pool, racing, or strategy game may support different player and team arrangements.",
         "- Determine requirements separately for every supported game mode. Do not collapse multiple modes into one profile.",
         "- Record evidence for each conclusion and distinguish observed facts from creator decisions. If any material field is ambiguous, stop and ask the creator. Never silently choose a player count, team arrangement, simulation model, authority model, update frequency, persistence policy, or matchmaking flow.",
-        "- Determine and confirm for each mode: minimum, recommended, and maximum players; number of teams, team size, and whether players share control; private invite, lobby, matchmaking, or asynchronous entry; whether late joining and spectators are allowed; turn-based, event-driven, continuous realtime, or hybrid simulation; sequential or simultaneous input; required authoritative update frequency and latency sensitivity; session duration and persistence requirements; host-authoritative trust tolerance or server-authority requirement.",
+        "- Determine and confirm for each mode: minimum, recommended, and maximum players; number of teams, team size, and whether players share control; private invite, public room browsing, automatic matchmaking, a combination, or asynchronous entry; whether late joining and spectators are allowed; turn-based, event-driven, continuous realtime, or hybrid simulation; sequential or simultaneous input; required authoritative update frequency and latency sensitivity; session duration and persistence requirements; host-authoritative trust tolerance or server-authority requirement.",
         "- Classify simulation from how authoritative state progresses, not from visual animation. A game animated at 60 FPS may still be turn-based or event-driven.",
         "- Preserve existing game modes and rules. Add online settings and entry UI from the confirmed profile, including mode selection, team or seat selection, readiness, player limits, invite and join behavior, waiting states, and start conditions.",
         "- Do not invent new game.json fields. Current manifests accept only enabled, authority, maxPlayers, and tickRate. Report the richer profile in the final report: values, supporting evidence, and creator-confirmed decisions.",
@@ -1665,19 +1684,31 @@ const creatorScript = String.raw`
       }
     });
 
+    let organizationSlugEdited = false;
+    byId("organization-slug").addEventListener("input", () => {
+      organizationSlugEdited = byId("organization-slug").value.length > 0;
+    });
+    byId("organization-name").addEventListener("input", (event) => {
+      if (!organizationSlugEdited) {
+        byId("organization-slug").value = slugify(event.currentTarget.value);
+      }
+    });
+
     byId("organization-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
       const notice = byId("organization-notice");
       const name = byId("organization-name").value.trim();
+      const slug = byId("organization-slug").value.trim();
       setFormBusy(form, true);
       showNotice(notice, "Creating organization…", "");
       try {
         await api("/v1/organizations", {
           method: "POST",
-          body: JSON.stringify({ name })
+          body: JSON.stringify({ name, slug })
         });
         form.reset();
+        organizationSlugEdited = false;
         await loadOverview({ quiet: true });
       } catch (error) {
         showNotice(notice, error instanceof Error ? error.message : "Could not create organization.", "error");

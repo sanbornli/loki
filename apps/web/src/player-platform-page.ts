@@ -159,10 +159,10 @@ const body = `
       <h2 id="entry-title">Enter a play link or project ID</h2>
       <p>Paste the link shared by the creator. Loki will take you directly to the hosted build.</p>
       <form id="play-entry-form" novalidate>
-        <label for="play-entry">Play link or project ID</label>
+        <label for="play-entry">Play link, studio/game, or project ID</label>
         <div class="entry-row">
           <input id="play-entry" name="project" type="text" autocomplete="off"
-            spellcheck="false" placeholder="https://…/play/project-id" required>
+            spellcheck="false" placeholder="https://…/play/studio/game-slug" required>
           <button class="button button-primary" type="submit">Open game</button>
         </div>
         <p class="field-error" id="play-entry-error" role="alert"></p>
@@ -249,9 +249,10 @@ const script = `
     const metadata = asRecord(record.metadata);
     const organization = asRecord(record.organization);
     const id = projectId(record);
+    const href = playHref(record);
     const link = document.createElement("a");
     link.className = "game-card game-card-link";
-    link.href = "/play/" + encodeURIComponent(id);
+    link.href = href || "/play/" + encodeURIComponent(id);
     link.dataset.projectId = id;
 
     const top = document.createElement("div");
@@ -280,7 +281,7 @@ const script = `
   function readRecent() {
     try {
       const value = JSON.parse(localStorage.getItem(recentKey) || "[]");
-      return Array.isArray(value) ? value.filter((item) => projectId(item)).slice(0, 6) : [];
+      return Array.isArray(value) ? value.filter((item) => playHref(item)).slice(0, 6) : [];
     } catch {
       return [];
     }
@@ -291,14 +292,21 @@ const script = `
     const project = projectRecord(record);
     const metadata = asRecord(record.metadata);
     const id = projectId(record);
-    if (!id) return;
+    const organization = asRecord(record.organization);
+    const href = playHref(record);
+    if (!href) return;
     const stored = {
       projectId: id,
+      slug: text(project.slug, ""),
+      organization: {
+        slug: text(organization.slug, ""),
+        name: text(organization.name, "")
+      },
       name: text(project.name, text(metadata.name, "Untitled game")),
       description: text(record.description, "Opened from a direct Loki play link."),
       openedAt: new Date().toISOString()
     };
-    const next = [stored, ...readRecent().filter((entry) => projectId(entry) !== id)].slice(0, 6);
+    const next = [stored, ...readRecent().filter((entry) => playHref(entry) !== href)].slice(0, 6);
     try { localStorage.setItem(recentKey, JSON.stringify(next)); } catch {}
   }
 
@@ -314,28 +322,65 @@ const script = `
     clearRecent.hidden = false;
   }
 
-  function idFromEntry(value) {
+  function playHref(item) {
+    const record = asRecord(item);
+    const project = projectRecord(record);
+    const organization = asRecord(record.organization);
+    const orgSlug = text(organization.slug, text(record.organizationSlug, ""));
+    const gameSlug = text(project.slug, "");
+    if (orgSlug && gameSlug) {
+      return "/play/" + encodeURIComponent(orgSlug) + "/" + encodeURIComponent(gameSlug);
+    }
+    const id = projectId(record);
+    return id ? "/play/" + encodeURIComponent(id) : "";
+  }
+
+  function pathFromEntry(value) {
     const trimmed = value.trim();
     if (!trimmed) return "";
     try {
       const url = new URL(trimmed, window.location.origin);
-      const match = url.pathname.match(/^\\/play\\/([^/?#]+)\\/?$/);
-      if (match) return decodeURIComponent(match[1]);
+      const match = url.pathname.match(/^\\/play\\/([^/?#]+)(?:\\/([^/?#]+))?\\/?$/);
+      if (match) {
+        const first = decodeURIComponent(match[1]);
+        const second = match[2] ? decodeURIComponent(match[2]) : "";
+        return second
+          ? "/play/" + encodeURIComponent(first) + "/" + encodeURIComponent(second)
+          : "/play/" + encodeURIComponent(first);
+      }
     } catch {}
-    return /^[A-Za-z0-9_-]{3,128}$/.test(trimmed) ? trimmed : "";
+    const parts = trimmed.split("/").filter(Boolean);
+    if (
+      parts.length === 2 &&
+      /^[a-z0-9-]{3,48}$/i.test(parts[0]) &&
+      /^[a-z0-9-]{3,48}$/i.test(parts[1])
+    ) {
+      return "/play/" + encodeURIComponent(parts[0].toLowerCase()) + "/" + encodeURIComponent(parts[1].toLowerCase());
+    }
+    return /^[A-Za-z0-9_-]{3,128}$/.test(trimmed) ? "/play/" + encodeURIComponent(trimmed) : "";
   }
 
   entryForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    const id = idFromEntry(entryInput.value);
-    if (!id) {
-      entryError.textContent = "Enter a valid Loki play link or project ID.";
+    const path = pathFromEntry(entryInput.value);
+    if (!path) {
+      entryError.textContent = "Enter a valid Loki play link, studio/game, or project ID.";
       entryInput.focus();
       return;
     }
     entryError.textContent = "";
-    rememberGame({ projectId: id, name: "Private or public game" });
-    window.location.assign("/play/" + encodeURIComponent(id));
+    const slugs = path.match(/^\\/play\\/([^/]+)\\/([^/]+)$/);
+    rememberGame(slugs
+      ? {
+          slug: decodeURIComponent(slugs[2]),
+          organization: { slug: decodeURIComponent(slugs[1]) },
+          name: "Private or public game"
+        }
+      : {
+          projectId: decodeURIComponent(path.replace(/^\\/play\\//, "")),
+          name: "Private or public game"
+        });
+    window.location.assign(path);
   });
 
   clearRecent.addEventListener("click", () => {

@@ -1,5 +1,9 @@
 import {
   ClientEnvelopeSchema,
+  CreateRoomOptionsSchema,
+  JoinPublicRoomInputSchema,
+  ListPublicRoomsInputSchema,
+  ListPublicRoomsResultSchema,
   RealtimeClientEnvelopeSchema,
   RealtimeServerEnvelopeSchema,
   ServerEnvelopeSchema,
@@ -9,6 +13,10 @@ import {
   dequantize,
   quantize,
   type ClientEnvelope,
+  type CreateRoomOptions,
+  type JoinPublicRoomInput,
+  type ListPublicRoomsInput,
+  type ListPublicRoomsResult,
   type RealtimeClientEnvelope,
   type RealtimeDelivery,
   type RealtimeServerEnvelope,
@@ -112,6 +120,13 @@ export {
   RECONNECT_MAX_DELAY_MS,
 } from "./reconnect.js";
 export type { LifecycleCause, LifecycleState, PageLifecycle } from "./reconnect.js";
+export type {
+  CreateRoomOptions,
+  JoinPublicRoomInput,
+  ListPublicRoomsInput,
+  ListPublicRoomsResult,
+  PublicRoomSummary,
+} from "../../protocol/src/index.js";
 
 export const LOKI_API_ORIGIN = "https://api.lokiplay.cc";
 
@@ -227,10 +242,23 @@ const requireInviteCode = (value: string): string => {
 
 export interface LokiTransport {
   authenticate(token: string): Promise<{ playerId: string }>;
-  createRoom(input: { projectId: string; realtimeCapable?: boolean }): Promise<JoinedRoom>;
+  createRoom(input: {
+    projectId: string;
+    realtimeCapable?: boolean;
+    visibility?: CreateRoomOptions["visibility"];
+    modeLabel?: string;
+  }): Promise<JoinedRoom>;
   joinRoom(input: {
     projectId: string;
     inviteCode: string;
+    realtimeCapable?: boolean;
+  }): Promise<JoinedRoom>;
+  listPublicRooms?(
+    input?: ListPublicRoomsInput & { projectId: string },
+  ): Promise<ListPublicRoomsResult>;
+  joinPublicRoom?(input: {
+    projectId: string;
+    roomId: string;
     realtimeCapable?: boolean;
   }): Promise<JoinedRoom>;
   send(message: ClientEnvelope): Promise<void>;
@@ -332,8 +360,9 @@ export class LokiClient {
         sendActionRejection: (actionId, outcome, message, extras) =>
           this.sendActionRejection(actionId, outcome, message, extras),
         requestSnapshot: () => this.requestSnapshot(),
-        createRoom: () => this.createRoom(),
+        createRoom: (input) => this.createRoom(input),
         joinRoom: (input) => this.joinRoom(input),
+        joinPublicRoom: (input) => this.joinPublicRoom(input),
         leaveRoom: (roomId) => this.leaveRoom(roomId),
         reconnect: () => this.reconnect(),
         onMessage: (listener) => this.onMessage(listener),
@@ -350,8 +379,9 @@ export class LokiClient {
     return new RealtimeRoom(
       {
         playerId: () => this.#playerId,
-        createRoom: () => this.createRoom({ realtimeCapable: true }),
+        createRoom: (input) => this.createRoom({ ...input, realtimeCapable: true }),
         joinRoom: (input) => this.joinRoom(input, { realtimeCapable: true }),
+        joinPublicRoom: (input) => this.joinPublicRoom(input, { realtimeCapable: true }),
         leaveRoom: (roomId) => this.leaveRoom(roomId),
         reconnect: () => this.reconnect(),
         sendRealtimeInput: (payload, extras) => this.sendRealtimeInput(payload, extras),
@@ -379,12 +409,56 @@ export class LokiClient {
     return session;
   }
 
-  async createRoom(options?: { realtimeCapable?: boolean }): Promise<JoinedRoom> {
+  async createRoom(
+    options?: { realtimeCapable?: boolean } & CreateRoomOptions,
+  ): Promise<JoinedRoom> {
     if (!this.#playerId) throw new Error("authenticate before creating a room");
+    const created = CreateRoomOptionsSchema.parse({
+      visibility: options?.visibility,
+      modeLabel: options?.modeLabel,
+    });
     return this.#serialize(() =>
       this.#enterRoom(() =>
         this.#transport.createRoom({
           projectId: this.#projectId,
+          realtimeCapable: options?.realtimeCapable,
+          visibility: created.visibility,
+          modeLabel: created.modeLabel,
+        }),
+      ),
+    );
+  }
+
+  async listPublicRooms(input: { limit?: number } = {}): Promise<ListPublicRoomsResult> {
+    if (!this.#playerId) throw new Error("authenticate before listing public rooms");
+    if (!this.#transport.listPublicRooms) {
+      throw new Error("runtime does not advertise public_room_browser");
+    }
+    const parsed = ListPublicRoomsInputSchema.parse({
+      limit: input.limit ?? 50,
+    });
+    return ListPublicRoomsResultSchema.parse(
+      await this.#transport.listPublicRooms({
+        ...parsed,
+        projectId: this.#projectId,
+      }),
+    );
+  }
+
+  async joinPublicRoom(
+    input: JoinPublicRoomInput,
+    options?: { realtimeCapable?: boolean },
+  ): Promise<JoinedRoom> {
+    if (!this.#playerId) throw new Error("authenticate before joining a room");
+    if (!this.#transport.joinPublicRoom) {
+      throw new Error("runtime does not advertise public_room_browser");
+    }
+    const parsed = JoinPublicRoomInputSchema.parse(input);
+    return this.#serialize(() =>
+      this.#enterRoom(() =>
+        this.#transport.joinPublicRoom!({
+          projectId: this.#projectId,
+          roomId: parsed.roomId,
           realtimeCapable: options?.realtimeCapable,
         }),
       ),
@@ -901,7 +975,12 @@ export class FirstPartyTransport implements LokiTransport {
     return { playerId: checked.playerId };
   }
 
-  async createRoom(input: { projectId: string; realtimeCapable?: boolean }): Promise<JoinedRoom> {
+  async createRoom(input: {
+    projectId: string;
+    realtimeCapable?: boolean;
+    visibility?: CreateRoomOptions["visibility"];
+    modeLabel?: string;
+  }): Promise<JoinedRoom> {
     const session = this.#requireSession();
     const socket = await this.#connectSocket();
     const created = payload<{
@@ -909,7 +988,12 @@ export class FirstPartyTransport implements LokiTransport {
       inviteCode: string;
       roomKey: string;
     }>(
-      await wrapLokiCall(() => this.#client.rpc(session, "loki_create_room", {})),
+      await wrapLokiCall(() =>
+        this.#client.rpc(session, "loki_create_room", {
+          visibility: input.visibility,
+          modeLabel: input.modeLabel,
+        }),
+      ),
     );
     if (!created.matchId || !created.inviteCode) {
       throw new Error("Loki did not return a room invite");
@@ -921,6 +1005,7 @@ export class FirstPartyTransport implements LokiTransport {
     );
     try {
       const snapshot = await this.#snapshot(created.matchId);
+      if (input.visibility === "public") this.#requirePublicRoomBrowser(snapshot);
       this.#roomId = created.matchId;
       this.#foreground.notify();
       this.#roomKey = created.roomKey;
@@ -974,6 +1059,61 @@ export class FirstPartyTransport implements LokiTransport {
       await socket.leaveMatch(joined.matchId).catch(() => undefined);
       if (this.#roomId === joined.matchId) this.#roomId = undefined;
       throw error;
+    }
+  }
+
+  async listPublicRooms(input: { limit?: number } = {}): Promise<ListPublicRoomsResult> {
+    const parsed = ListPublicRoomsInputSchema.parse({
+      limit: input.limit ?? 50,
+    });
+    return ListPublicRoomsResultSchema.parse(
+      payload<ListPublicRoomsResult>(
+        await wrapLokiCall(() =>
+          this.#client.rpc(this.#requireSession(), "loki_list_public_rooms", parsed),
+        ),
+      ),
+    );
+  }
+
+  async joinPublicRoom(input: {
+    projectId: string;
+    roomId: string;
+    realtimeCapable?: boolean;
+  }): Promise<JoinedRoom> {
+    const session = this.#requireSession();
+    const socket = await this.#connectSocket();
+    const parsed = JoinPublicRoomInputSchema.parse({ roomId: input.roomId });
+    const joined = payload<{ matchId: string }>(
+      await wrapLokiCall(() =>
+        this.#client.rpc(session, "loki_join_public_room", parsed),
+      ),
+    );
+    if (!joined.matchId) throw new Error("Loki did not return a room");
+    await socket.joinMatch(
+      joined.matchId,
+      undefined,
+      input.realtimeCapable ? { realtimeCapable: "true" } : undefined,
+    );
+    try {
+      const snapshot = await this.#snapshot(joined.matchId);
+      this.#requirePublicRoomBrowser(snapshot);
+      this.#foreground.notify();
+      this.#roomId = joined.matchId;
+      return {
+        roomId: joined.matchId,
+        inviteCode: "",
+        snapshot,
+      };
+    } catch (error) {
+      await socket.leaveMatch(joined.matchId).catch(() => undefined);
+      if (this.#roomId === joined.matchId) this.#roomId = undefined;
+      throw error;
+    }
+  }
+
+  #requirePublicRoomBrowser(snapshot: ServerEnvelope): void {
+    if (snapshot.type !== "snapshot" || snapshot.capabilities?.public_room_browser !== true) {
+      throw new Error("runtime does not advertise public_room_browser");
     }
   }
 

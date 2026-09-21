@@ -364,8 +364,9 @@ export type RealtimeRoomOptions<State, Input> = {
 
 export interface RealtimeRoomHost {
   playerId(): string | undefined;
-  createRoom(): Promise<JoinedRoom>;
+  createRoom(input?: { visibility?: "public" | "private" | "unlisted"; modeLabel?: string }): Promise<JoinedRoom>;
   joinRoom(input: { inviteCode: string }): Promise<JoinedRoom>;
+  joinPublicRoom?(input: { roomId: string }): Promise<JoinedRoom>;
   leaveRoom(roomId?: string): Promise<void>;
   reconnect(): Promise<void>;
   sendRealtimeInput(
@@ -797,12 +798,25 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     return () => this.#listeners.delete(listener);
   }
 
-  async create(): Promise<RealtimeRoomSnapshot<State>> {
-    return this.#enter(() => this.#host.createRoom());
+  async create(
+    input?: { visibility?: "public" | "private" | "unlisted"; modeLabel?: string },
+  ): Promise<RealtimeRoomSnapshot<State>> {
+    return this.#enter(() => this.#host.createRoom(input), {
+      requirePublicRoomBrowser: input?.visibility === "public",
+    });
   }
 
   async join(input: { inviteCode: string }): Promise<RealtimeRoomSnapshot<State>> {
     return this.#enter(() => this.#host.joinRoom(input));
+  }
+
+  async joinPublic(input: { roomId: string }): Promise<RealtimeRoomSnapshot<State>> {
+    if (!this.#host.joinPublicRoom) {
+      throw new RealtimeRoomError("unsupported", "runtime does not advertise public_room_browser");
+    }
+    return this.#enter(() => this.#host.joinPublicRoom!(input), {
+      requirePublicRoomBrowser: true,
+    });
   }
 
   async leave(): Promise<void> {
@@ -1408,7 +1422,10 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
 
   // --- internals -----------------------------------------------------
 
-  async #enter(join: () => Promise<JoinedRoom>): Promise<RealtimeRoomSnapshot<State>> {
+  async #enter(
+    join: () => Promise<JoinedRoom>,
+    options: { requirePublicRoomBrowser?: boolean } = {},
+  ): Promise<RealtimeRoomSnapshot<State>> {
     const generation = ++this.#generation;
     this.#setConnection("joining");
     let joinedRoomId = "";
@@ -1421,7 +1438,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         await this.#host.leaveRoom(joined.roomId).catch(() => undefined);
         throw new RealtimeRoomError("rejected", "join superseded");
       }
-      this.#requireCapabilities(joined.snapshot);
+      this.#requireCapabilities(joined.snapshot, options.requirePublicRoomBrowser === true);
       this.#roomId = joined.roomId;
       this.#inviteCode = joined.inviteCode;
       this.#applyV1Snapshot(joined.snapshot);
@@ -2259,11 +2276,14 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     );
   }
 
-  #requireCapabilities(message: ServerEnvelope): void {
+  #requireCapabilities(message: ServerEnvelope, requirePublicRoomBrowser = false): void {
     if (message.type !== "snapshot") return;
     const capabilities = message.capabilities;
     if (!capabilities || capabilities.realtime_rooms !== true) {
       throw new RealtimeRoomError("unsupported", "runtime does not advertise realtime_rooms");
+    }
+    if (requirePublicRoomBrowser && capabilities.public_room_browser !== true) {
+      throw new RealtimeRoomError("unsupported", "runtime does not advertise public_room_browser");
     }
     if (
       capabilities.realtimeProtocolVersion !== undefined &&

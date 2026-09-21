@@ -28,7 +28,7 @@
       "required": ["roomKey", "visibility", "maxPlayers", "tickRate"],
       "properties": {
         "roomKey": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
-        "visibility": { "enum": ["private", "unlisted", "matchmaking"] },
+        "visibility": { "enum": ["private", "unlisted", "matchmaking", "public"] },
         "maxPlayers": { "type": "integer", "minimum": 1, "maximum": 16 },
         "teamSize": { "type": "integer", "minimum": 1, "maximum": 16 },
         "tickRate": { "type": "integer", "minimum": 1, "maximum": 30 }
@@ -55,7 +55,8 @@
         "chat",
         "private_leaderboards",
         "synchronized_rooms",
-        "realtime_rooms"
+        "realtime_rooms",
+        "public_room_browser"
       ]
     },
     "actionId": {
@@ -73,6 +74,7 @@
       "properties": {
         "synchronized_rooms": { "type": "boolean" },
         "realtime_rooms": { "type": "boolean" },
+        "public_room_browser": { "type": "boolean" },
         "realtimeProtocolVersion": { "type": "integer", "minimum": 1 },
         "minimumProtocolVersion": { "type": "integer", "minimum": 1 },
         "limits": {

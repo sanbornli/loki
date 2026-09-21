@@ -9,6 +9,12 @@ import {
   type PlayerSessionClaims,
   type ProjectState,
 } from "../../../packages/protocol/src/index.js";
+import {
+  allocateUniqueSlug,
+  playablePath,
+  validateOrganizationSlug,
+  validateProjectSlug,
+} from "./slugs.js";
 import { SessionTokenService } from "./tokens.js";
 
 export interface Account {
@@ -21,6 +27,7 @@ export interface Account {
 export interface Organization {
   id: string;
   name: string;
+  slug: string;
   createdAt: string;
 }
 
@@ -49,7 +56,10 @@ export type Awaitable<T> = T | Promise<T>;
 
 export interface PlatformOperations {
   readonly tokens: SessionTokenService;
-  createOrganization(actorId: string, name: string): Awaitable<Organization>;
+  createOrganization(
+    actorId: string,
+    input: { name: string; slug: string },
+  ): Awaitable<Organization>;
   createProject(
     actorId: string,
     organizationId: string,
@@ -85,6 +95,11 @@ export interface PlatformOperations {
   playableProject(
     projectId: string,
   ): Awaitable<Pick<Project, "id" | "name" | "slug" | "state" | "activeDeploymentId">>;
+  playableProjectBySlugs(
+    organizationSlug: string,
+    projectSlug: string,
+  ): Awaitable<Pick<Project, "id" | "name" | "slug" | "state" | "activeDeploymentId">>;
+  projectPlayPath(projectId: string): Awaitable<string>;
   auditLog(actorId: string, organizationId: string): Awaitable<AuditRecord[]>;
 }
 
@@ -119,18 +134,28 @@ export class PlatformService {
 
   constructor(readonly tokens = new SessionTokenService()) {}
 
-  createOrganization(actorId: string, name: string): Organization {
+  createOrganization(
+    actorId: string,
+    input: { name: string; slug: string },
+  ): Organization {
     this.#requireAccount(actorId);
+    const name = input.name.trim();
+    if (!name) throw new Error("organization name required");
+    const slug = validateOrganizationSlug(input.slug);
+    if ([...this.#organizations.values()].some((organization) => organization.slug === slug)) {
+      throw new Error("slug already exists");
+    }
     const organization: Organization = {
       id: randomUUID(),
-      name: name.trim(),
+      name,
+      slug,
       createdAt: new Date().toISOString(),
     };
-    if (!organization.name) throw new Error("organization name required");
     this.#organizations.set(organization.id, organization);
     this.#members.set(organization.id, new Map([[actorId, "owner"]]));
     this.#record(actorId, organization.id, undefined, "organization.created", {
       name: organization.name,
+      slug: organization.slug,
     });
     return structuredClone(organization);
   }
@@ -153,12 +178,16 @@ export class PlatformService {
       platformRole: "creator",
       createdAt: now,
     };
+    const name = organizationName.trim();
+    if (!name) throw new Error("organization name required");
     const organization: Organization = {
       id: randomUUID(),
-      name: organizationName.trim(),
+      name,
+      slug: allocateUniqueSlug(name, (slug) =>
+        [...this.#organizations.values()].some((item) => item.slug === slug),
+      ),
       createdAt: now,
     };
-    if (!organization.name) throw new Error("organization name required");
     this.#accounts.set(account.id, account);
     this.#organizations.set(organization.id, organization);
     this.#members.set(organization.id, new Map([[account.id, "owner"]]));
@@ -174,7 +203,7 @@ export class PlatformService {
     input: { name: string; slug: string },
   ): Project {
     this.#requireMember(actorId, organizationId);
-    if (!/^[a-z0-9-]{3,48}$/.test(input.slug)) throw new Error("invalid slug");
+    validateProjectSlug(input.slug);
     if (
       [...this.#projects.values()].some(
         (project) =>
@@ -342,6 +371,31 @@ export class PlatformService {
       state: project.state,
       activeDeploymentId: project.activeDeploymentId,
     };
+  }
+
+  playableProjectBySlugs(
+    organizationSlug: string,
+    projectSlug: string,
+  ): Pick<Project, "id" | "name" | "slug" | "state" | "activeDeploymentId"> {
+    const organization = [...this.#organizations.values()].find(
+      (item) => item.slug === organizationSlug.toLowerCase(),
+    );
+    const project = organization
+      ? [...this.#projects.values()].find(
+          (item) =>
+            item.organizationId === organization.id &&
+            item.slug === projectSlug.toLowerCase(),
+        )
+      : undefined;
+    if (!project) throw new Error("project is not playable");
+    return this.playableProject(project.id);
+  }
+
+  projectPlayPath(projectId: string): string {
+    const project = this.#requireProject(projectId);
+    const organization = this.#organizations.get(project.organizationId);
+    if (!organization) throw new Error("organization not found");
+    return playablePath(organization.slug, project.slug);
   }
 
   auditLog(actorId: string, organizationId: string): AuditRecord[] {

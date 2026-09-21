@@ -1178,3 +1178,35 @@ test("clamped extrapolation also increments heldAuthoritativeFrames", async () =
   await hostRoom.leave().catch(() => undefined);
   await guestRoom.leave().catch(() => undefined);
 });
+
+test("public join works for realtime rooms and keeps invite join", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const { client: invitedClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({});
+  const created = await hostRoom.create({ visibility: "public", modeLabel: "race" });
+  const listed = await guestClient.listPublicRooms();
+  assert.equal(listed.rooms.length, 1);
+  assert.equal(listed.rooms[0]?.roomId, created.roomId);
+  assert.equal(listed.rooms[0]?.modeLabel, "race");
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({});
+  await guestRoom.joinPublic({ roomId: created.roomId });
+  assert.equal(guestRoom.getSnapshot().connection, "connected");
+  const invitedRoom = invitedClient.createRealtimeRoom<RacerState, RacerInput>({});
+  await invitedRoom.join({ inviteCode: created.inviteCode });
+  hostRoom.publishSnapshot({ positions: { host: 1 } }, { simulationTick: 1 });
+  await sleep(20);
+  assert.equal(guestRoom.getSnapshot().state?.positions.host, 1);
+  await hostRoom.leave();
+  await sleep(5);
+  assert.equal(guestRoom.getSnapshot().hostId, guestClient.playerId);
+});
+
+test("realtime public rooms fail without public_room_browser", async () => {
+  const bus = new RealtimeBus();
+  bus.publicRoomBrowser = false;
+  const { client } = await connectedClient(bus);
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({});
+  await assert.rejects(room.create({ visibility: "public" }), /public_room_browser/);
+});

@@ -87,6 +87,7 @@ async function createUser(
   suffix: string,
   projectId: string,
   runId: string,
+  config: TenantConfig = {},
 ): Promise<TestUser> {
   const session = await client.authenticateCustom(
     `loki-phase-zero-${runId}-${suffix}`,
@@ -102,6 +103,7 @@ async function createUser(
     teamSize: 0,
     inviteTtlSeconds: 900,
     concurrentRoomQuota: 20,
+    ...config,
   });
   const socket = client.createSocket(SSL, false);
   const user: TestUser = {
@@ -1345,4 +1347,151 @@ test("live Nakama routes protocol-v2 realtime input/snapshots with authority and
   const migratedSnapshot = await newHostSnapshot;
   assert.equal(migratedSnapshot.hostId, guest.session.user_id);
   assert.equal(migratedSnapshot.authorityEpoch, 1);
+});
+
+test("live Nakama lists public rooms without leaking private or cross-project rooms", async (t) => {
+  await waitForNakama();
+  const runId = `pub-${Date.now().toString(36)}`;
+  const projectA = `pub-a-${runId}`;
+  const projectB = `pub-b-${runId}`;
+  const users = await Promise.all([
+    createUser("a1", projectA, runId, { maxPlayers: 2 }),
+    createUser("a2", projectA, runId, { maxPlayers: 2 }),
+    createUser("a3", projectA, runId, { maxPlayers: 2 }),
+    createUser("a4", projectA, runId, { maxPlayers: 2 }),
+    createUser("b1", projectB, runId, { maxPlayers: 2 }),
+  ]);
+  const [host, guest, extra, racer, foreign] = users;
+  t.after(() => users.forEach((user) => user.socket.disconnect(false)));
+
+  type PublicList = {
+    rooms: Array<{
+      roomId: string;
+      playerCount: number;
+      maxPlayers: number;
+      joinable: boolean;
+      modeLabel?: string;
+    }>;
+  };
+  const waitForPublicRooms = async (
+    user: TestUser,
+    predicate: (result: PublicList) => boolean,
+  ): Promise<PublicList> => {
+    const deadline = Date.now() + 8_000;
+    let last: PublicList = { rooms: [] };
+    while (Date.now() < deadline) {
+      last = await rpc<PublicList>(user, "loki_list_public_rooms", { limit: 50 });
+      if (predicate(last)) return last;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`public rooms did not match: ${JSON.stringify(last)}`);
+  };
+
+  const publicRoom = await rpc<{
+    matchId: string;
+    visibility: string;
+    inviteCode: string;
+  }>(host, "loki_create_room", { visibility: "public", modeLabel: "casual" });
+  assert.equal(publicRoom.visibility, "public");
+  await host.socket.joinMatch(publicRoom.matchId);
+
+  const listed = await waitForPublicRooms(guest, (result) =>
+    result.rooms.some((room) => sameMatch(room.roomId, publicRoom.matchId)),
+  );
+  const summary = listed.rooms.find((room) =>
+    sameMatch(room.roomId, publicRoom.matchId),
+  )!;
+  assert.equal(summary.playerCount, 1);
+  assert.equal(summary.maxPlayers, 2);
+  assert.equal(summary.joinable, true);
+  assert.equal(summary.modeLabel, "casual");
+  assert.equal("inviteCode" in summary, false);
+
+  const hidden = await Promise.all([
+    rpc<{ matchId: string }>(host, "loki_create_room", { visibility: "private" }),
+    rpc<{ matchId: string }>(host, "loki_create_room", { visibility: "unlisted" }),
+    rpc<{ matchId: string }>(host, "loki_create_room", {}),
+  ]);
+  await Promise.all(hidden.map((room) => host.socket.joinMatch(room.matchId)));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const stillPublic = await rpc<{ rooms: Array<{ roomId: string }> }>(
+    guest,
+    "loki_list_public_rooms",
+    { limit: 50 },
+  );
+  assert.equal(
+    stillPublic.rooms.every((room) =>
+      hidden.every((hiddenRoom) => !sameMatch(room.roomId, hiddenRoom.matchId)),
+    ),
+    true,
+  );
+
+  const foreignList = await rpc<{ rooms: Array<{ roomId: string }> }>(
+    foreign,
+    "loki_list_public_rooms",
+    {},
+  );
+  assert.equal(
+    foreignList.rooms.some((room) => sameMatch(room.roomId, publicRoom.matchId)),
+    false,
+  );
+  await assert.rejects(
+    rpc(foreign, "loki_join_public_room", { roomId: publicRoom.matchId }),
+  );
+
+  const emptyPublic = await rpc<{ matchId: string }>(host, "loki_create_room", {
+    visibility: "public",
+  });
+  await assert.rejects(
+    rpc(guest, "loki_join_public_room", { roomId: emptyPublic.matchId }),
+  );
+  await assert.rejects(rpc(guest, "loki_list_public_rooms", { limit: 0 }));
+  await assert.rejects(rpc(guest, "loki_list_public_rooms", { limit: 51 }));
+
+  const joined = await rpc<{ matchId: string }>(guest, "loki_join_public_room", {
+    roomId: summary.roomId,
+  });
+  assert.ok(sameMatch(joined.matchId, publicRoom.matchId));
+  await guest.socket.joinMatch(joined.matchId);
+  await waitForPublicRooms(
+    extra,
+    (result) =>
+      !result.rooms.some((room) => sameMatch(room.roomId, publicRoom.matchId)),
+  );
+  await assert.rejects(
+    rpc(extra, "loki_join_public_room", { roomId: summary.roomId }),
+  );
+
+  const invited = await rpc<{ matchId: string }>(extra, "loki_join_room", {
+    inviteCode: publicRoom.inviteCode,
+  });
+  assert.ok(sameMatch(invited.matchId, publicRoom.matchId));
+
+  const raceRoom = await rpc<{ matchId: string }>(host, "loki_create_room", {
+    visibility: "public",
+  });
+  await host.socket.joinMatch(raceRoom.matchId);
+  const raceListed = await waitForPublicRooms(guest, (result) =>
+    result.rooms.some((room) => sameMatch(room.roomId, raceRoom.matchId)),
+  );
+  const raceId = raceListed.rooms.find((room) =>
+    sameMatch(room.roomId, raceRoom.matchId),
+  )!.roomId;
+  const [first, second] = await Promise.allSettled([
+    rpc<{ matchId: string }>(guest, "loki_join_public_room", { roomId: raceId }).then(
+      async (resolved) => {
+        await guest.socket.joinMatch(resolved.matchId);
+        return resolved;
+      },
+    ),
+    rpc<{ matchId: string }>(racer, "loki_join_public_room", { roomId: raceId }).then(
+      async (resolved) => {
+        await racer.socket.joinMatch(resolved.matchId);
+        return resolved;
+      },
+    ),
+  ]);
+  const outcomes = [first, second];
+  assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
 });

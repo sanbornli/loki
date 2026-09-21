@@ -51,7 +51,7 @@ export interface PublicCatalogEntry {
     Project,
     "id" | "organizationId" | "name" | "slug" | "state" | "activeDeploymentId"
   >;
-  organization: Pick<Organization, "id" | "name">;
+  organization: Pick<Organization, "id" | "name" | "slug">;
   activeDeployment: DeploymentSummary;
   metadata: GameManifest;
 }
@@ -72,7 +72,7 @@ export interface OperatorOverview {
 }
 
 export interface OperatorProject extends DashboardProject {
-  organization: Pick<Organization, "id" | "name">;
+  organization: Pick<Organization, "id" | "name" | "slug">;
 }
 
 export interface DashboardOperations {
@@ -99,6 +99,7 @@ type AccountRow = {
 type OrganizationRow = {
   id: string;
   name: string;
+  slug: string;
   created_at: Date | string;
 };
 
@@ -177,6 +178,7 @@ const accountFromRow = (row: AccountRow): Account => ({
 const organizationFromRow = (row: OrganizationRow): Organization => ({
   id: row.id,
   name: row.name,
+  slug: row.slug,
   createdAt: iso(row.created_at),
 });
 
@@ -464,13 +466,14 @@ export class DashboardService implements DashboardOperations {
   async operatorProjects(actorId: string): Promise<OperatorProject[]> {
     await requireAdmin(this.pool, actorId);
     const result = await this.pool.query<
-      DashboardProjectRow & { organization_name: string }
+      DashboardProjectRow & { organization_name: string; organization_slug: string }
     >(
-      `${projectDashboardSelect(", organizations.name AS organization_name")}
+      `${projectDashboardSelect(", organizations.name AS organization_name, organizations.slug AS organization_slug")}
         JOIN organizations ON organizations.id = projects.organization_id
-       GROUP BY projects.id, organizations.name, latest.id, latest.project_id,
-                latest.content_hash, latest.manifest, latest.status,
-                latest.security_review_state, latest.security_review_finding_refs,
+       GROUP BY projects.id, organizations.name, organizations.slug, latest.id,
+                latest.project_id, latest.content_hash, latest.manifest,
+                latest.status, latest.security_review_state,
+                latest.security_review_finding_refs,
                 latest.security_review_last_error, latest.created_at
        ORDER BY projects.updated_at DESC, projects.id`,
     );
@@ -479,6 +482,7 @@ export class DashboardService implements DashboardOperations {
       organization: {
         id: row.organization_id,
         name: row.organization_name,
+        slug: row.organization_slug,
       },
     }));
   }

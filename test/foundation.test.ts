@@ -3,9 +3,21 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { PlatformService } from "../apps/api/src/platform.js";
 import {
+  allocateUniqueSlug,
+  playablePath,
+  validateOrganizationSlug,
+} from "../apps/api/src/slugs.js";
+import {
+  CapabilitySchema,
   ClientEnvelopeSchema,
+  CreateRoomOptionsSchema,
+  DEFAULT_RUNTIME_CAPABILITIES,
   GameManifestSchema,
+  JoinPublicRoomInputSchema,
+  ListPublicRoomsInputSchema,
+  ListPublicRoomsResultSchema,
   ProtocolHelloSchema,
+  PublicRoomSummarySchema,
   RealtimeClientEnvelopeSchema,
   RealtimeServerEnvelopeSchema,
   RoomConfigSchema,
@@ -73,6 +85,67 @@ test("protocol validates manifests and canonical state consistently", () => {
     true,
   );
   assert.equal(snapshotMembersAreComplete({ members: [] }), false);
+});
+
+test("protocol accepts public rooms and rejects lobby metadata on game.json", () => {
+  assert.equal(
+    RoomConfigSchema.parse({
+      roomKey: "public-room",
+      visibility: "public",
+      maxPlayers: 8,
+      tickRate: 10,
+    }).visibility,
+    "public",
+  );
+  assert.equal(CapabilitySchema.parse("public_room_browser"), "public_room_browser");
+  assert.equal(DEFAULT_RUNTIME_CAPABILITIES.public_room_browser, true);
+  assert.deepEqual(
+    CreateRoomOptionsSchema.parse({ visibility: "public", modeLabel: "casual" }),
+    { visibility: "public", modeLabel: "casual" },
+  );
+  assert.throws(() =>
+    CreateRoomOptionsSchema.parse({ visibility: "private", modeLabel: "casual" }),
+  );
+  assert.throws(() => CreateRoomOptionsSchema.parse({ visibility: "matchmaking" }));
+  assert.deepEqual(ListPublicRoomsInputSchema.parse({}), { limit: 50 });
+  assert.throws(() => ListPublicRoomsInputSchema.parse({ limit: 0 }));
+  assert.throws(() => ListPublicRoomsInputSchema.parse({ limit: 51 }));
+  assert.throws(() => ListPublicRoomsInputSchema.parse({ projectId: crypto.randomUUID() }));
+  const summary = PublicRoomSummarySchema.parse({
+    roomId: "match-1",
+    playerCount: 2,
+    maxPlayers: 4,
+    joinable: true,
+    modeLabel: "casual",
+  });
+  assert.equal(summary.joinable, true);
+  assert.throws(() =>
+    PublicRoomSummarySchema.parse({
+      roomId: "match-1",
+      playerCount: 2,
+      maxPlayers: 4,
+      joinable: true,
+      inviteCode: "123456",
+    }),
+  );
+  JoinPublicRoomInputSchema.parse({ roomId: "match-1" });
+  ListPublicRoomsResultSchema.parse({ rooms: [summary] });
+  assert.deepEqual(
+    Object.keys(
+      GameManifestSchema.parse({
+        schemaVersion: 1,
+        name: "Counter Party",
+        entrypoint: "index.html",
+        multiplayer: {
+          enabled: true,
+          authority: "host",
+          maxPlayers: 8,
+          tickRate: 10,
+        },
+      }).multiplayer ?? {},
+    ).sort(),
+    ["authority", "enabled", "maxPlayers", "tickRate"],
+  );
 });
 
 test("protocol rejects malformed and unsupported client messages", () => {
@@ -273,5 +346,60 @@ test("accounts, projects, credentials, sessions and audits enforce boundaries", 
       "deployment_credential.issued",
       "deployment_credential.consumed",
     ],
+  );
+});
+
+test("organization slugs are globally unique and form the public play path", () => {
+  const platform = new PlatformService();
+  const alpha = platform.registerCreator("owner@alpha.test", "Alpha Studio");
+  const twin = platform.registerCreator("owner@alpha-two.test", "Alpha Studio");
+  assert.equal(alpha.organization.slug, "alpha-studio");
+  assert.equal(twin.organization.slug, "alpha-studio-2");
+  assert.equal(
+    playablePath(alpha.organization.slug, "counter-party"),
+    "/play/alpha-studio/counter-party",
+  );
+  assert.throws(() => validateOrganizationSlug("play"), /reserved/);
+  assert.equal(
+    allocateUniqueSlug("Play", (slug) => slug === "studio"),
+    "studio-2",
+  );
+
+  const second = platform.createOrganization(alpha.account.id, {
+    name: "Other Desk",
+    slug: "other-desk",
+  });
+  assert.equal(second.slug, "other-desk");
+  assert.throws(
+    () =>
+      platform.createOrganization(alpha.account.id, {
+        name: "Duplicate",
+        slug: "other-desk",
+      }),
+    /slug already exists/,
+  );
+  assert.throws(
+    () =>
+      platform.createOrganization(alpha.account.id, {
+        name: "Reserved",
+        slug: "play",
+      }),
+    /reserved/,
+  );
+
+  const project = platform.createProject(alpha.account.id, alpha.organization.id, {
+    name: "Counter Party",
+    slug: "counter-party",
+  });
+  assert.equal(platform.projectPlayPath(project.id), "/play/alpha-studio/counter-party");
+  platform.transitionProject(alpha.account.id, project.id, "private");
+  platform.setActiveDeployment(alpha.account.id, project.id, crypto.randomUUID());
+  assert.equal(
+    platform.playableProjectBySlugs("alpha-studio", "counter-party").id,
+    project.id,
+  );
+  assert.throws(
+    () => platform.playableProjectBySlugs("missing-studio", "counter-party"),
+    /not playable/,
   );
 });

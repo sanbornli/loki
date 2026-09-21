@@ -22,6 +22,11 @@ import {
 } from "../apps/web/src/player.js";
 import { renderCreatorPage } from "../apps/web/src/creator-page.js";
 import { renderDevicePage } from "../apps/web/src/device-page.js";
+import {
+  docsRoutes,
+  llmsTxt,
+  renderDocsPage,
+} from "../apps/web/src/docs-page.js";
 import { renderMarketingPage } from "../apps/web/src/marketing-page.js";
 import { renderOperatorPage } from "../apps/web/src/operator-page.js";
 import { renderPlayerPlatformPage } from "../apps/web/src/player-platform-page.js";
@@ -270,14 +275,21 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   const player = renderPlayerPlatformPage(config);
   const operator = renderOperatorPage(config);
 
-  assert.match(marketing, /One plugin to let the <span class="hero-keep">world play,<\/span><br>together/);
+  assert.match(marketing, /Gaming Infrastructure for the<br>Agentic Future\./);
   assert.doesNotMatch(marketing, /Its only a game when there are players/);
   assert.match(marketing, /editorial-stack/);
   assert.match(marketing, /workflow-row/);
   assert.match(marketing, /feature-row feature-row-flip workflow-row/);
-  assert.match(marketing, /Launch to the world<br>in minutes/);
+  assert.match(marketing, /ops-wall/);
+  assert.match(marketing, /Agentic Game Ops Wall preview/);
+  assert.match(marketing, /party-flow/);
+  assert.match(marketing, /Prompt-to-party timeline/);
+  assert.match(marketing, /From Game to Party<br>in a Single Prompt\./);
   assert.match(marketing, /Give a finished browser game a host, a room, and a playable URL/);
-  assert.match(marketing, /Built for the Agentic AI Era\./);
+  assert.match(marketing, /Let your Agent handle the rest\./);
+  assert.match(marketing, /Ship your game today\./);
+  assert.match(marketing, /Get started today for free/);
+  assert.doesNotMatch(marketing, /Create free project ↗/);
   assert.match(marketing, /ide-stage/);
   assert.match(marketing, /cursor-screen\.jpg/);
   assert.match(marketing, /cursor-screen-prompt\.jpg/);
@@ -290,7 +302,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(marketing, />Lovable</);
   assert.match(marketing, /game-stage/);
   assert.match(marketing, /feature-stack/);
-  assert.match(marketing, /scene-pipeline/);
+  assert.match(marketing, /scene-phone/);
   assert.match(marketing, /scene-lobby/);
   assert.match(marketing, /scene-catalog/);
   assert.doesNotMatch(marketing, /class="free-plan"/);
@@ -328,6 +340,60 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(renderMarketingPage(config, "/hosting"), /A home for every build/);
   assert.match(renderMarketingPage(config, "/pricing"), /Start free/);
   assert.match(renderMarketingPage(config, "/pricing"), /<p class="price">\$0<\/p>/);
+  const docsHome = renderDocsPage(config);
+  assert.match(docsHome, /href="https:\/\/lokiplay\.cc\/" aria-label="Loki home"/);
+  assert.match(docsHome, /LOKI \/ Docs/);
+  assert.match(docsHome, /Start --> Docs home/);
+  assert.match(docsHome, /You keep the game/);
+  assert.match(docsHome, /href="\/safety"/);
+  assert.doesNotMatch(docsHome, /One plugin\. A playable URL/);
+  assert.doesNotMatch(docsHome, /Install is not the finish/);
+  assert.match(docsHome, /@lokiplay\/sdk(?:@|&#64;)0\.4\.0/);
+  assert.match(docsHome, /<!--email_off-->/);
+  assert.doesNotMatch(docsHome, /@lokiplay\/sdk(?:@|&#64;)0\.3\.5/);
+  assert.match(renderDocsPage(config, "/quickstart"), /createHostedLokiClient/);
+  assert.match(
+    renderDocsPage(config, "/quickstart"),
+    /LOKI_API_URL=https:\/\/api\.lokiplay\.cc npx lokiplay(?:@|&#64;)0\.4\.0 login/,
+  );
+  assert.match(renderDocsPage(config, "/realtime-rooms"), /calibrateRealtimeRoom/);
+  assert.match(renderDocsPage(config, "/rooms"), /listPublicRooms/);
+  assert.match(renderDocsPage(config, "/rooms"), /does not add a public lobby screen/);
+  assert.match(renderDocsPage(config, "/rooms"), /Do not make every room public/);
+  assert.match(renderDocsPage(config, "/agents"), /does not add a public lobby screen/);
+  assert.match(renderDocsPage(config, "/overlay"), /does not list, create, or join public rooms/);
+  assert.match(llmsTxt, /does not add a public lobby screen/);
+  assert.match(renderDocsPage(config, "/agents"), /Do not report the integration complete/);
+  assert.match(renderDocsPage(config, "/native"), /cc\.lokiplay:loki-sdk:0\.4\.0/);
+  assert.match(
+    renderDocsPage(config, "/presence-chat-scores"),
+    /An empty members list is incomplete, not everyone left/,
+  );
+  assert.match(
+    renderDocsPage(config, "/multiplayer"),
+    /Multiplayer --> Choose a room type/,
+  );
+  assert.match(
+    renderDocsPage(config, "/synchronized-rooms"),
+    /Multiplayer --> Synchronized rooms/,
+  );
+  assert.match(
+    renderDocsPage(config, "/sdk"),
+    /Clients --> JavaScript SDK/,
+  );
+  assert.doesNotMatch(
+    renderDocsPage(config, "/multiplayer"),
+    /Choose by state, not genre/,
+  );
+  const safety = renderDocsPage(config, "/safety");
+  assert.match(safety, /Install is not the finish/);
+  assert.match(safety, /Each game still requires fine-tuning after Loki is installed/);
+  assert.match(llmsTxt, /Each title still requires fine-tuning after installation/);
+  for (const route of docsRoutes.filter((route) => route !== "/safety")) {
+    assert.doesNotMatch(renderDocsPage(config, route), /docs-safety/);
+  }
+  assert.match(creator, /href="https:\/\/lokiplay\.cc\/" aria-label="Loki home"/);
+  assert.doesNotMatch(creator, /Loki \/ Creator/);
   assert.match(creator, /window\.location\.pathname === "\/signup"/);
   assert.doesNotMatch(creator, /Editorial Studio \/ 03/);
   assert.match(creator, /\.auth-panel \.form-actions \{[\s\S]*display: grid/);
@@ -345,12 +411,19 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.3\.8"/);
+  assert.match(creator, /"0\.4\.0"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
+  assert.match(creator, /id="organization-slug"/);
+  assert.match(creator, /playPathForProject\(project\)/);
+  assert.match(player, /play\/studio\/game-slug/);
   assert.match(creator, /usable room-entry flow/);
   assert.match(creator, /minimal lobby/);
+  assert.match(creator, /does not add a public lobby screen/);
+  assert.match(creator, /Do not make every room public/);
+  assert.match(creator, /listPublicRooms/);
+  assert.match(creator, /joinPublic/);
   assert.match(creator, /Do not infer multiplayer requirements/);
   assert.match(creator, /stop and ask the creator/);
   assert.match(creator, /Do not invent new game\.json fields/);
@@ -423,6 +496,57 @@ test("creator host login and signup paths render the creator studio", async (t) 
   }
 });
 
+test("docs host serves the developer documentation site", async (t) => {
+  const { platform } = setupProject();
+  const server = startWebServer(
+    {
+      platform,
+      deployments: { get() { return undefined; } },
+      artifacts: { async get() { return undefined; } },
+      async authorizePlay() {},
+      gameOrigin() {
+        return "https://game.lokiplay.test";
+      },
+      productConfig: {
+        apiOrigin: "https://api.lokiplay.test",
+        supabaseUrl: "https://auth.lokiplay.test",
+        supabaseAnonKey: "docs-site",
+      },
+    },
+    0,
+  );
+  t.after(() => server.close());
+  await once(server, "listening");
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  const home = await fetch(`${origin}/`, {
+    headers: { "x-forwarded-host": "docs.lokiplay.cc" },
+  });
+  assert.equal(home.status, 200);
+  const homeText = await home.text();
+  assert.match(homeText, /LOKI \/ Docs/);
+  assert.match(homeText, /href="\/safety"/);
+
+  const safetyPage = await fetch(`${origin}/safety`, {
+    headers: { "x-forwarded-host": "docs.lokiplay.cc" },
+  });
+  assert.equal(safetyPage.status, 200);
+  assert.match(await safetyPage.text(), /Install is not the finish/);
+
+  const quickstart = await fetch(`${origin}/quickstart`, {
+    headers: { "x-forwarded-host": "docs.lokiplay.cc" },
+  });
+  assert.equal(quickstart.status, 200);
+  assert.match(await quickstart.text(), /createHostedLokiClient/);
+
+  const llms = await fetch(`${origin}/llms.txt`, {
+    headers: { "x-forwarded-host": "docs.lokiplay.cc" },
+  });
+  assert.equal(llms.status, 200);
+  assert.match(llms.headers.get("content-type") ?? "", /text\/plain/);
+  assert.match(await llms.text(), /fine-tuning after installation/);
+});
+
 test("web server delivers the active immutable release through a sandbox shell", async (t) => {
   const { platform, creator, project } = setupProject();
   const artifacts = new MemoryArtifactStore();
@@ -457,6 +581,9 @@ test("web server delivers the active immutable release through a sandbox shell",
 
   const shell = await fetch(`${origin}/play/${project.id}`);
   assert.equal(shell.status, 200);
+  const namedShell = await fetch(`${origin}/play/studio/counter-party`);
+  assert.equal(namedShell.status, 200);
+  assert.match(await namedShell.text(), new RegExp(release.id));
   assert.match(
     shell.headers.get("content-security-policy")!,
     /connect-src https:\/\/api\.lokiplay\.cc/,
@@ -658,6 +785,10 @@ test("CLI initializes, validates and archives finished builds", async () => {
     assert.match(agents, /Let the SDK own browser lifecycle detection/);
     assert.match(agents, /usable room-entry flow/);
     assert.match(agents, /minimal lobby/);
+    assert.match(agents, /does not add a public lobby screen/);
+    assert.match(agents, /Do not make every room\s+public/);
+    assert.match(agents, /listPublicRooms/);
+    assert.match(agents, /joinPublic/);
     assert.match(agents, /Do not infer multiplayer requirements/);
     assert.match(agents, /stop and ask the\s+creator/);
     assert.match(agents, /Do not invent new `game\.json` fields/);

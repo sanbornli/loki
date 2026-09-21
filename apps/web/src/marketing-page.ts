@@ -18,196 +18,69 @@ const homeMain = `
     <section class="marketing-hero" aria-labelledby="hero-title">
       <div class="marketing-hero-copy">
         <p class="eyebrow">One plugin. The whole path to play.</p>
-        <h1 class="display" id="hero-title">One plugin to let the <span class="hero-keep">world play,</span><br>together</h1>
+        <h1 class="display" id="hero-title">Gaming Infrastructure for the<br>Agentic Future.</h1>
         <p class="lede">Give your game hosting, multiplayer, social features, and a way to get discovered—without wiring together five separate services.</p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started</a>
           <a class="button" href="#workflow">See how it works</a>
         </div>
       </div>
-      <figure class="game-stage" aria-label="Three live game windows: Battleship, Pool, and Chess">
-        <div class="game-windows">
-          <article class="game-window game-window-tall">
-            <div class="game-window-bar"><i></i><i></i><i></i><span>Battleship</span></div>
-            <div class="game-scene scene-battleship" aria-hidden="true">
-              <div class="seat seat-you"><i>Y</i><span>You</span><em>Your turn</em></div>
-              <svg class="game-scene-art" viewBox="0 0 200 248" preserveAspectRatio="xMidYMid slice">
-                <defs>
-                  <linearGradient id="bs-sea" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0" stop-color="#123d55"/>
-                    <stop offset="1" stop-color="#0a2434"/>
-                  </linearGradient>
-                </defs>
-                <rect width="200" height="248" fill="url(#bs-sea)"/>
-                <g fill="#9db8c8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7" font-weight="700">
-                  <text x="39" y="36">A</text><text x="57" y="36">B</text><text x="75" y="36">C</text><text x="93" y="36">D</text>
-                  <text x="111" y="36">E</text><text x="129" y="36">F</text><text x="147" y="36">G</text><text x="165" y="36">H</text>
-                  <text x="16" y="54">1</text><text x="16" y="72">2</text><text x="16" y="90">3</text><text x="16" y="108">4</text>
-                  <text x="16" y="126">5</text><text x="16" y="144">6</text><text x="16" y="162">7</text><text x="16" y="180">8</text>
-                </g>
-                <g>
-                  <rect x="30" y="42" width="144" height="144" fill="#1a5a78"/>
-                  <path stroke="#7eb9d4" stroke-width=".7" d="M30 42h144v144H30zM48 42v144M66 42v144M84 42v144M102 42v144M120 42v144M138 42v144M156 42v144M30 60h144M30 78h144M30 96h144M30 114h144M30 132h144M30 150h144M30 168h144"/>
-                </g>
-                <g fill="#d5dee4" stroke="#8d98a2" stroke-width=".8">
-                  <path d="M50 58h52c3.4 0 5 2.2 5 5.4s-1.6 5.4-5 5.4H50c-3.2 0-4.8-2.2-4.8-5.4S46.8 58 50 58z"/>
-                  <path d="M159 88v50c0 3.4-2.2 5-5.4 5s-5.4-1.6-5.4-5V88c0-3.2 2.2-4.8 5.4-4.8S159 84.8 159 88z"/>
-                  <path d="M86 140h30c3 0 4.6 2 4.6 5s-1.6 5-4.6 5H86c-3 0-4.6-2-4.6-5s1.6-5 4.6-5z"/>
-                </g>
-                <g class="bs-hit">
-                  <circle cx="93" cy="105" r="5" fill="#c43b28"/>
-                  <circle cx="93" cy="105" r="2.2" fill="#f0a72e"/>
-                  <circle class="bs-splash" cx="93" cy="105" r="7" fill="none" stroke="#f0a72e" stroke-width="1.2"/>
-                </g>
-                <g class="bs-miss">
-                  <circle cx="57" cy="141" r="4.2" fill="none" stroke="#e8f3fa" stroke-width="1.5"/>
-                  <path d="M54 138l6 6M60 138l-6 6" stroke="#e8f3fa" stroke-width="1.3"/>
-                </g>
-                <g class="bs-reticle">
-                  <circle r="8.5" fill="none" stroke="#f0a72e" stroke-width="1.3"/>
-                  <path d="M-12 0h5.4M6.6 0H12M0-12v5.4M0 6.6V12" stroke="#f0a72e" stroke-width="1.3"/>
-                </g>
-                <circle class="bs-shot" r="2.3" fill="#f0a72e"/>
-              </svg>
-              <div class="seat seat-them"><i>M</i><span>Maya</span><em>Their turn</em></div>
+      <figure class="game-stage ops-wall" aria-label="Agentic Game Ops Wall preview">
+        <div class="ops-command" aria-hidden="true">
+          <div class="ops-panel-head"><span>Agent prompt</span><em>Cursor / Claude / Codex</em></div>
+          <div class="ops-terminal">
+            <code class="ops-type ops-type-1">build me a multiplayer browser game</code>
+            <code class="ops-type ops-type-2">install @lokiplay/sdk and host it</code>
+            <code class="ops-type ops-type-3">create rooms, invites, chat, scores</code>
+          </div>
+          <ol class="ops-log">
+            <li><b>01</b><span>Package installed</span><em>@lokiplay/sdk</em></li>
+            <li><b>02</b><span>Rules loaded</span><em>game.json</em></li>
+            <li><b>03</b><span>Room wired</span><em>sync ready</em></li>
+            <li><b>04</b><span>Build live</span><em>play URL</em></li>
+          </ol>
+        </div>
+        <div class="ops-core" aria-hidden="true">
+          <div class="ops-node ops-node-agent">Agent</div>
+          <div class="ops-beam ops-beam-a"></div>
+          <div class="ops-node ops-node-loki">LOKI</div>
+          <div class="ops-beam ops-beam-b"></div>
+          <div class="ops-node ops-node-game">Live</div>
+        </div>
+        <div class="ops-live" aria-hidden="true">
+          <div class="ops-panel-head"><span>Live game ops</span><em>Room ready</em></div>
+          <div class="ops-room-card">
+            <div>
+              <strong>battleship-party-04</strong>
+              <span>3 players · host authoritative</span>
             </div>
-          </article>
-          <article class="game-window">
-            <div class="game-window-bar"><i></i><i></i><i></i><span>Pool</span></div>
-            <div class="game-scene scene-pool" aria-hidden="true">
-              <div class="seat seat-you"><i>Y</i><span>You</span><em>Your shot</em></div>
-              <svg class="game-scene-art" viewBox="0 0 360 200" preserveAspectRatio="xMidYMid slice">
-                <defs>
-                  <linearGradient id="pool-rail" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0" stop-color="#6b4428"/>
-                    <stop offset=".5" stop-color="#4a2d19"/>
-                    <stop offset="1" stop-color="#3a2214"/>
-                  </linearGradient>
-                  <radialGradient id="pool-felt" cx="38%" cy="32%" r="75%">
-                    <stop offset="0" stop-color="#2f8a4c"/>
-                    <stop offset="1" stop-color="#14532e"/>
-                  </radialGradient>
-                  <radialGradient id="ball-cue" cx="34%" cy="28%" r="70%">
-                    <stop offset="0" stop-color="#fff"/>
-                    <stop offset=".55" stop-color="#f3ead8"/>
-                    <stop offset="1" stop-color="#c4b79a"/>
-                  </radialGradient>
-                  <radialGradient id="ball-1" cx="34%" cy="28%" r="70%">
-                    <stop offset="0" stop-color="#ffb56a"/>
-                    <stop offset=".55" stop-color="#e36a2c"/>
-                    <stop offset="1" stop-color="#7a2c10"/>
-                  </radialGradient>
-                  <radialGradient id="ball-2" cx="34%" cy="28%" r="70%">
-                    <stop offset="0" stop-color="#8eb6ff"/>
-                    <stop offset=".55" stop-color="#2c62d4"/>
-                    <stop offset="1" stop-color="#16356e"/>
-                  </radialGradient>
-                  <radialGradient id="ball-8" cx="34%" cy="28%" r="70%">
-                    <stop offset="0" stop-color="#5a5a56"/>
-                    <stop offset=".5" stop-color="#1a1a16"/>
-                    <stop offset="1" stop-color="#050504"/>
-                  </radialGradient>
-                  <filter id="pool-shadow" x="-30%" y="-30%" width="160%" height="160%">
-                    <feDropShadow dx="0" dy="1.4" stdDeviation="1.2" flood-color="#041208" flood-opacity=".45"/>
-                  </filter>
-                </defs>
-                <rect width="360" height="200" fill="url(#pool-rail)"/>
-                <rect x="18" y="16" width="324" height="168" rx="8" fill="url(#pool-felt)"/>
-                <g fill="#e8d9b0">
-                  <circle cx="86" cy="10" r="1.6"/>
-                  <circle cx="180" cy="10" r="1.6"/>
-                  <circle cx="274" cy="10" r="1.6"/>
-                  <circle cx="86" cy="190" r="1.6"/>
-                  <circle cx="180" cy="190" r="1.6"/>
-                  <circle cx="274" cy="190" r="1.6"/>
-                </g>
-                <g fill="#0a0a08">
-                  <circle cx="24" cy="22" r="9"/>
-                  <circle cx="180" cy="18" r="7"/>
-                  <circle cx="336" cy="22" r="9"/>
-                  <circle cx="24" cy="178" r="9"/>
-                  <circle cx="180" cy="182" r="7"/>
-                  <circle cx="336" cy="178" r="9"/>
-                </g>
-                <g filter="url(#pool-shadow)">
-                  <g class="pool-cueball">
-                    <circle cx="86" cy="92" r="8.4" fill="url(#ball-cue)"/>
-                  </g>
-                  <g class="pool-object">
-                    <circle cx="214" cy="84" r="8.4" fill="url(#ball-1)"/>
-                    <circle cx="214" cy="84" r="3.1" fill="#f7f1e4"/>
-                    <text x="214" y="86.1" text-anchor="middle" font-size="5.4" font-family="ui-sans-serif, system-ui" fill="#1a1a16">1</text>
-                  </g>
-                  <circle cx="236" cy="98" r="8.4" fill="url(#ball-2)"/>
-                  <rect x="227.6" y="94.2" width="16.8" height="7.6" fill="#f7f1e4"/>
-                  <circle cx="236" cy="98" r="3.1" fill="#f7f1e4"/>
-                  <text x="236" y="100.1" text-anchor="middle" font-size="5.4" font-family="ui-sans-serif, system-ui" fill="#1a1a16">2</text>
-                  <circle cx="254" cy="86" r="8.4" fill="url(#ball-8)"/>
-                  <circle cx="254" cy="86" r="3.1" fill="#f7f1e4"/>
-                  <text x="254" y="88.1" text-anchor="middle" font-size="5.4" font-family="ui-sans-serif, system-ui" fill="#1a1a16">8</text>
-                </g>
-                <g class="cue-you">
-                  <path d="M-8 94 L78 92.2" stroke="#c4a074" stroke-width="3.4" stroke-linecap="round"/>
-                  <path d="M70 92.4 L82 92.1" stroke="#f3ead8" stroke-width="2.4" stroke-linecap="round"/>
-                  <circle cx="83.2" cy="92" r="1.5" fill="#1f1b16"/>
-                </g>
-                <g class="cue-them">
-                  <path d="M368 90 L282 92.4" stroke="#c4a074" stroke-width="3.4" stroke-linecap="round"/>
-                  <path d="M290 92.2 L278 92.6" stroke="#f3ead8" stroke-width="2.4" stroke-linecap="round"/>
-                  <circle cx="276.6" cy="92.6" r="1.5" fill="#1f1b16"/>
-                </g>
-              </svg>
-              <div class="seat seat-them"><i>L</i><span>Leo</span><em>Their shot</em></div>
+            <small>PUBLIC URL ON</small>
+          </div>
+          <div class="ops-mini-grid">
+            <div class="ops-mini ops-mini-board">
+              <span>Battleship</span>
+              <i></i><i></i><i></i><i></i><i></i><i></i>
             </div>
-          </article>
-          <article class="game-window">
-            <div class="game-window-bar"><i></i><i></i><i></i><span>Chess</span></div>
-            <div class="game-scene scene-chess" aria-hidden="true">
-              <div class="seat seat-them"><i>A</i><span>Asha</span><em>Black to move</em></div>
-              <svg class="game-scene-art" viewBox="0 0 200 200" preserveAspectRatio="xMidYMid slice">
-                <defs>
-                  <pattern id="chess-sq" width="40" height="40" patternUnits="userSpaceOnUse">
-                    <rect width="20" height="20" fill="#f0d8ae"/>
-                    <rect x="20" y="20" width="20" height="20" fill="#f0d8ae"/>
-                    <rect x="20" width="20" height="20" fill="#7a5333"/>
-                    <rect y="20" width="20" height="20" fill="#7a5333"/>
-                  </pattern>
-                </defs>
-                <rect width="200" height="200" fill="#2a2118"/>
-                <rect x="16" y="16" width="168" height="168" fill="#4a3424"/>
-                <rect x="20" y="20" width="160" height="160" fill="url(#chess-sq)"/>
-                <rect class="move-w" x="40" y="160" width="20" height="20" fill="#f0a72e" opacity=".28"/>
-                <rect class="move-w2" x="60" y="120" width="20" height="20" fill="#f0a72e" opacity=".18"/>
-                <rect class="move-b" x="40" y="20" width="20" height="20" fill="#8ec8ff" opacity=".0"/>
-                <rect class="move-b2" x="60" y="60" width="20" height="20" fill="#8ec8ff" opacity=".0"/>
-                <g font-family="Georgia, 'Segoe UI Symbol', 'Apple Symbols', serif" font-size="17" text-anchor="middle">
-                  <g fill="#f7f0de">
-                    <text x="30" y="176">♖</text>
-                    <text class="wn" x="50" y="176">♘</text>
-                    <text x="70" y="176">♗</text>
-                    <text x="90" y="176">♕</text>
-                    <text x="110" y="176">♔</text>
-                    <text x="30" y="156">♙</text>
-                    <text x="70" y="156">♙</text>
-                    <text x="110" y="156">♙</text>
-                    <text x="150" y="156">♙</text>
-                  </g>
-                  <g fill="#16120e">
-                    <text x="30" y="36">♜</text>
-                    <text class="bn" x="50" y="36">♞</text>
-                    <text x="70" y="36">♝</text>
-                    <text x="90" y="36">♛</text>
-                    <text x="110" y="36">♚</text>
-                    <text x="30" y="56">♟</text>
-                    <text x="70" y="56">♟</text>
-                    <text x="110" y="56">♟</text>
-                    <text x="150" y="56">♟</text>
-                  </g>
-                </g>
-              </svg>
-              <div class="seat seat-you"><i>Y</i><span>You</span><em>White to move</em></div>
+            <div class="ops-mini ops-mini-pool">
+              <span>Pool</span>
+              <i></i><i></i><i></i>
             </div>
-          </article>
+            <div class="ops-mini ops-mini-chat">
+              <span>Room chat</span>
+              <p>Maya joined from invite.</p>
+              <p>Leo is ready.</p>
+            </div>
+          </div>
+          <div class="ops-player-rail">
+            <span><i>Y</i>You</span>
+            <span><i>M</i>Maya</span>
+            <span><i>L</i>Leo</span>
+            <span class="ops-seat-open"><i>+</i>Invite</span>
+          </div>
+          <div class="ops-url-card">
+            <span>https://play.lokiplay.cc/battleship-party</span>
+            <b>copied</b>
+          </div>
         </div>
       </figure>
     </section>
@@ -217,31 +90,31 @@ const homeMain = `
         <div class="feature-row feature-row-flip workflow-row">
           <div class="feature-copy">
             <p class="card-index">From localhost to live</p>
-            <h2 id="workflow-title">Launch to the world<br>in minutes.</h2>
+            <h2 id="workflow-title">From Game to Party<br>in a Single Prompt.</h2>
             <p>Give a finished browser game a host, a room, and a playable URL—without standing up a backend or wiring five services together.</p>
-            <ul class="feature-list">
-              <li>One plugin for your coding agent</li>
-              <li>A secure link after every valid build</li>
-              <li>Invite first. Publish when it is ready.</li>
-            </ul>
             <a class="card-link" href="/sdk">See the SDK →</a>
           </div>
-          <div class="editorial-grid editorial-stack">
-            <article class="editorial-card">
-              <p class="card-index">01 / Connect</p>
-              <h3>Connect</h3>
-              <p>Drop Loki into your game. Your coding agent gets the SDK, project rules, and exact setup steps.</p>
-            </article>
-            <article class="editorial-card">
-              <p class="card-index">02 / Launch</p>
-              <h3>Launch</h3>
-              <p>Validate and deploy a finished build. Loki hosts it, scans it, and gives you a secure playable link.</p>
-            </article>
-            <article class="editorial-card">
-              <p class="card-index">03 / Grow</p>
-              <h3>Grow</h3>
-              <p>Invite friends while you build. When you are ready, submit your game to the public catalog.</p>
-            </article>
+          <div class="editorial-grid editorial-stack party-flow" aria-label="Prompt-to-party timeline">
+            <div class="party-command" aria-hidden="true">
+              <span>Prompt</span>
+              <code>make this game playable with friends tonight</code>
+            </div>
+            <ol class="party-steps" aria-hidden="true">
+              <li class="party-step party-step-install"><b>01</b><span>Install</span><em>@lokiplay/sdk</em></li>
+              <li class="party-step party-step-deploy"><b>02</b><span>Deploy</span><em>secure URL</em></li>
+              <li class="party-step party-step-room"><b>03</b><span>Room</span><em>host ready</em></li>
+              <li class="party-step party-step-invite"><b>04</b><span>Invite</span><em>link copied</em></li>
+              <li class="party-step party-step-players"><b>05</b><span>Players</span><em>party live</em></li>
+            </ol>
+            <div class="party-room" aria-hidden="true">
+              <div class="party-badge">Party ready</div>
+              <div class="party-avatar party-avatar-you">Y</div>
+              <div class="party-avatar party-avatar-maya">M</div>
+              <div class="party-avatar party-avatar-leo">L</div>
+              <div class="party-chat party-chat-a"><b>Maya</b> I am in.</div>
+              <div class="party-chat party-chat-b"><b>Leo</b> ready up?</div>
+              <div class="party-link">play.lokiplay.cc/party</div>
+            </div>
           </div>
         </div>
       </div>
@@ -253,36 +126,19 @@ const homeMain = `
           <article class="feature-row">
             <div class="feature-copy">
               <p class="card-index">01 / Hosting</p>
-              <h3>A home for every build.</h3>
+              <h3>Launch to the World<br>in Minutes.</h3>
               <p>Ship a finished browser game to a secure Loki URL. Every upload is scanned, isolated, and saved as an immutable release.</p>
-              <ul class="feature-list">
-                <li>Private previews</li>
-                <li>Global asset delivery</li>
-                <li>No backend to maintain</li>
-              </ul>
               <a class="card-link" href="/hosting">See hosting →</a>
             </div>
-            <div class="feature-stage scene-pipeline" aria-hidden="true">
-              <div class="pipe-bar"><span>loki deploy</span><em>rel_08</em></div>
-              <ol class="pipe-steps">
-                <li class="pipe-step pipe-step-1"><b>01</b><span>Upload</span><code>game.zip</code></li>
-                <li class="pipe-step pipe-step-2"><b>02</b><span>Scan</span><code>pass</code></li>
-                <li class="pipe-step pipe-step-3"><b>03</b><span>Isolate</span><code>origin ready</code></li>
-                <li class="pipe-step pipe-step-4"><b>04</b><span>Live</span><code>play.lokiplay.cc</code></li>
-              </ol>
-              <div class="pipe-status">Build passed · URL issued</div>
+            <div class="feature-stage scene-phone" aria-label="A phone sharing a Loki play link with a friend">
+              <img class="phone-share-image" src="/assets/phone-share.png" alt="A phone chat where a Loki game link is shared and a friend replies joining now">
             </div>
           </article>
           <article class="feature-row feature-row-flip">
             <div class="feature-copy">
               <p class="card-index">02 / Multiplayer</p>
-              <h3>Multiplayer without the server project.</h3>
+              <h3>Play your Game with Anyone,<br>Anywhere.</h3>
               <p>Add rooms, invites, matchmaking, chat, shared state, and leaderboards through one game-ready SDK.</p>
-              <ul class="feature-list">
-                <li>Rooms and matchmaking</li>
-                <li>Reconnect and host migration</li>
-                <li>Identity across every game</li>
-              </ul>
               <a class="card-link" href="/multiplayer">See multiplayer →</a>
             </div>
             <div class="feature-stage scene-lobby" aria-hidden="true">
@@ -297,13 +153,8 @@ const homeMain = `
           <article class="feature-row">
             <div class="feature-copy">
               <p class="card-index">03 / Distribution</p>
-              <h3>A path from private link to public game.</h3>
+              <h3>Experience what Loki can do.</h3>
               <p>Keep it private while you experiment. When the game is ready, make it public and share one playable link.</p>
-              <ul class="feature-list">
-                <li>Reviewed catalog</li>
-                <li>Public game page</li>
-                <li>Tips and revenue share</li>
-              </ul>
               <a class="card-link" href="/distribution">See distribution →</a>
             </div>
             <div class="feature-stage scene-catalog" aria-hidden="true">
@@ -331,7 +182,7 @@ const homeMain = `
       <div class="marketing-section-inner agent-layout">
         <div class="agent-copy">
           <p class="eyebrow">Made for how games get built now</p>
-          <h2 id="agent-title">Built for the Agentic AI Era.</h2>
+          <h2 id="agent-title">Let your Agent handle the rest.</h2>
           <p>Loki gives coding agents one canonical source for packages, platform rules, validation, and deployment. They can integrate the game correctly without inventing another backend.</p>
           <div class="agent-links">
             <a class="inline-link" href="/agents">How agents use Loki →</a>
@@ -407,7 +258,7 @@ const homeMain = `
         </div>
       </div>
     </section>
-${closingBand("Give your game somewhere to go.")}
+${closingBand()}
 `;
 
 const hostingMain = `
@@ -473,7 +324,7 @@ const hostingMain = `
         </div>
       </div>
     </section>
-${closingBand("Ship a build. Get a URL.")}
+${closingBand()}
 `;
 
 const multiplayerMain = `
@@ -543,7 +394,7 @@ const multiplayerMain = `
         </ul>
       </div>
     </section>
-${closingBand("Play with people, not localhost.")}
+${closingBand()}
 `;
 
 const distributionMain = `
@@ -632,7 +483,7 @@ const distributionMain = `
         </div>
       </div>
     </section>
-${closingBand("List it only when it is ready.")}
+${closingBand()}
 `;
 
 const agentsMain = `
@@ -696,7 +547,7 @@ const agentsMain = `
         </div>
       </div>
     </section>
-${closingBand("Hand the missing backend to Loki.")}
+${closingBand()}
 `;
 
 const sdkMain = `
@@ -751,7 +602,7 @@ const sdkMain = `
         </div>
       </div>
     </section>
-${closingBand("Install the client. Keep the game.")}
+${closingBand()}
 `;
 
 const examplesMain = `
@@ -806,7 +657,7 @@ const examplesMain = `
         </div>
       </div>
     </section>
-${closingBand("Your game can be the next card.")}
+${closingBand()}
 `;
 
 const pricingMain = `
@@ -881,7 +732,7 @@ const pricingMain = `
         </div>
       </div>
     </section>
-${closingBand("No stack. No surprise invoice.")}
+${closingBand()}
 `;
 
 const aboutMain = `
@@ -934,7 +785,7 @@ const aboutMain = `
         </div>
       </div>
     </section>
-${closingBand("Build the game. We will hold the rest.")}
+${closingBand()}
 `;
 
 const contactMain = `
@@ -1084,7 +935,7 @@ const pages: Record<
   { title: string; description: string; main: string }
 > = {
   "/": {
-    title: "Loki — One plugin to let the world play, together",
+    title: "Loki — Gaming Infrastructure for the Agentic Future.",
     description:
       "Hosting, multiplayer, social features, and distribution for vibe-coded games.",
     main: homeMain,

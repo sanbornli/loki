@@ -21,7 +21,9 @@
     "providers:check": "tsx scripts/check-providers.ts",
     "production:check": "tsx scripts/check-production.ts",
     "marketing:build": "tsx scripts/build-marketing.ts",
-    "marketing:deploy": "npm run marketing:build && npx wrangler@3.114.17 pages deploy dist/marketing --project-name lokiplay"
+    "marketing:deploy": "npm run marketing:build && npx wrangler@3.114.17 pages deploy dist/marketing --project-name lokiplay",
+    "docs:build": "tsx scripts/build-docs.ts",
+    "docs:deploy": "npm run docs:build && npx wrangler@3.114.17 pages deploy dist/docs --project-name lokiplay-docs"
   },
   "devDependencies": {
     "@heroiclabs/nakama-js": "^2.8.0",

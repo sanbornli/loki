@@ -36,6 +36,10 @@ export class RealtimeBus {
   dropNextSnapshot = false;
   nextInputError?: { code: string; message: string; retryAfterMs?: number };
   guestReports: Array<{ senderId: string; roundSequence: number; extrapolatedFrameRatio: number }> = [];
+  visibility: "public" | "private" | "unlisted" | "matchmaking" = "matchmaking";
+  modeLabel?: string;
+  maxPlayers = 16;
+  publicRoomBrowser = true;
 
   join(transport: FakeRealtimeTransport, playerId: string, capable: boolean): JoinedRoom {
     const sessionId = crypto.randomUUID();
@@ -53,7 +57,10 @@ export class RealtimeBus {
       members: this.#presenceList(),
       membersComplete: true,
       membershipRevision: this.members.size,
-      capabilities: { ...DEFAULT_RUNTIME_CAPABILITIES },
+      capabilities: {
+        ...DEFAULT_RUNTIME_CAPABILITIES,
+        public_room_browser: this.publicRoomBrowser,
+      },
     });
     this.#broadcastV1(
       this.#v1Envelope({
@@ -377,12 +384,63 @@ export class FakeRealtimeTransport implements LokiTransport {
     this.#bus = bus;
   }
 
-  async createRoom(input: { realtimeCapable?: boolean }): Promise<JoinedRoom> {
+  async createRoom(input: {
+    realtimeCapable?: boolean;
+    visibility?: "public" | "private" | "unlisted";
+    modeLabel?: string;
+  }): Promise<JoinedRoom> {
+    if (input.visibility) this.#bus!.visibility = input.visibility;
+    if (input.modeLabel) this.#bus!.modeLabel = input.modeLabel;
     return this.#bus!.join(this, this.#playerId, input.realtimeCapable ?? false);
   }
 
   async joinRoom(input: { realtimeCapable?: boolean }): Promise<JoinedRoom> {
     return this.#bus!.join(this, this.#playerId, input.realtimeCapable ?? false);
+  }
+
+  async listPublicRooms(
+    input: { limit?: number; projectId?: string } = {},
+  ): Promise<{
+    rooms: Array<{
+      roomId: string;
+      playerCount: number;
+      maxPlayers: number;
+      joinable: boolean;
+      modeLabel?: string;
+    }>;
+  }> {
+    const bus = this.#bus;
+    if (
+      !bus ||
+      bus.visibility !== "public" ||
+      bus.members.size < 1 ||
+      bus.members.size >= bus.maxPlayers
+    ) {
+      return { rooms: [] };
+    }
+    return {
+      rooms: [
+        {
+          roomId: bus.roomId,
+          playerCount: bus.members.size,
+          maxPlayers: bus.maxPlayers,
+          joinable: true,
+          ...(bus.modeLabel ? { modeLabel: bus.modeLabel } : {}),
+        },
+      ].slice(0, input.limit ?? 50),
+    };
+  }
+
+  async joinPublicRoom(input: {
+    roomId: string;
+    realtimeCapable?: boolean;
+  }): Promise<JoinedRoom> {
+    const bus = this.#bus;
+    if (!bus || bus.roomId !== input.roomId || bus.visibility !== "public") {
+      throw new Error("ROOM_NOT_FOUND: room not found");
+    }
+    if (bus.members.size >= bus.maxPlayers) throw new Error("ROOM_FULL: room full");
+    return bus.join(this, this.#playerId, input.realtimeCapable ?? false);
   }
 
   async leaveRoom(): Promise<void> {

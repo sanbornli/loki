@@ -134,8 +134,9 @@ export interface SynchronizedRoomHost {
     options?: { senderId?: string },
   ): Promise<void>;
   requestSnapshot(): Promise<void>;
-  createRoom(): Promise<JoinedRoom>;
+  createRoom(input?: { visibility?: "public" | "private" | "unlisted"; modeLabel?: string }): Promise<JoinedRoom>;
   joinRoom(input: { inviteCode: string }): Promise<JoinedRoom>;
+  joinPublicRoom?(input: { roomId: string }): Promise<JoinedRoom>;
   leaveRoom(roomId?: string): Promise<void>;
   reconnect(): Promise<void>;
   close?(): Promise<void>;
@@ -392,12 +393,27 @@ export class SynchronizedRoom<State, Action> {
     return () => this.#committed.delete(listener);
   }
 
-  async create(): Promise<SynchronizedRoomSnapshot<State>> {
-    return this.#enter(() => this.#host.createRoom(), { bootstrap: true });
+  async create(
+    input?: { visibility?: "public" | "private" | "unlisted"; modeLabel?: string },
+  ): Promise<SynchronizedRoomSnapshot<State>> {
+    return this.#enter(() => this.#host.createRoom(input), {
+      bootstrap: true,
+      requirePublicRoomBrowser: input?.visibility === "public",
+    });
   }
 
   async join(input: { inviteCode: string }): Promise<SynchronizedRoomSnapshot<State>> {
     return this.#enter(() => this.#host.joinRoom(input), { bootstrap: false });
+  }
+
+  async joinPublic(input: { roomId: string }): Promise<SynchronizedRoomSnapshot<State>> {
+    if (!this.#host.joinPublicRoom) {
+      throw new SynchronizedRoomError("invalid", "runtime does not advertise public_room_browser");
+    }
+    return this.#enter(() => this.#host.joinPublicRoom!(input), {
+      bootstrap: false,
+      requirePublicRoomBrowser: true,
+    });
   }
 
   async dispatch(action: Action): Promise<SynchronizedRoomSnapshot<State>> {
@@ -526,7 +542,7 @@ export class SynchronizedRoom<State, Action> {
 
   async #enter(
     join: () => Promise<JoinedRoom>,
-    options: { bootstrap: boolean },
+    options: { bootstrap: boolean; requirePublicRoomBrowser?: boolean },
   ): Promise<SynchronizedRoomSnapshot<State>> {
     if (this.#connection === "leave_failed") {
       throw new SynchronizedRoomError("rejected", "resolve the failed leave before joining");
@@ -552,7 +568,7 @@ export class SynchronizedRoom<State, Action> {
         await this.#host.leaveRoom(joined.roomId).catch(() => undefined);
         throw new SynchronizedRoomError("rejected", "join superseded");
       }
-      this.#requireCapabilities(joined.snapshot);
+      this.#requireCapabilities(joined.snapshot, options.requirePublicRoomBrowser === true);
       this.#roomId = joined.roomId;
       this.#inviteCode = joined.inviteCode;
       this.#applyAuthoritative(joined.snapshot, true, {
@@ -1505,13 +1521,19 @@ export class SynchronizedRoom<State, Action> {
     );
   }
 
-  #requireCapabilities(message: ServerEnvelope): void {
+  #requireCapabilities(message: ServerEnvelope, requirePublicRoomBrowser = false): void {
     if (message.type !== "snapshot") return;
     const capabilities = message.capabilities;
     if (!capabilities || capabilities.synchronized_rooms !== true) {
       throw new SynchronizedRoomError(
         "invalid",
         "runtime does not advertise synchronized_rooms",
+      );
+    }
+    if (requirePublicRoomBrowser && capabilities.public_room_browser !== true) {
+      throw new SynchronizedRoomError(
+        "invalid",
+        "runtime does not advertise public_room_browser",
       );
     }
     if (
