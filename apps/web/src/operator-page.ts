@@ -1,4 +1,5 @@
 import {
+  brandMarkHtml,
   type ProductPageConfig,
   renderProductPage,
 } from "./product-theme.js";
@@ -181,7 +182,7 @@ const pageStyles = `
 const body = `
   <div class="operator-shell">
     <header class="operator-header">
-      <a class="wordmark" href="/" aria-label="Loki home">LOKI</a>
+      <a class="brand" href="/" aria-label="Loki home">${brandMarkHtml()}<span>LOKI</span></a>
       <div class="operator-header-actions">
         <span class="operator-role">Operator console</span>
         <button class="button button-quiet" id="logout" type="button" hidden>Log out</button>

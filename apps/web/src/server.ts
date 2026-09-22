@@ -17,7 +17,12 @@ import { renderDevicePage } from "./device-page.js";
 import { buildLlmsFull, isDocsRoute, llmsTxt, renderDocsPage } from "./docs-page.js";
 import { isMarketingRoute, renderMarketingPage } from "./marketing-page.js";
 import { renderOperatorPage } from "./operator-page.js";
-import { gameSecurityHeaders, renderPlayerShell } from "./player.js";
+import {
+  gameSecurityHeaders,
+  playServiceWorkerSource,
+  renderPlayManifest,
+  renderPlayerShell,
+} from "./player.js";
 import { renderPlayerPlatformPage } from "./player-platform-page.js";
 import type { ProductPageConfig } from "./product-theme.js";
 
@@ -29,6 +34,30 @@ const staticImageAssets: Record<string, { file: string; type: string }> = {
   "/assets/loki-mark.png": {
     file: "./assets/brand/loki-mark.png",
     type: "image/png",
+  },
+  "/assets/loki-app-icon-dark.png": {
+    file: "./assets/brand/loki-app-icon-dark.png",
+    type: "image/png",
+  },
+  "/assets/loki-app-icon-light.png": {
+    file: "./assets/brand/loki-app-icon-light.png",
+    type: "image/png",
+  },
+  "/assets/loki-lockup-dark.png": {
+    file: "./assets/brand/loki-lockup-dark.png",
+    type: "image/png",
+  },
+  "/assets/loki-lockup-light.png": {
+    file: "./assets/brand/loki-lockup-light.png",
+    type: "image/png",
+  },
+  "/assets/loki-game-montage.mp4": {
+    file: "./assets/marketing/loki-game-montage.mp4",
+    type: "video/mp4",
+  },
+  "/assets/loki-game-montage.webp": {
+    file: "./assets/marketing/loki-game-montage.webp",
+    type: "image/webp",
   },
 };
 
@@ -207,13 +236,44 @@ export function createWebHandler(dependencies: WebDependencies) {
         response.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "content-security-policy":
-            `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src ${apiOrigin} ${authOrigin}; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'`,
+            `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src ${apiOrigin} ${authOrigin}; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'`,
           "cache-control": "no-store",
           "referrer-policy": "strict-origin-when-cross-origin",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
         });
         response.end(productPage);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/play/sw.js") {
+        response.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        response.end(playServiceWorkerSource);
+        return;
+      }
+      const playManifestUuid = url.pathname.match(
+        /^\/play\/([0-9a-f-]{36})\/app\.webmanifest$/i,
+      );
+      const playManifestSlugs = url.pathname.match(
+        /^\/play\/([a-z0-9-]{3,48})\/([a-z0-9-]{3,48})\/app\.webmanifest$/i,
+      );
+      if (request.method === "GET" && (playManifestUuid || playManifestSlugs)) {
+        const project = playManifestUuid
+          ? await dependencies.platform.playableProject(playManifestUuid[1]!)
+          : await dependencies.platform.playableProjectBySlugs(
+              playManifestSlugs![1]!,
+              playManifestSlugs![2]!,
+            );
+        const startUrl = url.pathname.replace(/\/app\.webmanifest$/i, "");
+        response.writeHead(200, {
+          "content-type": "application/manifest+json; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        response.end(renderPlayManifest({ title: project.name, startUrl }));
         return;
       }
       const playUuid = url.pathname.match(/^\/play\/([0-9a-f-]{36})$/i);
@@ -244,12 +304,13 @@ export function createWebHandler(dependencies: WebDependencies) {
           entrypoint: deployment.manifest.entrypoint,
           apiOrigin,
           playInvite: playInvite || undefined,
+          playPath: url.pathname,
         });
         const gameOrigin = new URL(dependencies.gameOrigin(projectId)).origin;
         response.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "content-security-policy":
-            `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src ${gameOrigin}; connect-src ${new URL(apiOrigin).origin}; base-uri 'none'; object-src 'none'`,
+            `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; worker-src 'self'; manifest-src 'self'; frame-src ${gameOrigin}; connect-src ${new URL(apiOrigin).origin}; base-uri 'none'; object-src 'none'`,
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
         });

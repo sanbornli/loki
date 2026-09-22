@@ -1,4 +1,5 @@
 import {
+  brandMarkHtml,
   renderProductPage,
   type ProductPageConfig,
 } from "./product-theme.js";
@@ -545,7 +546,7 @@ function header(path: string): string {
   <a class="skip-link" href="#main-content">Skip to content</a>
   <header class="site-header docs-header">
     <a class="brand" href="https://lokiplay.cc/" aria-label="Loki home">
-      <span class="brand-mark" aria-hidden="true"></span>
+      ${brandMarkHtml()}
       <span>LOKI</span>
     </a>
     <nav class="docs-nav-top" aria-label="Docs shortcuts">
@@ -563,7 +564,6 @@ function header(path: string): string {
         <a href="/agents"${currentAttr(path, "/agents")}>Agents</a>
         <a href="/mcp"${currentAttr(path, "/mcp")}>MCP</a>
         <a href="https://lokiplay.cc/">Product ↗</a>
-        <a href="https://play.lokiplay.cc/">Play ↗</a>
       </div>
     </details>
     <div class="docs-actions">
@@ -600,7 +600,7 @@ function footer(): string {
   <footer class="docs-footer">
     <div class="docs-footer-grid">
       <div class="docs-footer-brand">
-        <a class="brand" href="/" aria-label="Loki docs home"><span class="brand-mark" aria-hidden="true"></span><span>LOKI / Docs</span></a>
+        <a class="brand" href="/" aria-label="Loki docs home">${brandMarkHtml()}<span>LOKI / Docs</span></a>
         <p>Hosting and host-authoritative multiplayer for finished browser games. One SDK. One CLI. No invented backend.</p>
       </div>
       <div class="docs-footer-column"><h3>Start</h3><div class="docs-footer-links">

@@ -31,7 +31,7 @@ await Promise.all([
   writeFile(
     resolve(outputDirectory, "_headers"),
     `/*
-  Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
   Referrer-Policy: strict-origin-when-cross-origin
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
@@ -49,14 +49,36 @@ await Promise.all([
     resolve(assetDirectory, "loki-vibecoded-game-montage.png"),
   ),
   ...[
+    "loki-mark.png",
+    "loki-app-icon-dark.png",
+    "loki-app-icon-light.png",
+    "loki-lockup-dark.png",
+    "loki-lockup-light.png",
+  ].map((fileName) =>
+    copyFile(
+      resolve(repositoryRoot, "apps/web/src/assets/brand", fileName),
+      resolve(assetDirectory, fileName),
+    ),
+  ),
+  ...[
     "CUBE_2D_DARK.svg",
     "claude-color.svg",
     "openai-light.svg",
     "replit-color.svg",
     "lovable-color.svg",
+    "grok.svg",
+    "grok.svg",
+    "grok.svg",
+    "grok.svg",
+    "grok.svg",
+    "grok.svg",
+    "grok.svg",
+    "grok.svg",
     "cursor-screen.jpg",
     "cursor-screen-prompt.jpg",
     "phone-share.png",
+    "loki-game-montage.mp4",
+    "loki-game-montage.webp",
   ].map((fileName) =>
     copyFile(
       resolve(repositoryRoot, "apps/web/src/assets/marketing", fileName),

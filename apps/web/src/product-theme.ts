@@ -185,10 +185,10 @@ select:disabled {
 }
 
 .brand-mark {
-  width: 0.72rem;
-  height: 0.72rem;
-  border: 2px solid var(--amber);
-  transform: rotate(45deg);
+  display: block;
+  width: 1.45rem;
+  height: 1.45rem;
+  object-fit: contain;
 }
 
 .header-note {
@@ -567,6 +567,8 @@ export function renderProductPage(
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#080806">
   <title>${escapeHtml(input.title)}</title>
+  <link rel="icon" type="image/png" href="/assets/loki-app-icon-dark.png">
+  <link rel="apple-touch-icon" href="/assets/loki-app-icon-dark.png">
   <style>${productThemeCss}${input.styles ?? ""}</style>
 </head>
 <body${bodyClass}>

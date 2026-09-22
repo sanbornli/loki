@@ -47,6 +47,41 @@ export function gameSecurityHeaders(
   };
 }
 
+export const playServiceWorkerSource = `self.addEventListener("fetch", (event) => {
+  event.respondWith(fetch(event.request));
+});
+`;
+
+export function renderPlayManifest(input: {
+  title: string;
+  startUrl: string;
+}): string {
+  const name = input.title.trim() || "Loki";
+  return JSON.stringify({
+    name,
+    short_name: name.length <= 12 ? name : name.slice(0, 12),
+    id: input.startUrl,
+    start_url: input.startUrl,
+    display: "standalone",
+    background_color: "#09090b",
+    theme_color: "#09090b",
+    icons: [
+      {
+        src: "/assets/loki-app-icon-dark.png",
+        sizes: "1024x1024",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: "/assets/loki-app-icon-light.png",
+        sizes: "1024x1024",
+        type: "image/png",
+        purpose: "any",
+      },
+    ],
+  });
+}
+
 export function renderPlayerShell(input: {
   title: string;
   projectId: string;
@@ -55,6 +90,7 @@ export function renderPlayerShell(input: {
   entrypoint?: string;
   apiOrigin?: string;
   playInvite?: string;
+  playPath: string;
 }): string {
   const gameUrl = new URL(
     `/games/${encodeURIComponent(input.projectId)}/releases/${encodeURIComponent(
@@ -69,11 +105,20 @@ export function renderPlayerShell(input: {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="${escapeHtml(input.playPath)}/app.webmanifest">
+  <link rel="apple-touch-icon" href="/assets/loki-app-icon-dark.png">
   <title>${escapeHtml(input.title)} — Loki</title>
   <style>
     html,body,main,iframe{width:100%;height:100%;margin:0;border:0}
     body{overflow:hidden;background:#09090b;color:white;font:14px system-ui}
     #status{position:fixed;z-index:2;top:12px;left:12px;padding:6px 10px;border-radius:99px;background:#18181bcc}
+    #install{position:fixed;z-index:3;left:12px;right:12px;bottom:12px;display:none;gap:10px;align-items:center;justify-content:space-between;padding:12px;border-radius:14px;background:#18181bf2}
+    #install p{margin:0}
+    #install button{font:inherit;border:0;border-radius:99px;padding:8px 12px;background:#f4efe3;color:#09090b}
+    @media (pointer: fine) { #install { display:none !important } }
+    @media (display-mode: standalone) { #install { display:none !important } }
   </style>
 </head>
 <body>
@@ -185,6 +230,55 @@ export function renderPlayerShell(input: {
         status.title = "The game did not request a multiplayer session.";
       }, 15_000);
     });
+
+    const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+    const mobileUa = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    const installed = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    const dismissed = (() => {
+      try { return localStorage.getItem("loki_pwa_dismissed") === "1"; }
+      catch { return false; }
+    })();
+    if (coarsePointer && mobileUa && !installed && !dismissed) {
+      navigator.serviceWorker.register("/play/sw.js", { scope: "/play/" }).catch(() => {});
+      const rememberDismiss = () => {
+        try { localStorage.setItem("loki_pwa_dismissed", "1"); } catch {}
+      };
+      const banner = document.createElement("aside");
+      banner.id = "install";
+      banner.setAttribute("role", "dialog");
+      banner.setAttribute("aria-label", "Add to Home Screen");
+      const copy = document.createElement("p");
+      const dismissButton = document.createElement("button");
+      dismissButton.type = "button";
+      dismissButton.textContent = "Not now";
+      dismissButton.addEventListener("click", () => {
+        banner.remove();
+        rememberDismiss();
+      });
+      const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (ios) {
+        copy.textContent = "Tap Share, then Add to Home Screen for a better experience.";
+        banner.append(copy, dismissButton);
+        banner.style.display = "flex";
+        document.body.append(banner);
+      } else {
+        window.addEventListener("beforeinstallprompt", (event) => {
+          event.preventDefault();
+          copy.textContent = "Add to Home Screen for a better experience";
+          const addButton = document.createElement("button");
+          addButton.type = "button";
+          addButton.textContent = "Add";
+          addButton.addEventListener("click", () => {
+            void event.prompt();
+            banner.remove();
+            rememberDismiss();
+          });
+          banner.append(copy, addButton, dismissButton);
+          banner.style.display = "flex";
+          document.body.append(banner);
+        });
+      }
+    }
   </script>
 </body>
 </html>`;

@@ -858,7 +858,7 @@ npx lokiplay@${v} ship`)}
               ["Protocol numbers", "Finite safe integers"],
             ],
           )}
-          <p>Public free accounts are usage-capped. Studio plans are not sold yet. See <a href="https://lokiplay.cc/pricing">Pricing</a>.</p>
+          <p>Free includes one game and two rooms. Loki is the paid plan. See <a href="https://lokiplay.cc/pricing">Pricing</a>.</p>
           <p>Treat <code>PROJECT_SUSPENDED</code> as stop-the-line.</p>
 `,
   },

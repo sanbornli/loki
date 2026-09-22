@@ -251,6 +251,7 @@ test("player shell and game responses enforce origin isolation", () => {
     projectId: crypto.randomUUID(),
     deploymentId: crypto.randomUUID(),
     gameOrigin,
+    playPath: "/play/studio/counter-party",
   });
   assert.match(
     shell,
@@ -261,6 +262,13 @@ test("player shell and game responses enforce origin isolation", () => {
   assert.match(shell, /postMessage\([\s\S]*"\*",[\s\S]*\[channel\.port2\]/);
   assert.match(shell, /Connection timed out/);
   assert.match(shell, /status\.textContent = "Connected"/);
+  assert.match(shell, /rel="manifest" href="\/play\/studio\/counter-party\/app\.webmanifest"/);
+  assert.match(shell, /apple-mobile-web-app-capable/);
+  assert.match(shell, /apple-touch-icon/);
+  assert.match(shell, /matchMedia\("\(pointer: coarse\)"\)/);
+  assert.match(shell, /beforeinstallprompt/);
+  assert.match(shell, /loki_pwa_dismissed/);
+  assert.match(shell, /\/play\/sw\.js/);
 });
 
 test("Theme 03 product surfaces render functional, safely configured shells", () => {
@@ -291,8 +299,18 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(marketing, /Get started today for free/);
   assert.doesNotMatch(marketing, /Create free project ↗/);
   assert.match(marketing, /ide-stage/);
-  assert.match(marketing, /cursor-screen\.jpg/);
-  assert.match(marketing, /cursor-screen-prompt\.jpg/);
+  assert.match(marketing, /share-editor/);
+  assert.match(marketing, /ide-typed">Integrate and ship this repository to Loki\./);
+  assert.doesNotMatch(marketing, /beforeinstallprompt|loki_pwa_dismissed/);
+  assert.doesNotMatch(creator, /beforeinstallprompt|loki_pwa_dismissed/);
+  assert.doesNotMatch(
+    renderDocsPage(config, "/"),
+    /beforeinstallprompt|loki_pwa_dismissed/,
+  );
+  assert.match(marketing, /Installing @lokiplay\/sdk/);
+  assert.match(marketing, /make this game playable with friends tonight/);
+  assert.doesNotMatch(marketing, /cursor-screen\.jpg/);
+  assert.doesNotMatch(marketing, /cursor-screen-prompt\.jpg/);
   assert.match(marketing, /CUBE_2D_DARK\.svg/);
   assert.match(marketing, /agent-logos/);
   assert.match(marketing, />Cursor</);
@@ -300,11 +318,23 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(marketing, />Codex</);
   assert.match(marketing, />Replit</);
   assert.match(marketing, />Lovable</);
+  assert.match(marketing, />Grok</);
+  assert.match(marketing, /grok\.svg/);
+  assert.match(marketing, /agent-marquee/);
+  assert.match(marketing, /loki-mark\.png/);
+  assert.match(marketing, /loki-app-icon-dark\.png/);
   assert.match(marketing, /game-stage/);
   assert.match(marketing, /feature-stack/);
   assert.match(marketing, /scene-phone/);
-  assert.match(marketing, /scene-lobby/);
-  assert.match(marketing, /scene-catalog/);
+  assert.match(marketing, /share-phone/);
+  assert.match(marketing, /joining now/);
+  assert.doesNotMatch(marketing, /phone-share\.png/);
+  assert.match(marketing, /scene-rooms/);
+  assert.match(marketing, /scene-board/);
+  assert.match(marketing, /loki-game-montage\.mp4/);
+  assert.doesNotMatch(marketing, /Maya fired C4/);
+  assert.doesNotMatch(marketing, /share-browser/);
+  assert.doesNotMatch(marketing, /In review/);
   assert.doesNotMatch(marketing, /class="free-plan"/);
   assert.doesNotMatch(marketing, /Free to start/);
   assert.match(marketing, /Battleship/);
@@ -320,7 +350,11 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(marketing, />Get Started</g);
   assert.doesNotMatch(marketing, />Start free</);
   assert.doesNotMatch(marketing, />Start building</);
-  assert.match(marketing, /href="\/hosting"/);
+  assert.match(marketing, /href="\/product#hosting"/);
+  assert.match(marketing, /href="\/product#multiplayer"/);
+  assert.match(marketing, /href="\/product#distribution"/);
+  assert.match(marketing, /href="\/product#agents"/);
+  assert.match(marketing, /href="\/product#sdk"/);
   assert.match(marketing, /href="\/pricing"/);
   assert.match(marketing, /href="\/about"/);
   assert.match(marketing, /href="\/contact"/);
@@ -337,11 +371,41 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   const terms = renderMarketingPage(config, "/terms");
   assert.match(terms, /Placeholder text/);
   assert.match(terms, /Terms of Service/);
+  const product = renderMarketingPage(config, "/product");
+  assert.match(product, /The whole path to play/);
+  assert.match(product, /id="hosting"/);
+  assert.match(product, /id="multiplayer"/);
+  assert.match(product, /id="distribution"/);
+  assert.match(product, /id="agents"/);
+  assert.match(product, /id="sdk"/);
+  assert.match(product, /A home for every build/);
+  assert.match(product, /Rooms without a server project/);
+  assert.match(product, /Private first\. Public when you mean it/);
+  assert.match(product, /Built for the Agentic AI Era/);
+  assert.match(product, /One protocol\. Four clients/);
   assert.match(renderMarketingPage(config, "/hosting"), /A home for every build/);
+  assert.match(renderMarketingPage(config, "/hosting"), /id="hosting"/);
   assert.match(renderMarketingPage(config, "/pricing"), /Start free/);
-  assert.match(renderMarketingPage(config, "/pricing"), /<p class="price">\$0<\/p>/);
+  assert.match(renderMarketingPage(config, "/pricing"), /<p class="pricing-amount">\$0<\/p>/);
+  assert.match(renderMarketingPage(config, "/pricing"), /\$12/);
+  assert.match(renderMarketingPage(config, "/pricing"), /\$8/);
+  assert.match(renderMarketingPage(config, "/pricing"), /pricing-grid/);
+  assert.match(renderMarketingPage(config, "/pricing"), /Compare features across plans/);
+  assert.match(marketing, /pricing-grid/);
+  assert.match(marketing, /\$12/);
+  assert.doesNotMatch(marketing, /Compare features across plans/);
+  assert.match(renderMarketingPage(config, "/pricing"), /pricing-grid/);
+  assert.match(renderMarketingPage(config, "/pricing"), /Compare features across plans/);
+  assert.match(marketing, /pricing-grid/);
+  assert.match(marketing, /\$12/);
+  assert.doesNotMatch(marketing, /Compare features across plans/);
+  assert.match(marketing, /Creator Log in/);
+  assert.doesNotMatch(marketing, />Log in</);
+  assert.doesNotMatch(marketing, /Play ↗/);
+  assert.doesNotMatch(marketing, /Play games ↗/);
   const docsHome = renderDocsPage(config);
   assert.match(docsHome, /href="https:\/\/lokiplay\.cc\/" aria-label="Loki home"/);
+  assert.match(docsHome, /loki-mark\.png/);
   assert.match(docsHome, /LOKI \/ Docs/);
   assert.match(docsHome, /Start --> Docs home/);
   assert.match(docsHome, /You keep the game/);
@@ -393,6 +457,9 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
     assert.doesNotMatch(renderDocsPage(config, route), /docs-safety/);
   }
   assert.match(creator, /href="https:\/\/lokiplay\.cc\/" aria-label="Loki home"/);
+  assert.match(creator, /loki-mark\.png/);
+  assert.match(player, /loki-mark\.png/);
+  assert.match(operator, /loki-mark\.png/);
   assert.doesNotMatch(creator, /Loki \/ Creator/);
   assert.match(creator, /window\.location\.pathname === "\/signup"/);
   assert.doesNotMatch(creator, /Editorial Studio \/ 03/);
@@ -583,6 +650,42 @@ test("web server delivers the active immutable release through a sandbox shell",
   assert.equal(shell.status, 200);
   const namedShell = await fetch(`${origin}/play/studio/counter-party`);
   assert.equal(namedShell.status, 200);
+  assert.match(shell.headers.get("content-security-policy")!, /worker-src 'self'/);
+  assert.match(shell.headers.get("content-security-policy")!, /manifest-src 'self'/);
+
+  const uuidManifest = await fetch(`${origin}/play/${project.id}/app.webmanifest`);
+  assert.equal(uuidManifest.status, 200);
+  assert.match(
+    uuidManifest.headers.get("content-type") ?? "",
+    /application\/manifest\+json/,
+  );
+  const uuidManifestJson = await uuidManifest.json() as {
+    display: string;
+    start_url: string;
+  };
+  assert.equal(uuidManifestJson.display, "standalone");
+  assert.equal(uuidManifestJson.start_url, `/play/${project.id}`);
+
+  const slugManifest = await fetch(
+    `${origin}/play/studio/counter-party/app.webmanifest`,
+  );
+  assert.equal(slugManifest.status, 200);
+  const slugManifestJson = await slugManifest.json() as {
+    display: string;
+    start_url: string;
+    id: string;
+  };
+  assert.equal(slugManifestJson.display, "standalone");
+  assert.equal(slugManifestJson.start_url, "/play/studio/counter-party");
+  assert.equal(slugManifestJson.id, "/play/studio/counter-party");
+
+  const serviceWorker = await fetch(`${origin}/play/sw.js`);
+  assert.equal(serviceWorker.status, 200);
+  assert.match(
+    serviceWorker.headers.get("content-type") ?? "",
+    /javascript/,
+  );
+  assert.match(await serviceWorker.text(), /respondWith\(fetch\(event\.request\)\)/);
   assert.match(await namedShell.text(), new RegExp(release.id));
   assert.match(
     shell.headers.get("content-security-policy")!,

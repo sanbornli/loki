@@ -1,4 +1,5 @@
 import {
+  brandMarkHtml,
   type ProductPageConfig,
   renderProductPage,
 } from "./product-theme.js";
@@ -135,7 +136,7 @@ const pageStyles = `
 
 const body = `
   <header class="site-header">
-    <a class="wordmark" href="/" aria-label="Loki home">LOKI</a>
+    <a class="brand" href="/" aria-label="Loki home">${brandMarkHtml()}<span>LOKI</span></a>
     <nav aria-label="Primary navigation">
       <a href="#catalog">Catalog</a>
       <a href="#recent">Recent</a>

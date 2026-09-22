@@ -162,15 +162,6 @@ body.creator-dashboard .page-shell {
   width: 100%;
 }
 
-img.brand-mark {
-  display: block;
-  width: 1.45rem;
-  height: 1.45rem;
-  border: 0;
-  object-fit: contain;
-  transform: none;
-}
-
 .dashboard-shell {
   display: grid;
   grid-template-columns: 15.5rem minmax(0, 1fr);
@@ -388,6 +379,7 @@ img.brand-mark {
   gap: 0.5rem;
   padding: 1rem 1.25rem;
   background: var(--ink);
+  border-top: 2px solid var(--amber);
 }
 
 .metric span {
@@ -1117,8 +1109,9 @@ const pageBody = `
           </div>
 
           <section class="instruction-callout" aria-labelledby="instruction-title">
+            <p class="eyebrow">Getting your game online</p>
             <h2 id="instruction-title">Install Loki with your coding agent.</h2>
-            <p>Create a project, then hand its prompt to the coding agent that already works on your game's repository.</p>
+            <p>No manual setup. Create a project, then hand its prompt to the coding agent that already works on your game's repository.</p>
             <ol class="instruction-steps">
               <li>
                 <span class="step-number">01</span>

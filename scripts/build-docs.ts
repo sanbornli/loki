@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -10,6 +10,7 @@ import {
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputDirectory = resolve(repositoryRoot, "dist/docs");
+const assetDirectory = resolve(outputDirectory, "assets");
 const config = {
   apiOrigin: "https://api.lokiplay.cc",
   supabaseUrl: "https://auth.lokiplay.cc",
@@ -27,7 +28,7 @@ const agentsMarkdown = await readFile(
 
 const llmsFull = buildLlmsFull(agentsMarkdown);
 
-await mkdir(outputDirectory, { recursive: true });
+await mkdir(assetDirectory, { recursive: true });
 
 await Promise.all([
   ...docsRoutes.map(async (route) => {
@@ -52,6 +53,21 @@ await Promise.all([
 
 /llms-full.txt
   Content-Type: text/plain; charset=utf-8
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
 `,
+  ),
+  ...[
+    "loki-mark.png",
+    "loki-app-icon-dark.png",
+    "loki-app-icon-light.png",
+    "loki-lockup-dark.png",
+    "loki-lockup-light.png",
+  ].map((fileName) =>
+    copyFile(
+      resolve(repositoryRoot, "apps/web/src/assets/brand", fileName),
+      resolve(assetDirectory, fileName),
+    ),
   ),
 ]);
