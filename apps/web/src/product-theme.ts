@@ -39,6 +39,12 @@ export function escapeHtml(value: string): string {
  * Serializes server-owned configuration into an inline script without allowing
  * values such as "</script>" to escape the JavaScript context.
  */
+export const brandMarkSrc = "/assets/loki-mark.png";
+
+export function brandMarkHtml(): string {
+  return `<img class="brand-mark" src="${brandMarkSrc}" alt="" width="28" height="28">`;
+}
+
 export function serializeInlineJson(value: unknown): string {
   return JSON.stringify(value)
     .replace(/</g, "\\u003c")

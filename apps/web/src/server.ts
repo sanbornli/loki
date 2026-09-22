@@ -21,6 +21,17 @@ import { gameSecurityHeaders, renderPlayerShell } from "./player.js";
 import { renderPlayerPlatformPage } from "./player-platform-page.js";
 import type { ProductPageConfig } from "./product-theme.js";
 
+const staticImageAssets: Record<string, { file: string; type: string }> = {
+  "/assets/loki-vibecoded-game-montage.png": {
+    file: "./assets/loki-vibecoded-game-montage.png",
+    type: "image/png",
+  },
+  "/assets/loki-mark.png": {
+    file: "./assets/brand/loki-mark.png",
+    type: "image/png",
+  },
+};
+
 export interface WebDependencies {
   platform: PlatformOperations;
   deployments: {
@@ -127,20 +138,18 @@ export function createWebHandler(dependencies: WebDependencies) {
         response.end(`${JSON.stringify({ ok, checks })}\n`);
         return;
       }
-      if (
-        request.method === "GET" &&
-        url.pathname === "/assets/loki-vibecoded-game-montage.png"
-      ) {
-        const image = await readFile(
-          new URL("./assets/loki-vibecoded-game-montage.png", import.meta.url),
-        );
-        response.writeHead(200, {
-          "content-type": "image/png",
-          "cache-control": "public, max-age=31536000, immutable",
-          "x-content-type-options": "nosniff",
-        });
-        response.end(image);
-        return;
+      if (request.method === "GET") {
+        const staticAsset = staticImageAssets[url.pathname];
+        if (staticAsset) {
+          const image = await readFile(new URL(staticAsset.file, import.meta.url));
+          response.writeHead(200, {
+            "content-type": staticAsset.type,
+            "cache-control": "public, max-age=31536000, immutable",
+            "x-content-type-options": "nosniff",
+          });
+          response.end(image);
+          return;
+        }
       }
       const hostname = requestHostname(request);
       const playerHost = hostname === "play.lokiplay.cc";

@@ -1,4 +1,5 @@
 import {
+  brandMarkHtml,
   renderProductPage,
   type ProductPageConfig,
 } from "./product-theme.js";
@@ -8,11 +9,13 @@ body.creator-auth {
   overflow: hidden;
 }
 
-body.creator-auth .site-header {
+body.creator-auth .site-header,
+body.creator-dashboard .site-header {
   display: none;
 }
 
-body.creator-auth .page-shell {
+body.creator-auth .page-shell,
+body.creator-dashboard .page-shell {
   width: 100%;
   max-width: none;
   margin: 0;
@@ -159,82 +162,309 @@ body.creator-auth .page-shell {
   width: 100%;
 }
 
-.dashboard-hero {
+img.brand-mark {
+  display: block;
+  width: 1.45rem;
+  height: 1.45rem;
+  border: 0;
+  object-fit: contain;
+  transform: none;
+}
+
+.dashboard-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(15rem, 0.65fr);
-  gap: 3rem;
-  align-items: end;
-  min-height: 28rem;
-  padding: clamp(4rem, 9vw, 9rem) 0 clamp(3rem, 6vw, 5rem);
+  grid-template-columns: 15.5rem minmax(0, 1fr);
+  align-items: start;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.dashboard-shell.sidebar-collapsed {
+  grid-template-columns: 4.75rem minmax(0, 1fr);
+}
+
+.dashboard-sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  flex-direction: column;
+  gap: 2.25rem;
+  padding: 1.75rem 1.25rem;
+  border-right: 1px solid var(--line-strong);
+  background: var(--ink-raised);
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 1.5rem;
   border-bottom: 1px solid var(--line);
 }
 
-.dashboard-hero h1 {
-  max-width: 12ch;
+.dashboard-sidebar .brand {
+  min-width: 0;
+}
+
+.sidebar-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+
+.sidebar-toggle svg {
+  width: 1rem;
+  height: 1rem;
+  stroke: currentColor;
+}
+
+.dashboard-shell.sidebar-collapsed .sidebar-head {
+  justify-content: center;
+}
+
+.dashboard-shell.sidebar-collapsed .brand {
+  display: none;
+}
+
+.dashboard-shell.sidebar-collapsed .brand-word,
+.dashboard-shell.sidebar-collapsed .nav-label,
+.dashboard-shell.sidebar-collapsed .account-label,
+.dashboard-shell.sidebar-collapsed .logout-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.dashboard-shell.sidebar-collapsed .sidebar-toggle svg {
+  transform: scaleX(-1);
+}
+
+.dashboard-shell.sidebar-collapsed .nav-item {
+  justify-content: center;
+  padding-right: 0.55rem;
+  padding-left: 0.55rem;
+}
+
+.dashboard-shell.sidebar-collapsed .sidebar-account {
+  justify-items: center;
+}
+
+.sidebar-nav {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.75rem 0.75rem;
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.nav-item svg {
+  flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  stroke: currentColor;
+}
+
+.nav-item:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.nav-item[aria-current="page"] {
+  border-left-color: var(--amber);
+  background: var(--ink);
+  color: var(--amber);
+}
+
+.sidebar-account {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.sidebar-account .account-label {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.sidebar-account .text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  width: calc(100% + 1.3rem);
+  margin-left: -0.65rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid transparent;
+  text-decoration: none;
+}
+
+.sidebar-account .text-button:hover {
+  border-color: var(--line);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.dashboard-shell.sidebar-collapsed .sidebar-account .text-button {
+  justify-content: center;
+  width: 2rem;
+  margin-left: 0;
+  padding: 0.55rem;
+}
+
+.sidebar-toggle .icon-menu,
+.sidebar-toggle .icon-close {
+  display: none;
+}
+
+.sidebar-account .text-button svg {
+  flex: none;
+}
+
+.dashboard-content {
+  min-width: 0;
+  padding: clamp(1.5rem, 3vw, 3rem);
+}
+
+.panel-header {
+  margin-bottom: 2rem;
+}
+
+.panel-header h1 {
   margin: 0;
-  font-size: clamp(2.75rem, 5.5vw, 5.5rem);
+  font-size: clamp(2rem, 4vw, 3.2rem);
   font-weight: 580;
-  letter-spacing: -0.075em;
+  letter-spacing: -0.06em;
   line-height: 1;
 }
 
-.dashboard-summary {
+.nav-panel {
   display: grid;
-  gap: 1rem;
-  align-content: end;
+  gap: 2rem;
+}
+
+.dashboard-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--line);
+  background: var(--line);
 }
 
 .metric {
   display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: baseline;
-  padding: 0.85rem 0;
-  border-bottom: 1px solid var(--line);
+  gap: 0.5rem;
+  padding: 1rem 1.25rem;
+  background: var(--ink);
 }
 
 .metric span {
   color: var(--muted);
-  font-size: 0.73rem;
-  letter-spacing: 0.06em;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .metric strong {
   font-family: var(--mono);
-  font-size: 1rem;
+  font-size: 1.6rem;
   font-weight: 500;
 }
 
-.workspace {
-  display: grid;
-  grid-template-columns: minmax(16rem, 0.62fr) minmax(0, 1.75fr);
-  gap: clamp(2rem, 6vw, 7rem);
-  padding-top: clamp(3rem, 7vw, 6rem);
+.instruction-callout {
+  padding: clamp(1.25rem, 3vw, 2rem);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--amber);
+  background: var(--ink-raised);
 }
 
-.workspace-aside {
-  align-self: start;
-  position: sticky;
-  top: 2rem;
-}
-
-.workspace-aside h2 {
-  max-width: 11ch;
+.instruction-callout h2 {
   margin: 0;
-  font-size: clamp(2rem, 3.5vw, 3.8rem);
-  font-weight: 570;
-  letter-spacing: -0.055em;
-  line-height: 1;
+  font-size: clamp(1.4rem, 2.6vw, 2rem);
+  font-weight: 580;
+  letter-spacing: -0.045em;
+  line-height: 1.1;
 }
 
-.workspace-aside p {
-  max-width: 25rem;
-  margin: 1.2rem 0 1.8rem;
+.instruction-callout > p {
+  max-width: 44rem;
+  margin: 0.65rem 0 0;
   color: var(--muted);
 }
 
-.workspace-main {
-  min-width: 0;
+.instruction-steps {
+  display: grid;
+  gap: 1.1rem;
+  margin: 1.5rem 0 0;
+  padding: 1.5rem 0 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.instruction-steps li {
+  display: grid;
+  grid-template-columns: 1.6rem 1fr;
+  gap: 0.85rem;
+  align-items: baseline;
+}
+
+.instruction-steps .step-number {
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.instruction-steps strong {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--paper);
+  font-size: 0.92rem;
+}
+
+.instruction-steps p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.instruction-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
 }
 
 .onboarding-card {
@@ -257,48 +487,54 @@ body.creator-auth .page-shell {
   color: var(--muted);
 }
 
-.create-project {
-  margin-bottom: clamp(3rem, 7vw, 6rem);
-  padding: clamp(1.2rem, 3vw, 2rem);
-  border: 1px solid var(--line);
+.field {
+  align-content: start;
 }
 
-.create-project summary {
-  display: flex;
+.field select {
+  appearance: none;
+  padding-right: 2.75rem;
+  background-color: #0c0c09;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23f4efe3' d='M6 8 0 0h12z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1.05rem center;
+  background-size: 0.7rem 0.48rem;
+}
+
+.project-focus {
+  display: grid;
+  width: 100%;
+  justify-items: start;
+  gap: 1.25rem;
+}
+
+#project-detail {
+  width: 100%;
+  min-width: 0;
+}
+
+.back-button {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  cursor: pointer;
-  font-size: 0.76rem;
-  font-weight: 720;
-  letter-spacing: 0.09em;
-  list-style: none;
+  gap: 0.45rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--amber);
+  font-size: 0.73rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
-.create-project summary::-webkit-details-marker {
-  display: none;
-}
-
-.create-project summary::after {
-  color: var(--amber);
-  content: "+";
-  font-family: var(--mono);
-  font-size: 1.3rem;
-  font-weight: 400;
-}
-
-.create-project[open] summary::after {
-  content: "−";
-}
-
-.create-project form {
+.create-project {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  margin-top: 2rem;
-  padding-top: 2rem;
-  border-top: 1px solid var(--line);
+  align-items: start;
+  gap: 1rem 1.25rem;
+  width: min(100%, 46rem);
+  padding: clamp(1.2rem, 3vw, 2rem);
+  border: 1px solid var(--line);
 }
 
 .create-project .field:first-child,
@@ -307,11 +543,71 @@ body.creator-auth .page-shell {
   grid-column: 1 / -1;
 }
 
-.project-list {
+.project-grid {
   display: grid;
-  gap: 1px;
-  border: 1px solid var(--line);
-  background: var(--line);
+  grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr));
+  gap: 1rem;
+}
+
+.project-tile {
+  display: flex;
+  aspect-ratio: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 1.15rem;
+  border: 1px solid var(--line-strong);
+  background: var(--ink-raised);
+  color: var(--paper);
+  text-align: left;
+}
+
+.project-tile:hover {
+  border-color: var(--amber);
+}
+
+.project-tile-name {
+  overflow-wrap: anywhere;
+  margin-top: auto;
+  font-size: 1.35rem;
+  font-weight: 570;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+}
+
+.project-tile-slug {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+}
+
+.project-tile-create {
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  border-style: dashed;
+  background: transparent;
+  color: var(--muted);
+}
+
+.project-tile-plus {
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 2.6rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.project-tile-create-label {
+  max-width: 10rem;
+  font-size: 0.78rem;
+  font-weight: 680;
+  letter-spacing: 0.04em;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .project-card {
@@ -580,26 +876,119 @@ body.creator-auth .page-shell {
     transform: none;
   }
 
-  .dashboard-hero,
-  .workspace {
+  .dashboard-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 75rem) {
+  .dashboard-shell,
+  .dashboard-shell.sidebar-collapsed {
     grid-template-columns: 1fr;
   }
 
-  .dashboard-hero {
-    gap: 2rem;
+  .dashboard-sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    height: auto;
+    gap: 0;
+    padding: 0.9rem 1rem;
   }
 
-  .dashboard-summary {
-    max-width: 30rem;
+  .sidebar-head {
+    padding-bottom: 0;
+    border-bottom: 0;
   }
 
-  .workspace-aside {
+  .sidebar-nav,
+  .sidebar-account {
+    display: none;
+  }
+
+  .dashboard-shell.sidebar-menu-open .sidebar-nav,
+  .dashboard-shell.sidebar-menu-open .sidebar-account {
+    display: grid;
+  }
+
+  .dashboard-shell.sidebar-menu-open .sidebar-nav {
+    margin-top: 0.9rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--line);
+  }
+
+  .dashboard-shell.sidebar-menu-open .sidebar-account {
+    margin-top: 0.35rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--line);
+  }
+
+  .sidebar-toggle .icon-collapse {
+    display: none;
+  }
+
+  .sidebar-toggle .icon-menu {
+    display: block;
+  }
+
+  .dashboard-shell.sidebar-menu-open .sidebar-toggle .icon-menu {
+    display: none;
+  }
+
+  .dashboard-shell.sidebar-menu-open .sidebar-toggle .icon-close {
+    display: block;
+  }
+
+  .dashboard-shell.sidebar-collapsed .brand {
+    display: inline-flex;
+  }
+
+  .dashboard-shell.sidebar-collapsed .brand-word,
+  .dashboard-shell.sidebar-collapsed .nav-label,
+  .dashboard-shell.sidebar-collapsed .account-label,
+  .dashboard-shell.sidebar-collapsed .logout-label {
     position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  .dashboard-shell.sidebar-collapsed .nav-item,
+  .dashboard-shell.sidebar-collapsed .sidebar-head {
+    justify-content: flex-start;
+  }
+
+  .dashboard-shell.sidebar-collapsed .nav-item {
+    padding: 0.75rem;
+  }
+
+  .dashboard-shell.sidebar-collapsed .sidebar-account {
+    justify-items: stretch;
+  }
+
+  .dashboard-shell.sidebar-collapsed .sidebar-account .text-button {
+    justify-content: flex-start;
+    width: calc(100% + 1.3rem);
+    margin-left: -0.65rem;
+    padding: 0.45rem 0.65rem;
+  }
+
+  .nav-item {
+    border-bottom: 0;
+    white-space: normal;
+  }
+
+  .nav-item[aria-current="page"] {
+    border-bottom-color: transparent;
+    border-left-color: var(--amber);
   }
 }
 
 @media (max-width: 43rem) {
-  .create-project form,
+  .create-project,
   .integration-panel {
     grid-template-columns: 1fr;
   }
@@ -626,21 +1015,18 @@ const pageBody = `
   <a class="skip-link" href="#main-content">Skip to content</a>
   <header class="site-header">
     <a class="brand" href="https://lokiplay.cc/" aria-label="Loki home">
-      <span class="brand-mark" aria-hidden="true"></span>
+      ${brandMarkHtml()}
       <span>LOKI</span>
     </a>
     <p class="header-note">Independent games, released with intent</p>
-    <div class="header-actions">
-      <span class="account-label muted" id="account-label" hidden></span>
-      <button class="button button-quiet" id="logout-button" type="button" hidden>Log out</button>
-    </div>
+    <div class="header-actions"></div>
   </header>
 
   <main class="page-shell" id="main-content">
     <section class="auth-layout" id="auth-view" aria-labelledby="auth-title">
       <div class="auth-hero">
         <a class="brand" href="https://lokiplay.cc/" aria-label="Loki home">
-          <span class="brand-mark" aria-hidden="true"></span>
+          ${brandMarkHtml()}
           <span>LOKI</span>
         </a>
         <div class="auth-copy">
@@ -675,28 +1061,106 @@ const pageBody = `
       </div>
     </section>
 
-    <section id="dashboard-view" hidden aria-labelledby="dashboard-title">
-      <div class="dashboard-hero">
-        <div>
-          <p class="eyebrow">Creator desk / Live workspace</p>
-          <h1 id="dashboard-title">Your release room.</h1>
+    <div class="dashboard-shell" id="dashboard-view" hidden>
+      <aside class="dashboard-sidebar">
+        <div class="sidebar-head">
+          <a class="brand" href="https://lokiplay.cc/" aria-label="Loki home">
+            ${brandMarkHtml()}
+            <span class="brand-word">LOKI</span>
+          </a>
+          <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-expanded="true" aria-controls="dashboard-sidebar-nav" aria-label="Collapse sidebar">
+            <svg class="icon-collapse" viewBox="0 0 24 24" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M15 6 9 12l6 6"></path></svg>
+            <svg class="icon-menu" viewBox="0 0 24 24" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+            <svg class="icon-close" viewBox="0 0 24 24" fill="none" stroke-width="1.6" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+          </button>
         </div>
-        <div class="dashboard-summary" aria-label="Workspace summary">
-          <div class="metric"><span>Organizations</span><strong id="organization-count">0</strong></div>
-          <div class="metric"><span>Projects</span><strong id="project-count">0</strong></div>
-          <div class="metric"><span>Playable</span><strong id="playable-count">0</strong></div>
+        <nav class="sidebar-nav" id="dashboard-sidebar-nav" aria-label="Dashboard navigation">
+          <button class="nav-item" type="button" data-nav-target="nav-dashboard" aria-current="page" title="Dashboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><rect x="3" y="3" width="8" height="8"></rect><rect x="13" y="3" width="8" height="8"></rect><rect x="3" y="13" width="8" height="8"></rect><rect x="13" y="13" width="8" height="8"></rect></svg>
+            <span class="nav-label">Dashboard</span>
+          </button>
+          <button class="nav-item" type="button" data-nav-target="nav-projects" aria-current="false" title="Projects">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6z"></path></svg>
+            <span class="nav-label">Projects</span>
+          </button>
+          <button class="nav-item" type="button" data-nav-target="nav-earn" aria-current="false" title="Earn">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v10M9.5 9.5a2.5 2 0 0 1 2.5-1.5c1.4 0 2.5.7 2.5 1.8 0 2.3-5 1.6-5 4 0 1.1 1.1 1.8 2.5 1.8s2.5-.6 2.5-1.5"></path></svg>
+            <span class="nav-label">Earn</span>
+          </button>
+          <button class="nav-item" type="button" data-nav-target="nav-analytics" aria-current="false" title="Analytics">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><path d="M4 20V10M12 20V4M20 20v-7"></path></svg>
+            <span class="nav-label">Analytics</span>
+          </button>
+        </nav>
+        <div class="sidebar-account">
+          <span class="account-label" id="account-label" hidden></span>
+          <button class="text-button" id="logout-button" type="button" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" width="16" height="16"><path d="M9 6H5v12h4M10 12h9M15 8l4 4-4 4"></path></svg>
+            <span class="logout-label">Log out</span>
+          </button>
         </div>
-      </div>
+      </aside>
 
-      <div class="status-line" id="global-status" role="status" aria-live="polite" hidden></div>
-      <section class="workspace">
-        <aside class="workspace-aside">
-          <p class="eyebrow">Workspace</p>
-          <h2>Builds become releases here.</h2>
-          <p>Every deployment is preserved as an immutable record. Activation changes the live release, never its history.</p>
-        </aside>
+      <div class="dashboard-content">
+        <div class="status-line" id="global-status" role="status" aria-live="polite" hidden></div>
 
-        <div class="workspace-main">
+        <section class="nav-panel" id="nav-dashboard">
+          <div class="panel-header">
+            <p class="eyebrow">Creator desk</p>
+            <h1 id="dashboard-title">Dashboard</h1>
+          </div>
+
+          <div class="dashboard-metrics" aria-label="Workspace summary">
+            <div class="metric"><span>Organizations</span><strong id="organization-count">0</strong></div>
+            <div class="metric"><span>Projects</span><strong id="project-count">0</strong></div>
+            <div class="metric"><span>Playable</span><strong id="playable-count">0</strong></div>
+          </div>
+
+          <section class="instruction-callout" aria-labelledby="instruction-title">
+            <h2 id="instruction-title">Install Loki with your coding agent.</h2>
+            <p>Create a project, then hand its prompt to the coding agent that already works on your game's repository.</p>
+            <ol class="instruction-steps">
+              <li>
+                <span class="step-number">01</span>
+                <div>
+                  <strong>Create a project</strong>
+                  <p>Open Projects and create a project for your game. Each project gets its own agent prompt and release history.</p>
+                </div>
+              </li>
+              <li>
+                <span class="step-number">02</span>
+                <div>
+                  <strong>Copy the agent prompt</strong>
+                  <p>On the project card, click "Copy agent prompt" to copy the full integration prompt for that project.</p>
+                </div>
+              </li>
+              <li>
+                <span class="step-number">03</span>
+                <div>
+                  <strong>Paste it into your game agent</strong>
+                  <p>Paste the prompt into your coding agent's chat (Cursor, Claude Code, or similar) inside your game's repository.</p>
+                </div>
+              </li>
+              <li>
+                <span class="step-number">04</span>
+                <div>
+                  <strong>Let it run</strong>
+                  <p>The agent will install the official Loki packages, connect this project, and ship the build.</p>
+                </div>
+              </li>
+            </ol>
+            <div class="instruction-actions">
+              <button class="button button-primary" type="button" data-nav-link="nav-projects">Go to projects</button>
+            </div>
+          </section>
+        </section>
+
+        <section class="nav-panel" id="nav-projects" hidden>
+          <div class="panel-header" id="projects-heading">
+            <p class="eyebrow">Creator desk</p>
+            <h1>Projects</h1>
+          </div>
+
           <section class="onboarding-card" id="onboarding-view" aria-labelledby="onboarding-title" hidden>
             <p class="eyebrow">First step</p>
             <h2 id="onboarding-title">Name your studio.</h2>
@@ -719,9 +1183,13 @@ const pageBody = `
           </section>
 
           <div id="projects-view" hidden>
-            <details class="create-project" id="create-project">
-              <summary>Create a new project</summary>
-              <form id="project-form">
+            <div id="project-browser">
+              <div class="project-grid" id="project-grid"></div>
+            </div>
+
+            <section class="project-focus" id="project-create-view" hidden>
+              <button class="back-button" id="project-create-back" type="button">← Back</button>
+              <form class="create-project" id="project-form">
                 <div class="field">
                   <label for="project-organization">Organization</label>
                   <select id="project-organization" name="organizationId" required></select>
@@ -740,21 +1208,38 @@ const pageBody = `
                   <button class="button button-primary" type="submit">Create project</button>
                 </div>
               </form>
-            </details>
+            </section>
 
-            <div class="section-label">
-              <h2>Projects</h2>
-              <span id="project-list-count">00 entries</span>
-            </div>
-            <div class="project-list" id="project-list"></div>
-            <div class="empty-state" id="project-empty" hidden>
-              <strong>No projects on the desk.</strong>
-              <p>Create your first project, then copy its agent prompt to integrate and ship the browser build.</p>
-            </div>
+            <section class="project-focus" id="project-detail-view" hidden>
+              <button class="back-button" id="project-detail-back" type="button">← Back</button>
+              <div id="project-detail"></div>
+            </section>
           </div>
-        </div>
-      </section>
-    </section>
+        </section>
+
+        <section class="nav-panel" id="nav-earn" hidden>
+          <div class="panel-header">
+            <p class="eyebrow">Creator desk</p>
+            <h1>Earn</h1>
+          </div>
+          <div class="empty-state">
+            <strong>Earnings are coming soon.</strong>
+            <p>Revenue and payout tools for published releases will appear here.</p>
+          </div>
+        </section>
+
+        <section class="nav-panel" id="nav-analytics" hidden>
+          <div class="panel-header">
+            <p class="eyebrow">Creator desk</p>
+            <h1>Analytics</h1>
+          </div>
+          <div class="empty-state">
+            <strong>Analytics are coming soon.</strong>
+            <p>Player and session insights for your releases will appear here.</p>
+          </div>
+        </section>
+      </div>
+    </div>
   </main>
 `;
 
@@ -775,7 +1260,9 @@ const creatorScript = String.raw`
       overview: null,
       projects: [],
       organizations: [],
-      deployments: new Map()
+      deployments: new Map(),
+      projectPane: "grid",
+      selectedProjectId: ""
     };
 
     const byId = (id) => document.getElementById(id);
@@ -786,7 +1273,7 @@ const creatorScript = String.raw`
     const globalStatus = byId("global-status");
     const onboardingView = byId("onboarding-view");
     const projectsView = byId("projects-view");
-    const projectList = byId("project-list");
+    const projectGrid = byId("project-grid");
 
     function readToken() {
       try {
@@ -887,7 +1374,89 @@ const creatorScript = String.raw`
 
     function syncAuthLayout() {
       document.body.classList.toggle("creator-auth", !authView.hidden);
+      document.body.classList.toggle("creator-dashboard", !dashboardView.hidden);
     }
+
+    const navItems = Array.from(document.querySelectorAll(".nav-item"));
+    const navPanels = Array.from(document.querySelectorAll(".nav-panel"));
+
+    function setActiveNav(target) {
+      for (const item of navItems) {
+        item.setAttribute("aria-current", item.dataset.navTarget === target ? "page" : "false");
+      }
+      for (const panel of navPanels) {
+        panel.hidden = panel.id !== target;
+      }
+    }
+
+    for (const item of navItems) {
+      item.addEventListener("click", () => setActiveNav(item.dataset.navTarget));
+    }
+
+    for (const link of document.querySelectorAll("[data-nav-link]")) {
+      link.addEventListener("click", () => setActiveNav(link.dataset.navLink));
+    }
+
+    const SIDEBAR_KEY = "loki.creator.sidebar-collapsed";
+    const compactNavQuery = window.matchMedia("(max-width: 75rem)");
+
+    function isCompactNav() {
+      return compactNavQuery.matches;
+    }
+
+    function syncSidebarToggle() {
+      const toggle = byId("sidebar-toggle");
+      if (isCompactNav()) {
+        const open = dashboardView.classList.contains("sidebar-menu-open");
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+        toggle.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+        return;
+      }
+      const collapsed = dashboardView.classList.contains("sidebar-collapsed");
+      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      toggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+    }
+
+    function setSidebarCollapsed(collapsed) {
+      dashboardView.classList.toggle("sidebar-collapsed", collapsed);
+      try {
+        sessionStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0");
+      } catch {
+        // The layout still updates for this page view.
+      }
+      syncSidebarToggle();
+    }
+
+    function setMenuOpen(open) {
+      dashboardView.classList.toggle("sidebar-menu-open", open);
+      syncSidebarToggle();
+    }
+
+    byId("sidebar-toggle").addEventListener("click", () => {
+      if (isCompactNav()) {
+        setMenuOpen(!dashboardView.classList.contains("sidebar-menu-open"));
+        return;
+      }
+      setSidebarCollapsed(!dashboardView.classList.contains("sidebar-collapsed"));
+    });
+
+    for (const item of navItems) {
+      item.addEventListener("click", () => {
+        if (isCompactNav()) setMenuOpen(false);
+      });
+    }
+
+    compactNavQuery.addEventListener("change", () => {
+      if (!isCompactNav()) dashboardView.classList.remove("sidebar-menu-open");
+      syncSidebarToggle();
+    });
+
+    try {
+      if (sessionStorage.getItem(SIDEBAR_KEY) === "1") setSidebarCollapsed(true);
+    } catch {
+      // Leave the sidebar expanded when storage is unavailable.
+    }
+    syncSidebarToggle();
 
     function signOut(message) {
       writeToken("");
@@ -895,7 +1464,10 @@ const creatorScript = String.raw`
       state.projects = [];
       state.organizations = [];
       state.deployments.clear();
-      clear(projectList);
+      state.projectPane = "grid";
+      state.selectedProjectId = "";
+      clear(projectGrid);
+      clear(byId("project-detail"));
       dashboardView.hidden = true;
       authView.hidden = false;
       syncAuthLayout();
@@ -957,6 +1529,7 @@ const creatorScript = String.raw`
       onboardingView.hidden = hasOrganizations;
       projectsView.hidden = !hasOrganizations;
       if (!hasOrganizations) {
+        setActiveNav("nav-projects");
         byId("organization-name").focus();
         return;
       }
@@ -981,15 +1554,81 @@ const creatorScript = String.raw`
     }
 
     function renderProjects() {
-      clear(projectList);
-      byId("project-list-count").textContent =
-        String(state.projects.length).padStart(2, "0") +
-        (state.projects.length === 1 ? " entry" : " entries");
-      byId("project-empty").hidden = state.projects.length !== 0;
-      projectList.hidden = state.projects.length === 0;
+      clear(projectGrid);
       for (const project of state.projects) {
-        projectList.appendChild(createProjectCard(project));
+        projectGrid.appendChild(createProjectTile(project));
       }
+      projectGrid.appendChild(createNewProjectTile());
+      showProjectScreen();
+    }
+
+    function showProjectScreen() {
+      const pane = state.projectPane === "detail" && state.selectedProjectId ? "detail" : state.projectPane;
+      byId("projects-heading").hidden = pane !== "grid";
+      byId("project-browser").hidden = pane !== "grid";
+      byId("project-create-view").hidden = pane !== "create";
+      byId("project-detail-view").hidden = pane !== "detail";
+      if (pane !== "detail") return;
+      const project = state.projects.find((item) => item && item.id === state.selectedProjectId);
+      const detail = byId("project-detail");
+      clear(detail);
+      if (!project) {
+        state.projectPane = "grid";
+        state.selectedProjectId = "";
+        byId("projects-heading").hidden = false;
+        byId("project-browser").hidden = false;
+        byId("project-detail-view").hidden = true;
+        return;
+      }
+      detail.appendChild(createProjectCard(project));
+    }
+
+    function createProjectTile(project) {
+      const projectId = text(project && project.id, "");
+      const tile = element("button", { className: "project-tile", type: "button" });
+      tile.appendChild(element("span", {
+        className: "project-kicker",
+        text: organizationName(project && project.organizationId)
+      }));
+      const pill = element("span", {
+        className: "pill",
+        text: projectStateLabel(project && project.state)
+      });
+      pill.dataset.state = text(project && project.state, "draft");
+      tile.appendChild(pill);
+      tile.appendChild(element("span", {
+        className: "project-tile-name",
+        text: text(project && project.name, "Untitled project")
+      }));
+      tile.appendChild(element("span", {
+        className: "project-tile-slug",
+        text: playPathForProject(project)
+      }));
+      tile.addEventListener("click", () => {
+        state.projectPane = "detail";
+        state.selectedProjectId = projectId;
+        showProjectScreen();
+      });
+      return tile;
+    }
+
+    function createNewProjectTile() {
+      const tile = element("button", {
+        className: "project-tile project-tile-create",
+        type: "button"
+      });
+      tile.appendChild(element("span", { className: "project-tile-plus", text: "+" }));
+      tile.appendChild(element("span", {
+        className: "project-tile-create-label",
+        text: "Create a new project"
+      }));
+      tile.addEventListener("click", () => {
+        state.projectPane = "create";
+        state.selectedProjectId = "";
+        showProjectScreen();
+        byId("project-name").focus();
+      });
+      return tile;
     }
 
     function organizationRecord(id) {
@@ -1087,10 +1726,10 @@ const creatorScript = String.raw`
       integrationPanel.setAttribute("aria-label", "Theme 03 integration");
 
       const integrationCopy = element("div", { className: "integration-copy" });
-      integrationCopy.appendChild(element("h4", { text: "Theme 03 / Integration" }));
-      integrationCopy.appendChild(element("h5", { text: "Connect an agent. Ship from the repository." }));
+      integrationCopy.appendChild(element("h4", { text: "Install via your coding agent" }));
+      integrationCopy.appendChild(element("h5", { text: "Copy the prompt. Paste it into your game agent." }));
       integrationCopy.appendChild(element("p", {
-        text: "The project-specific prompt gives your coding agent the official packages, platform constraints, build checks, and exact connect and ship commands."
+        text: "Click \"Copy agent prompt\", then paste it directly into your game's coding agent chat (Cursor, Claude Code, or similar) inside your game's repository. The agent will install the official Loki packages, connect this project, and ship a playable build for you."
       }));
       const integrationActions = element("div", { className: "integration-actions" });
       const promptButton = element("button", {
@@ -1725,6 +2364,18 @@ const creatorScript = String.raw`
       if (!slugEdited) byId("project-slug").value = slugify(event.currentTarget.value);
     });
 
+    byId("project-create-back").addEventListener("click", () => {
+      state.projectPane = "grid";
+      state.selectedProjectId = "";
+      showProjectScreen();
+    });
+
+    byId("project-detail-back").addEventListener("click", () => {
+      state.projectPane = "grid";
+      state.selectedProjectId = "";
+      showProjectScreen();
+    });
+
     byId("project-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -1742,7 +2393,8 @@ const creatorScript = String.raw`
         });
         form.reset();
         slugEdited = false;
-        byId("create-project").open = false;
+        state.projectPane = "grid";
+        state.selectedProjectId = "";
         await loadOverview({ quiet: true });
       } catch (error) {
         showNotice(notice, error instanceof Error ? error.message : "Could not create project.", "error");
