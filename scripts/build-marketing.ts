@@ -79,6 +79,8 @@ await Promise.all([
     "phone-share.png",
     "loki-game-montage.mp4",
     "loki-game-montage.webp",
+    "loki-world-network.mp4",
+    "loki-world-network.webp",
   ].map((fileName) =>
     copyFile(
       resolve(repositoryRoot, "apps/web/src/assets/marketing", fileName),

@@ -25,11 +25,6 @@ export const productSections = [
     label: "Agents",
     description: "One source of truth for coding agents.",
   },
-  {
-    id: "sdk",
-    label: "SDK",
-    description: "JavaScript now. Unity, Swift, and Kotlin next.",
-  },
 ] as const;
 
 export const productSectionIds = productSections.map((section) => section.id);
@@ -1160,6 +1155,396 @@ export const marketingStyles = `
 
 .product-block {
   scroll-margin-top: calc(var(--header-height) + 3.5rem);
+}
+
+.grok-hero {
+  width: min(100% - var(--page-inset), 52rem);
+  margin: 0 auto;
+  padding: clamp(4.5rem, 10vw, 7.5rem) 0 clamp(3.5rem, 7vw, 5.5rem);
+  text-align: center;
+}
+
+.grok-kicker {
+  display: flex;
+  gap: 0.85rem;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0 1.6rem;
+  color: var(--quiet);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.grok-kicker-rule {
+  width: 1px;
+  height: 0.9rem;
+  background: var(--line-strong);
+}
+
+.grok-hero .display {
+  max-width: 100%;
+  margin: 0 auto;
+  font-size: clamp(2.7rem, 5.2vw, 4.5rem);
+}
+
+.grok-hero .lede {
+  max-width: 38rem;
+  margin: 0.85rem auto 0;
+}
+
+.grok-hero .display + .lede {
+  margin-top: 2.25rem;
+}
+
+.grok-hero .page-actions,
+.grok-start .page-actions,
+.grok-build .page-actions {
+  justify-content: center;
+  margin-top: 2rem;
+}
+
+.grok-stage {
+  border-top: 1px solid var(--line);
+}
+
+.grok-stage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  gap: clamp(2rem, 4vw, 4.5rem);
+  align-items: stretch;
+  width: min(100% - var(--page-inset), var(--page-max));
+  margin: 0 auto;
+  padding: clamp(2rem, 5vw, 3.5rem) 0 clamp(3rem, 6vw, 5rem);
+}
+
+.grok-feature {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 52vh;
+  padding: 2.5rem 0;
+  scroll-margin-top: calc(var(--header-height) + 1.5rem);
+}
+
+.grok-feature h2 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.6rem);
+  font-weight: 560;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+
+.grok-feature > p {
+  max-width: 36rem;
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.grok-checks {
+  display: grid;
+  gap: 0.7rem;
+  margin: 1.4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grok-checks li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.7rem;
+  align-items: start;
+  color: var(--paper);
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.grok-checks li::before {
+  color: var(--amber);
+  content: "✓";
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.grok-inline-panel {
+  display: none;
+  margin-top: 1.6rem;
+}
+
+.grok-sticky {
+  position: sticky;
+  top: calc(50vh - 13rem);
+}
+
+.grok-panel {
+  display: none;
+}
+
+.grok-stage[data-active="hosting"] .grok-panel[data-panel="hosting"],
+.grok-stage[data-active="multiplayer"] .grok-panel[data-panel="multiplayer"],
+.grok-stage[data-active="distribution"] .grok-panel[data-panel="distribution"],
+.grok-stage[data-active="agents"] .grok-panel[data-panel="agents"] {
+  display: block;
+}
+
+.grok-panel .release-panel,
+.grok-panel .lobby-panel,
+.grok-panel .docs-panel,
+.grok-panel .page-aside,
+.grok-panel .host-laptop,
+.grok-panel .world-net-frame,
+.grok-panel .grok-montage,
+.grok-inline-panel .release-panel,
+.grok-inline-panel .lobby-panel,
+.grok-inline-panel .docs-panel,
+.grok-inline-panel .page-aside,
+.grok-inline-panel .host-laptop,
+.grok-inline-panel .world-net-frame,
+.grok-inline-panel .grok-montage {
+  width: 100%;
+}
+
+.host-laptop {
+  margin: 0;
+  color: #1c1a16;
+}
+
+.host-lid {
+  padding: 0.55rem 0.55rem 0.7rem;
+  border-radius: 1.05rem 1.05rem 0.35rem 0.35rem;
+  background: #e4dfd6;
+  box-shadow: 0 0 0 1px #8d877c, 0 22px 48px rgba(0, 0, 0, 0.35);
+}
+
+.host-browser {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  aspect-ratio: 16 / 10.5;
+  border-radius: 0.55rem;
+  background: #10281c;
+}
+
+.host-chrome {
+  display: grid;
+  flex: none;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.55rem 0.7rem;
+  background: #ece7df;
+}
+
+.host-lights { display: flex; gap: 0.32rem; }
+.host-lights i { width: 0.55rem; height: 0.55rem; border-radius: 50%; }
+.host-lights i:nth-child(1) { background: #e15b4a; }
+.host-lights i:nth-child(2) { background: #e2b23a; }
+.host-lights i:nth-child(3) { background: #59b36a; }
+
+.host-url {
+  display: block;
+  padding: 0.42rem 0.85rem;
+  border-radius: 999px;
+  background: #fff;
+  color: #1c1a16;
+  font-family: var(--mono);
+  font-size: clamp(0.95rem, 2vw, 1.2rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.host-table {
+  position: relative;
+  flex: 1;
+  margin: 0.75rem;
+  border-radius: 0.35rem;
+  background: radial-gradient(ellipse at center, #1f6b45 0 72%, #0e2a1c 74% 100%);
+  box-shadow: inset 0 0 0 0.42rem #c8b48a;
+}
+
+.host-table .pocket,
+.host-table .ball {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.host-table .pocket-tl { top: 0.55rem; left: 0.55rem; }
+.host-table .pocket-tr { top: 0.55rem; right: 0.55rem; }
+.host-table .pocket-bl { bottom: 0.55rem; left: 0.55rem; }
+.host-table .pocket-br { bottom: 0.55rem; right: 0.55rem; }
+
+.host-cue {
+  position: absolute;
+  top: 34%;
+  left: 4%;
+  width: 28%;
+  height: 0.28rem;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f4efe3, #c47a12 18%, #8a5a28);
+  transform: rotate(18deg);
+  transform-origin: right center;
+}
+
+.host-base {
+  position: relative;
+  height: 0.85rem;
+  margin: 0 8%;
+  border-radius: 0 0 0.85rem 0.85rem;
+  background: linear-gradient(#6a655e, #3e3b36);
+}
+
+.host-base span {
+  position: absolute;
+  top: 0;
+  left: 18%;
+  width: 64%;
+  height: 0.28rem;
+  border-radius: 0 0 0.35rem 0.35rem;
+  background: #2a2824;
+}
+
+.world-net-frame {
+  margin: 0;
+}
+
+.world-net {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  object-position: center;
+  border-radius: 1.15rem;
+  background: #0c0b09;
+  box-shadow: 0 0 0 1px #2c2a26, 0 22px 48px rgba(0, 0, 0, 0.38);
+}
+
+.grok-section-intro {
+  max-width: 36rem;
+  margin-bottom: clamp(2rem, 4vw, 3rem);
+}
+
+.grok-section-intro h2,
+.grok-build h2 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  font-weight: 560;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+
+.grok-section-intro p,
+.grok-build p {
+  margin: 0.9rem 0 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.grok-more {
+  border-top: 1px solid var(--line);
+}
+
+.grok-more-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2.2rem 3rem;
+}
+
+.grok-more-grid h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.grok-more-grid p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.grok-start {
+  border-top: 1px solid var(--line);
+  padding-bottom: clamp(5.5rem, 12vw, 9rem);
+}
+
+.grok-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grok-steps li {
+  padding: 1.25rem 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.grok-steps span {
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+
+.grok-steps h3 {
+  margin: 0.7rem 0 0;
+  font-size: 1.25rem;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+}
+
+.grok-steps p {
+  margin: 0.55rem 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.grok-build {
+  border-top: 1px solid var(--line);
+  scroll-margin-top: calc(var(--header-height) + 1.5rem);
+}
+
+.grok-build .marketing-section-inner {
+  max-width: 40rem;
+}
+
+@media (max-width: 68rem) {
+  .grok-stage-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .grok-visual {
+    display: none;
+  }
+
+  .grok-inline-panel {
+    display: block;
+    margin-top: 3.5rem;
+  }
+
+  .grok-feature {
+    min-height: 0;
+  }
+
+  .grok-more-grid,
+  .grok-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .grok-kicker {
+    flex-wrap: wrap;
+  }
 }
 
 .split-heading {

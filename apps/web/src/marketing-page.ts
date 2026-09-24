@@ -3,7 +3,6 @@ import {
   isMarketingRoute,
   normalizeMarketingPath,
   productSectionHref,
-  productSubnav,
   renderMarketingSite,
   type MarketingRoute,
 } from "./marketing-site.js";
@@ -172,9 +171,9 @@ const homeMain = `
       <div class="marketing-section-inner">
         <div class="feature-row feature-row-flip workflow-row">
           <div class="feature-copy">
-            <h2 id="workflow-title">From Game to Party<br>in a Single Prompt.</h2>
+            <h2 id="workflow-title">From side project<br>to Global Game<br>in a single prompt.</h2>
             <p>Give a finished browser game a host, a room, and a playable URL—without standing up a backend or wiring five services together.</p>
-            <a class="card-link" href="${productSectionHref("sdk")}">See the SDK →</a>
+            <a class="card-link" href="https://docs.lokiplay.cc/sdk">See the SDK →</a>
           </div>
           <div class="editorial-grid editorial-stack party-flow" aria-label="Prompt-to-party timeline">
             <div class="party-command" aria-hidden="true">
@@ -349,7 +348,7 @@ const homeMain = `
           <p>Loki gives coding agents one canonical source for packages, platform rules, validation, and deployment. They can integrate the game correctly without inventing another backend.</p>
           <div class="agent-links">
             <a class="inline-link" href="${productSectionHref("agents")}">How agents use Loki →</a>
-            <a class="inline-link" href="${productSectionHref("sdk")}">See the SDK →</a>
+            <a class="inline-link" href="https://docs.lokiplay.cc/sdk">See the SDK →</a>
           </div>
 ${agentMarquee()}
         </div>
@@ -455,342 +454,128 @@ ${pricingPlans()}
 ${closingBand()}
 `;
 
-const productMain = `
-    <section class="page-hero" aria-labelledby="page-title">
-      <div class="page-hero-inner">
-        <div>
-          <p class="eyebrow">Product</p>
-          <h1 class="display" id="page-title">The whole path to play.</h1>
-          <p class="lede">Hosting, multiplayer, distribution, agents, and the SDK — one plugin, one page. Jump to a section or read the whole path.</p>
-          <div class="page-actions">
-            <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started</a>
-            <a class="button" href="${productSectionHref("hosting")}">Start with hosting</a>
-          </div>
-        </div>
-        <aside class="page-aside" aria-label="Product sections">
-          <div><strong>Hosting</strong><p>Scan, isolate, and serve a finished browser build.</p></div>
-          <div><strong>Multiplayer</strong><p>Rooms, invites, and shared state without a server project.</p></div>
-          <div><strong>Distribution</strong><p>Private while you iterate. Public when you mean it.</p></div>
-        </aside>
-      </div>
-    </section>
-    ${productSubnav("/product")}
-    <section class="page-hero product-block" id="hosting" aria-labelledby="hosting-title">
-      <div class="page-hero-inner">
-        <div>
-          <p class="eyebrow">Product / Hosting</p>
-          <h2 class="display" id="hosting-title">A home for every build.</h2>
-          <p class="lede">Upload a finished browser game. Loki scans it, isolates it, and gives you a playable URL. Every release stays immutable—activation changes the live build, never the history.</p>
-          <div class="page-actions">
-            <a class="button button-primary" href="https://app.lokiplay.cc/signup">Host a game</a>
-            <a class="button" href="${productSectionHref("multiplayer")}">Add multiplayer</a>
-          </div>
-        </div>
-        <aside class="page-aside" aria-label="Hosting facts">
-          <div><strong>01 / Scan</strong><p>Unsafe or backend-dependent builds fail closed.</p></div>
-          <div><strong>02 / Isolate</strong><p>Each game runs on its own origin under *.lokiplay.cc.</p></div>
-          <div><strong>03 / Keep</strong><p>Releases are stored as records you can roll back to.</p></div>
-        </aside>
-      </div>
-    </section>
-    <section class="marketing-section" aria-labelledby="hosting-flow-title">
-      <div class="marketing-section-inner two-col">
-        <div>
-          <div class="section-heading">
-            <p class="eyebrow">From zip to playable link</p>
-            <h2 id="hosting-flow-title">No servers to babysit.</h2>
-          </div>
-          <p class="lede">Loki is the hosting layer for vibe-coded games. You ship the client. We serve it globally, sandbox it from other games, and keep production multiplayer on the same URL.</p>
-        </div>
-        <div class="release-panel" aria-label="Example release history">
-          <div class="docs-panel-header"><span>Release record</span><span>Immutable</span></div>
-          <div class="release-row"><code>rel_08</code><span>Live · scanned · isolated</span></div>
-          <div class="release-row"><code>rel_07</code><span>Previous · kept</span></div>
-          <div class="release-row"><code>rel_06</code><span>Previous · kept</span></div>
-          <div class="release-row"><code>rel_03</code><span>Blocked · failed review</span></div>
-        </div>
-      </div>
-    </section>
-    <section class="marketing-section" aria-labelledby="hosting-features-title">
-      <div class="marketing-section-inner">
-        <div class="split-heading">
-          <p class="eyebrow">What you get</p>
-          <h2 id="hosting-features-title">Built for games, not marketing sites.</h2>
-        </div>
-        <div class="editorial-grid">
-          <article class="editorial-card editorial-card-raised">
-            <p class="card-index">01 / Private previews</p>
-            <h3>Share before you publish.</h3>
-            <p>Keep a project private or unlisted while you iterate. Friends can play from a link without listing the game in the catalog.</p>
-          </article>
-          <article class="editorial-card editorial-card-raised">
-            <p class="card-index">02 / Global delivery</p>
-            <h3>Assets at the edge.</h3>
-            <p>Finished builds are stored and served as static game files. You do not stand up a CDN, bucket, or deploy pipeline.</p>
-          </article>
-          <article class="editorial-card editorial-card-raised">
-            <p class="card-index">03 / Fail closed</p>
-            <h3>Safety before the play button.</h3>
-            <p>Inline scripts, remote fonts, forms, and invented backends are rejected. The playable URL only exists after the build passes.</p>
-          </article>
-        </div>
-      </div>
-    </section>
-    <section class="page-hero product-block" id="multiplayer" aria-labelledby="multiplayer-title">
-      <div class="page-hero-inner">
-        <div>
-          <p class="eyebrow">Product / Multiplayer</p>
-          <h2 class="display" id="multiplayer-title">Rooms without a server project.</h2>
-          <p class="lede">Add rooms, invites, matchmaking, chat, shared state, and leaderboards through one SDK. Production play stays on Loki hosting—no leftover localhost server.</p>
-          <div class="page-actions">
-            <a class="button button-primary" href="https://app.lokiplay.cc/signup">Create a room</a>
-            <a class="button" href="${productSectionHref("sdk")}">See the SDK</a>
-          </div>
-        </div>
-        <aside class="lobby-panel" aria-label="Example room">
-          <div class="lobby-head">Room · orbital-relay</div>
-          <div class="lobby-row"><span>Host</span><span>mira · connected</span></div>
-          <div class="lobby-row"><span>Player</span><span>jun · connected</span></div>
-          <div class="lobby-row"><span>Player</span><span>theo · reconnecting</span></div>
-          <div class="lobby-row"><span>Invite</span><span>LK-4F29 · 2 seats left</span></div>
-        </aside>
-      </div>
-    </section>
-    <section class="marketing-section" aria-labelledby="mp-capabilities">
-      <div class="marketing-section-inner">
-        <div class="split-heading">
-          <p class="eyebrow">The multiplayer surface</p>
-          <h2 id="mp-capabilities">What the SDK already speaks.</h2>
-        </div>
-        <div class="capability-grid">
-          <article class="capability-card">
-            <p class="card-index">01 / Rooms</p>
-            <h3>Create, join, leave.</h3>
-            <p>Host-authoritative rooms with presence, late join, and a snapshot when someone reconnects.</p>
-          </article>
-          <article class="capability-card">
-            <p class="card-index">02 / Invites</p>
-            <h3>A code, not a server IP.</h3>
-            <p>Share an invite. Friends land in the same room without you running matchmaking yourself.</p>
-          </article>
-          <article class="capability-card">
-            <p class="card-index">03 / Matchmaking</p>
-            <h3>Fill N, then start.</h3>
-            <p>Fill a lobby or a team. The runtime creates the same authoritative room type either way.</p>
-          </article>
-          <article class="capability-card">
-            <p class="card-index">04 / Shared state</p>
-            <h3>Host writes. Everyone reads.</h3>
-            <p>Casual and unranked play. The host owns the truth; clients do not invent a second backend.</p>
-          </article>
-        </div>
-      </div>
-    </section>
-    <section class="marketing-section agent-section" aria-labelledby="mp-trust">
-      <div class="marketing-section-inner two-col">
-        <div class="agent-copy">
-          <p class="eyebrow">Trust model</p>
-          <h2 id="mp-trust">Built for friends, not ranked ladders.</h2>
-          <p>Loki rooms are host-authoritative. That is the right fit for vibe-coded party games, puzzles, and co-op. It is not an anti-cheat layer for competitive rankings.</p>
-        </div>
-        <ul class="plain-list">
-          <li>Reconnects restore the last snapshot</li>
-          <li>Host migration keeps the room alive</li>
-          <li>Identity is the same across every Loki game</li>
-          <li>Chat and private leaderboards stay on the room</li>
-        </ul>
-      </div>
-    </section>
-    <section class="page-hero product-block" id="distribution" aria-labelledby="distribution-title">
-      <div class="page-hero-inner">
-        <div>
-          <p class="eyebrow">Product / Distribution</p>
-          <h2 class="display" id="distribution-title">Private first. Public when you mean it.</h2>
-          <p class="lede">Layer 1 is a playable link for you and your friends. Layer 2 is a reviewed listing in the Loki catalog. You opt in only when the game is ready.</p>
-          <div class="page-actions">
-            <a class="button button-primary" href="https://app.lokiplay.cc/signup">Start private</a>
-            <a class="button" href="https://play.lokiplay.cc/">Open the catalog</a>
-          </div>
-        </div>
-        <aside class="page-aside" aria-label="Distribution layers">
-          <div><strong>Layer 1</strong><p>Host, invite, iterate. No catalog listing required.</p></div>
-          <div><strong>Layer 2</strong><p>Request review. A public page appears only after approval.</p></div>
-        </aside>
-      </div>
-    </section>
-    <section class="marketing-section" aria-labelledby="layers-title">
-      <div class="marketing-section-inner">
-        <div class="split-heading">
-          <p class="eyebrow">Two layers, one product</p>
-          <h2 id="layers-title">Discovery is optional.</h2>
-        </div>
-        <div class="layer-stack">
-          <article class="layer-card">
-            <p class="card-index">01 / Layer 1 · Hosting + multiplayer</p>
-            <h3>A link you control.</h3>
-            <p>Unfinished games are welcome. Keep the project private or unlisted, share a play invite, and replace the live release whenever you want.</p>
-            <ul class="feature-list">
-              <li>Private and unlisted play</li>
-              <li>Immutable releases</li>
-              <li>Rooms on the same Loki URL</li>
-            </ul>
-          </article>
-          <article class="layer-card">
-            <p class="card-index">02 / Layer 2 · Catalog</p>
-            <h3>A page players can find.</h3>
-            <p>When the game is ready, submit it for review. Loki checks safety and compatibility. Creative completeness stays yours.</p>
-            <ul class="feature-list">
-              <li>Reviewed public listing</li>
-              <li>One playable catalog page</li>
-              <li>Tips and revenue share later</li>
-            </ul>
-          </article>
-        </div>
-      </div>
-    </section>
-    <section class="marketing-section" aria-labelledby="catalog-title">
-      <div class="marketing-section-inner">
-        <div class="split-heading">
-          <p class="eyebrow">Where games land</p>
-          <div>
-            <h2 id="catalog-title">The catalog is the front door.</h2>
-            <p class="lede">Players browse live games at <a href="https://play.lokiplay.cc/">play.lokiplay.cc ↗</a></p>
-          </div>
-        </div>
-        <div class="editorial-grid">
-          <article class="editorial-card game-card">
-            <div class="game-art" aria-hidden="true">◇</div>
-            <div class="game-copy">
-              <p class="card-index">Public · Versus</p>
-              <h3>Battleship</h3>
-              <p class="muted">A catalog card is just a reviewed Layer 1 game.</p>
+const hostingPanel = `
+        <figure class="host-laptop" aria-label="Pool playing in a browser at play.lokiplay.cc/pool">
+          <div class="host-lid">
+            <div class="host-browser">
+              <div class="host-chrome">
+                <span class="host-lights" aria-hidden="true"><i></i><i></i><i></i></span>
+                <span class="host-url">play.lokiplay.cc/pool</span>
+              </div>
+              <div class="host-table" aria-hidden="true">
+                <span class="pocket pocket-tl"></span>
+                <span class="pocket pocket-tr"></span>
+                <span class="pocket pocket-bl"></span>
+                <span class="pocket pocket-br"></span>
+                <i class="ball ball-cue"></i>
+                <i class="ball ball-one"></i>
+                <i class="ball ball-eight"></i>
+                <i class="host-cue"></i>
+              </div>
             </div>
-          </article>
-          <article class="editorial-card game-card">
-            <div class="game-art" aria-hidden="true">×</div>
-            <div class="game-copy">
-              <p class="card-index">Public · Versus</p>
-              <h3>Pool</h3>
-              <p class="muted">Same playable URL. A public page in front of it.</p>
-            </div>
-          </article>
-          <article class="editorial-card game-card">
-            <div class="game-art" aria-hidden="true">○</div>
-            <div class="game-copy">
-              <p class="card-index">Public · Versus</p>
-              <h3>Chess</h3>
-              <p class="muted">Players keep one Loki identity across games.</p>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
-    <section class="page-hero product-block" id="agents" aria-labelledby="agents-title">
-      <div class="page-hero-inner">
-        <div>
-          <p class="eyebrow">Product / Agents</p>
-          <h2 class="display" id="agents-title">Built for the Agentic AI Era.</h2>
-          <p class="lede">Cursor, Claude Code, and similar tools should not invent a backend. Loki gives them one package, one protocol, and one set of platform rules.</p>
-          <div class="page-actions">
-            <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get a project prompt</a>
-            <a class="button" href="https://docs.lokiplay.cc/agents">Agent docs ↗</a>
           </div>
-        </div>
-        <aside class="page-aside" aria-label="Agent path">
-          <div><strong>Prompt</strong><p>Copy the project prompt from the creator desk.</p></div>
-          <div><strong>Integrate</strong><p>The agent installs the SDK and follows Loki rules.</p></div>
-          <div><strong>Ship</strong><p>Validate, deploy, then approve the terminal if asked.</p></div>
-        </aside>
-      </div>
-    </section>
-    <section class="marketing-section" aria-labelledby="agent-rules">
-      <div class="marketing-section-inner two-col">
-        <div class="agent-copy">
-          <p class="eyebrow">Canonical rules</p>
-          <h2 id="agent-rules">One source. No invented servers.</h2>
-          <p>Agents get the same instructions every time: install Loki, keep gameplay in the client, and deploy a finished build. They do not write a disposable server.js.</p>
-        </div>
+          <div class="host-base"><span></span></div>
+        </figure>`;
+
+const multiplayerPanel = `
+        <figure class="world-net-frame" aria-label="Players around the world connected through a network">
+          <video class="world-net" autoplay muted loop playsinline poster="/assets/loki-world-network.webp" src="/assets/loki-world-network.mp4"></video>
+        </figure>`;
+
+const distributionPanel = `
+        <div class="grok-montage" aria-label="A montage of vibe-coded games: racing, shooting, and chess.">
+          <video class="dist-montage" autoplay muted loop playsinline poster="/assets/loki-game-montage.webp" src="/assets/loki-game-montage.mp4"></video>
+        </div>`;
+
+const agentsPanel = `
         <div class="docs-panel" aria-label="Agent documentation">
           <div class="docs-panel-header"><span>docs.lokiplay.cc</span><span>For humans and agents</span></div>
           <div class="docs-row"><code>/agents</code><span>Canonical integration rules</span></div>
           <div class="docs-row"><code>/mcp</code><span>Connect Loki as an MCP server</span></div>
           <div class="docs-row"><code>/llms.txt</code><span>Short product summary</span></div>
           <div class="docs-row"><code>/llms-full.txt</code><span>Every doc in one file</span></div>
-        </div>
+        </div>`;
+
+const productMain = `
+    <section class="grok-hero" aria-labelledby="page-title">
+      <p class="grok-kicker"><span>Product</span><span class="grok-kicker-rule" aria-hidden="true"></span><span>Hosting, multiplayer, distribution, and agents</span></p>
+      <h1 class="display" id="page-title">From side project<br>to Global Game<br>in a single prompt.</h1>
+      <p class="lede">Hosting, online multiplayer, distribution — everything your game needs in one plugin, one package.</p>
+      <p class="lede">Ship a finished game for the world to play together in minutes.</p>
+      <div class="page-actions">
+        <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started for Free</a>
+        <a class="button" href="https://docs.lokiplay.cc/">Read Docs</a>
       </div>
     </section>
-    <section class="marketing-section" aria-labelledby="agent-steps">
-      <div class="marketing-section-inner">
-        <div class="split-heading">
-          <p class="eyebrow">How the desk works</p>
-          <h2 id="agent-steps">You approve. The agent implements.</h2>
+    <section class="grok-stage" data-active="hosting" aria-label="Product capabilities">
+      <div class="grok-stage-grid">
+        <div class="grok-features">
+          <article class="grok-feature" id="hosting">
+            <h2>A home for every build.</h2>
+            <p>Upload a playable game to Loki and immediately receive a playable link. Every subsequent release is shipped to the same link so you don't need to send your players a new one after each update.</p>
+            <ul class="grok-checks">
+              <li>Each game runs on its own origin under *.lokiplay.cc.</li>
+              <li>Give your game a customised, playable link.</li>
+              <li>Solving all your hosting needs with one prompt.</li>
+            </ul>
+            <div class="grok-inline-panel">${hostingPanel}</div>
+          </article>
+          <article class="grok-feature" id="multiplayer">
+            <h2>Instant live multiplayer without the manual setup.</h2>
+            <p>Add multiplayer, rooms, invites, shared state, and leaderboards through one SDK so your players can play with anyone, anywhere.</p>
+            <ul class="grok-checks">
+              <li>Online game rooms with presence, late join, and reconnect.</li>
+              <li>Share an invite code for private rooms or find open games in a room lobby.</li>
+              <li>One-step online multiplayer setup</li>
+            </ul>
+            <div class="grok-inline-panel">${multiplayerPanel}</div>
+          </article>
+          <article class="grok-feature" id="distribution">
+            <h2>Launch your game to the world through Loki.</h2>
+            <p>Loki Play is the live platform where finished games are listed and played. Players find your game there and open it in the browser, and you earn a share of creator revenue as they play.</p>
+            <ul class="grok-checks">
+              <li>Players browse live games at play.lokiplay.cc.</li>
+              <li>Loki lists your game to the live platform for free</li>
+              <li>Earn creator revenue share whenever players play your game.</li>
+            </ul>
+            <div class="grok-inline-panel">${distributionPanel}</div>
+          </article>
+          <article class="grok-feature" id="agents">
+            <h2>Built for the Agentic AI Era.</h2>
+            <p>Seamless integration with your development setup in Cursor, Claude Code, Codex and similar agentic tools. Loki gives them one prompt, one package and one protocol. Just leave it to your Agent.</p>
+            <ul class="grok-checks">
+              <li>Copy the project prompt from the creator desk.</li>
+              <li>The agent installs the SDK and follows the agent skills in the Loki package.</li>
+              <li>Validate and deploy your game all within your existing setup. No separate application needed.</li>
+            </ul>
+            <div class="grok-inline-panel">${agentsPanel}</div>
+          </article>
         </div>
-        <div class="editorial-grid">
-          <article class="editorial-card">
-            <p class="card-index">01 / Project prompt</p>
-            <h3>Exact steps, not vibes.</h3>
-            <p>The creator desk gives the agent the SDK version, login command, and the rules that keep the game on Loki.</p>
-          </article>
-          <article class="editorial-card">
-            <p class="card-index">02 / Device login</p>
-            <h3>No pasted tokens.</h3>
-            <p>The CLI opens a browser code. You sign in and approve the terminal. The agent never asks for a secret.</p>
-          </article>
-          <article class="editorial-card">
-            <p class="card-index">03 / Validate + deploy</p>
-            <h3>Fail before players see it.</h3>
-            <p>The same checks the CLI runs are the checks the agent must pass. A blocked build never becomes a playable URL.</p>
-          </article>
-        </div>
-      </div>
-    </section>
-    <section class="page-hero product-block" id="sdk" aria-labelledby="sdk-title">
-      <div class="page-hero-inner">
-        <div>
-          <p class="eyebrow">Product / SDK</p>
-          <h2 class="display" id="sdk-title">One protocol. Four clients.</h2>
-          <p class="lede">The JavaScript SDK is the production client for browser games. Unity, Swift, and Kotlin speak the same protocol as they land.</p>
-          <div class="page-actions">
-            <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get started</a>
-            <a class="button" href="https://docs.lokiplay.cc/sdk">SDK docs ↗</a>
+        <div class="grok-visual" aria-hidden="true">
+          <div class="grok-sticky">
+            <div class="grok-panel" data-panel="hosting">${hostingPanel}</div>
+            <div class="grok-panel" data-panel="multiplayer">${multiplayerPanel}</div>
+            <div class="grok-panel" data-panel="distribution">${distributionPanel}</div>
+            <div class="grok-panel" data-panel="agents">${agentsPanel}</div>
           </div>
         </div>
-        <div class="docs-panel" aria-label="Install the JavaScript SDK">
-          <div class="docs-panel-header"><span>@lokiplay/sdk</span><span>JavaScript</span></div>
-          <div class="docs-row"><code>npm i @lokiplay/sdk</code><span>Install the client</span></div>
-          <div class="docs-row"><code>createRoom()</code><span>Host a room</span></div>
-          <div class="docs-row"><code>joinRoom({ inviteCode })</code><span>Join with an invite</span></div>
-          <div class="docs-row"><code>createSynchronizedRoom()</code><span>Keep clients in lockstep</span></div>
-        </div>
       </div>
     </section>
-    <section class="marketing-section" aria-labelledby="sdk-langs">
+    <section class="marketing-section grok-start" aria-labelledby="start-title">
       <div class="marketing-section-inner">
-        <div class="split-heading">
-          <p class="eyebrow">Clients</p>
-          <h2 id="sdk-langs">Same rooms. Native wrappers later.</h2>
+        <div class="grok-section-intro">
+          <h2 id="start-title">Get started</h2>
+          <p>Start free with private hosting. Add a room when you need one, and go public only when you mean it.</p>
         </div>
-        <div class="sdk-grid">
-          <article class="sdk-card">
-            <p class="card-index">Available now</p>
-            <h3>JavaScript</h3>
-            <p>The reference client for hosted browser games. Rooms, reconnect, overlay binding, and the playable-page bridge.</p>
-          </article>
-          <article class="sdk-card">
-            <p class="card-index">Coming</p>
-            <h3>Unity</h3>
-            <p>The same protocol, for games that leave the browser. Ships against the shared conformance fixtures.</p>
-          </article>
-          <article class="sdk-card">
-            <p class="card-index">Coming</p>
-            <h3>Swift</h3>
-            <p>iOS and native Apple clients join the same Loki rooms as a browser build.</p>
-          </article>
-          <article class="sdk-card">
-            <p class="card-index">Coming</p>
-            <h3>Kotlin</h3>
-            <p>Android and JVM clients use the same invite codes, presence, and snapshots.</p>
-          </article>
+        <ol class="grok-steps">
+          <li><span>01</span><h3>Create a project</h3><p>Open Projects and create a project for your game. Each project gets its own agent prompt and release history.</p></li>
+          <li><span>02</span><h3>Copy the agent prompt</h3><p>On the project card, click "Copy agent prompt" to copy the full integration prompt for that project.</p></li>
+          <li><span>03</span><h3>Paste it into your game agent</h3><p>Paste the prompt into your coding agent's chat (Cursor, Claude Code, or similar) inside your game's repository.</p></li>
+          <li><span>04</span><h3>Let it run</h3><p>The agent will install the official Loki packages, connect this project, and ship the build.</p></li>
+        </ol>
+        <div class="page-actions">
+          <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started</a>
+          <a class="button" href="https://docs.lokiplay.cc/sdk">SDK docs ↗</a>
         </div>
       </div>
     </section>
@@ -1396,24 +1181,35 @@ const productAliasToSection: Partial<Record<MarketingRoute, string>> = {
   "/multiplayer": "multiplayer",
   "/distribution": "distribution",
   "/agents": "agents",
-  "/sdk": "sdk",
 };
 
 function productScrollScript(path: MarketingRoute): string {
-  if (path !== "/product" && !(path in productAliasToSection)) return "";
+  if (path !== "/product" && path !== "/sdk" && !(path in productAliasToSection)) return "";
   return `
     const productAliases = {
       "/hosting": "hosting",
       "/multiplayer": "multiplayer",
       "/distribution": "distribution",
       "/agents": "agents",
-      "/sdk": "sdk",
     };
     const pathName = location.pathname.replace(/\\/$/, "") || "/";
     const fromPath = productAliases[pathName];
     if (fromPath && !location.hash) {
       history.replaceState(null, "", "/product#" + fromPath);
       document.getElementById(fromPath)?.scrollIntoView();
+    }
+    const stage = document.querySelector(".grok-stage");
+    const features = [...document.querySelectorAll(".grok-feature")];
+    if (stage && features.length) {
+      const setActive = (id) => { stage.dataset.active = id; };
+      setActive(features[0].id);
+      const observer = new IntersectionObserver((entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible) setActive(visible.target.id);
+      }, { rootMargin: "-35% 0px -45% 0px", threshold: [0.25, 0.6] });
+      for (const feature of features) observer.observe(feature);
     }
   `;
 }

@@ -59,6 +59,14 @@ const staticImageAssets: Record<string, { file: string; type: string }> = {
     file: "./assets/marketing/loki-game-montage.webp",
     type: "image/webp",
   },
+  "/assets/loki-world-network.mp4": {
+    file: "./assets/marketing/loki-world-network.mp4",
+    type: "video/mp4",
+  },
+  "/assets/loki-world-network.webp": {
+    file: "./assets/marketing/loki-world-network.webp",
+    type: "image/webp",
+  },
 };
 
 export interface WebDependencies {
