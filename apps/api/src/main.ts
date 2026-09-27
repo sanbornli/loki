@@ -2,6 +2,8 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import { GameManifestSchema } from "../../../packages/protocol/src/index.js";
+import { BillingService } from "./billing.js";
+import { applyPlanToTenantConfig } from "./plans.js";
 import { PostgresCliDeviceAuthorizationService } from "./cli-device-auth.js";
 import { loadProviderEnvironment } from "./config.js";
 import { DashboardService } from "./dashboard.js";
@@ -14,7 +16,7 @@ import {
   PlayInviteSigner,
   PostgresHostingAuthorization,
 } from "./hosting-auth.js";
-import { NakamaGateway } from "./nakama.js";
+import { NakamaGateway, nakamaTenantConfigFromManifest } from "./nakama.js";
 import { startObservability } from "./observability.js";
 import {
   PostgresDeploymentRepository,
@@ -144,14 +146,24 @@ const nakama = new NakamaGateway(platform, {
           AND deployments.status IN ('ready', 'ready_with_warnings')`,
       [projectId],
     );
-    const multiplayer = GameManifestSchema.parse(result.rows[0]?.manifest).multiplayer;
-    if (!multiplayer?.enabled) throw new Error("multiplayer is not enabled");
-    return {
-      maxPlayers: multiplayer.maxPlayers,
-      tickRate: multiplayer.tickRate,
-    };
+    const config = nakamaTenantConfigFromManifest(
+      GameManifestSchema.parse(result.rows[0]?.manifest),
+    );
+    const limits = await platform.projectRuntimeLimits(projectId);
+    return applyPlanToTenantConfig(config, limits.plan);
   },
 });
+const billing = new BillingService({
+  secretKey: environment.STRIPE_SECRET_KEY,
+  webhookSecret: environment.STRIPE_WEBHOOK_SECRET,
+  creatorOrigin: environment.LOKI_CREATOR_ORIGIN ?? environment.LOKI_PUBLIC_WEB_ORIGIN,
+  prices: {
+    loki_monthly: environment.STRIPE_PRICE_LOKI_MONTHLY,
+    loki_annual: environment.STRIPE_PRICE_LOKI_ANNUAL,
+    pro_monthly: environment.STRIPE_PRICE_PRO_MONTHLY,
+    pro_annual: environment.STRIPE_PRICE_PRO_ANNUAL,
+  },
+}, platform);
 const observability = startObservability({
   serviceName: "lokiplay-api",
   environment: environment.SENTRY_ENVIRONMENT,
@@ -184,6 +196,7 @@ const server = startApiServer(
     hostingAuth,
     guestResume,
     safety,
+    billing,
     async playableUrl(projectId) {
       return new URL(
         await platform.projectPlayPath(projectId),

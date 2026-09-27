@@ -230,6 +230,7 @@ body.creator-dashboard .page-shell {
 .dashboard-shell.sidebar-collapsed .brand-word,
 .dashboard-shell.sidebar-collapsed .nav-label,
 .dashboard-shell.sidebar-collapsed .account-label,
+.dashboard-shell.sidebar-collapsed .account-plan,
 .dashboard-shell.sidebar-collapsed .logout-label {
   position: absolute;
   width: 1px;
@@ -304,10 +305,15 @@ body.creator-dashboard .page-shell {
   border-top: 1px solid var(--line);
 }
 
-.sidebar-account .account-label {
+.sidebar-account .account-label,
+.sidebar-account .account-plan {
   overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 0.72rem;
+}
+
+.sidebar-account .account-plan {
+  color: var(--amber);
 }
 
 .sidebar-account .text-button {
@@ -393,6 +399,32 @@ body.creator-dashboard .page-shell {
   font-family: var(--mono);
   font-size: 1.6rem;
   font-weight: 500;
+}
+
+.plan-card {
+  display: grid;
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  background: var(--ink);
+}
+
+.plan-card h2 {
+  margin: 0.25rem 0 0;
+  font-size: 1.6rem;
+  font-weight: 560;
+}
+
+.plan-card p {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+}
+
+.plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .instruction-callout {
@@ -938,6 +970,7 @@ body.creator-dashboard .page-shell {
   .dashboard-shell.sidebar-collapsed .brand-word,
   .dashboard-shell.sidebar-collapsed .nav-label,
   .dashboard-shell.sidebar-collapsed .account-label,
+  .dashboard-shell.sidebar-collapsed .account-plan,
   .dashboard-shell.sidebar-collapsed .logout-label {
     position: static;
     width: auto;
@@ -1086,6 +1119,7 @@ const pageBody = `
         </nav>
         <div class="sidebar-account">
           <span class="account-label" id="account-label" hidden></span>
+          <span class="account-plan" id="account-plan" hidden></span>
           <button class="text-button" id="logout-button" type="button" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" width="16" height="16"><path d="M9 6H5v12h4M10 12h9M15 8l4 4-4 4"></path></svg>
             <span class="logout-label">Log out</span>
@@ -1107,6 +1141,15 @@ const pageBody = `
             <div class="metric"><span>Projects</span><strong id="project-count">0</strong></div>
             <div class="metric"><span>Playable</span><strong id="playable-count">0</strong></div>
           </div>
+
+          <section class="plan-card" id="plan-card" hidden>
+            <div>
+              <p class="eyebrow">Plan</p>
+              <h2 id="plan-name">Free</h2>
+              <p id="plan-detail"></p>
+            </div>
+            <div class="plan-actions" id="plan-actions"></div>
+          </section>
 
           <section class="instruction-callout" aria-labelledby="instruction-title">
             <p class="eyebrow">Getting your game online</p>
@@ -1263,6 +1306,7 @@ const creatorScript = String.raw`
     const dashboardView = byId("dashboard-view");
     const logoutButton = byId("logout-button");
     const accountLabel = byId("account-label");
+    const accountPlan = byId("account-plan");
     const globalStatus = byId("global-status");
     const onboardingView = byId("onboarding-view");
     const projectsView = byId("projects-view");
@@ -1502,6 +1546,94 @@ const creatorScript = String.raw`
       }
     }
 
+    function planLabel(plan) {
+      if (plan === "pro") return "Loki Pro";
+      if (plan === "loki") return "Loki";
+      return "Free";
+    }
+
+    function limitText(limits) {
+      if (!limits) return "";
+      const games = limits.games == null ? "Unlimited games" : limits.games + (limits.games === 1 ? " game" : " games");
+      const links = limits.playLinks == null ? "unlimited play links" : limits.playLinks + (limits.playLinks === 1 ? " play link" : " play links");
+      const rooms = limits.simultaneousRooms == null ? "unlimited simultaneous rooms" : limits.simultaneousRooms + " simultaneous rooms";
+      return games + ", " + links + ", " + rooms + ", " + limits.maxPlayersPerRoom + " players per room.";
+    }
+
+    function planStatusText(account) {
+      if (!account || !account.planPeriodEnd || account.plan === "free") return "";
+      const when = new Date(account.planPeriodEnd).toLocaleDateString();
+      if (account.planStatus === "past_due") return "Payment past due. Paid limits continue until " + when + ".";
+      if (account.planStatus === "canceled") return "This plan ends on " + when + ".";
+      return "";
+    }
+
+    async function startCheckout(priceKey, button) {
+      button.disabled = true;
+      try {
+        const result = await api("/v1/billing/checkout", {
+          method: "POST",
+          body: JSON.stringify({ price: priceKey })
+        });
+        if (!result || !result.url) throw new Error("Billing did not return a checkout link.");
+        window.location.assign(result.url);
+      } catch (error) {
+        setGlobalStatus(error instanceof Error ? error.message : "Could not start checkout.", false);
+        globalStatus.dataset.tone = "error";
+        button.disabled = false;
+      }
+    }
+
+    async function startPortal(button) {
+      button.disabled = true;
+      try {
+        const result = await api("/v1/billing/portal", { method: "POST" });
+        if (!result || !result.url) throw new Error("Billing did not return a portal link.");
+        window.location.assign(result.url);
+      } catch (error) {
+        setGlobalStatus(error instanceof Error ? error.message : "Could not open billing.", false);
+        globalStatus.dataset.tone = "error";
+        button.disabled = false;
+      }
+    }
+
+    function renderAccountPlan(account) {
+      const plan = account && account.plan || "free";
+      accountPlan.textContent = planLabel(plan);
+      accountPlan.hidden = false;
+      const card = byId("plan-card");
+      card.hidden = false;
+      byId("plan-name").textContent = planLabel(plan);
+      const status = planStatusText(account);
+      const summary = limitText(account && account.limits);
+      byId("plan-detail").textContent = status ? summary + " " + status : summary;
+      const actions = byId("plan-actions");
+      clear(actions);
+      if (account && account.manageBilling) {
+        const button = document.createElement("button");
+        button.className = "button button-primary";
+        button.type = "button";
+        button.textContent = "Manage billing";
+        button.addEventListener("click", () => startPortal(button));
+        actions.appendChild(button);
+        return;
+      }
+      const choices = [
+        ["loki_monthly", "Loki $12/month"],
+        ["loki_annual", "Loki $8/month, billed annually"],
+        ["pro_monthly", "Loki Pro $20/month"],
+        ["pro_annual", "Loki Pro $15/month, billed annually"]
+      ];
+      for (const choice of choices) {
+        const button = document.createElement("button");
+        button.className = "button";
+        button.type = "button";
+        button.textContent = choice[1];
+        button.addEventListener("click", () => startCheckout(choice[0], button));
+        actions.appendChild(button);
+      }
+    }
+
     function renderDashboard() {
       authView.hidden = true;
       dashboardView.hidden = false;
@@ -1511,6 +1643,7 @@ const creatorScript = String.raw`
       const email = text(account && account.email, "Creator account");
       accountLabel.textContent = email;
       accountLabel.hidden = false;
+      renderAccountPlan(account);
 
       byId("organization-count").textContent = String(state.organizations.length).padStart(2, "0");
       byId("project-count").textContent = String(state.projects.length).padStart(2, "0");
@@ -1954,8 +2087,12 @@ const creatorScript = String.raw`
         "- Determine and confirm for each mode: minimum, recommended, and maximum players; number of teams, team size, and whether players share control; private invite, public room browsing, automatic matchmaking, a combination, or asynchronous entry; whether late joining and spectators are allowed; turn-based, event-driven, continuous realtime, or hybrid simulation; sequential or simultaneous input; required authoritative update frequency and latency sensitivity; session duration and persistence requirements; host-authoritative trust tolerance or server-authority requirement.",
         "- Classify simulation from how authoritative state progresses, not from visual animation. A game animated at 60 FPS may still be turn-based or event-driven.",
         "- Preserve existing game modes and rules. Add online settings and entry UI from the confirmed profile, including mode selection, team or seat selection, readiness, player limits, invite and join behavior, waiting states, and start conditions.",
-        "- Do not invent new game.json fields. Current manifests accept only enabled, authority, maxPlayers, and tickRate. Report the richer profile in the final report: values, supporting evidence, and creator-confirmed decisions.",
-        "- After confirming each mode's profile, choose createSynchronizedRoom() for turn-based or event-driven state, or createRealtimeRoom() for continuous host-authoritative simulation. Choose by how authoritative state actually progresses, not by genre or animation smoothness. Do not run both room types for the same mode.",
+        "- Do not invent new game.json fields. Current manifests accept only enabled, authority, maxPlayers, tickRate, and — only when authority is \"server\" — step. Report the richer profile in the final report: values, supporting evidence, and creator-confirmed decisions.",
+        "- Classify authority from the code that advances match state, not from the genre or the frame rate. Turn-based or event-driven means state changes only when a player action is committed. Continuous realtime means state advances on a tick even when nobody has just pressed a button. If that reading is ambiguous, stop and ask the creator what the match state depends on. Do not guess. One game.json has one authority for the whole project; if modes disagree, say so and ask which one this project is.",
+        "- Host is more suitable for turn-based and event-driven games. Write authority \"host\", omit step, and use createSynchronizedRoom(). Server is more suitable for continuous realtime games. Tell the creator what the update path does, then ask them to confirm server. Write authority \"server\" and step, and do not elect a player host. Server rooms are browser-only, run in Singapore, and end if the step fails; they do not fall back to a player. That is fairness, not lower latency.",
+        "- Before compiling step, change the state update so the next state depends only on the previous state and this tick's inputs. Drawing, sound, and asset loads stay in the browser. If the update reads the DOM, the clock, randomness, or assets, remove those calls from it. A seed or the tick index, when the game needs one, is an input field. If you cannot make that change, say so and do not write authority \"server\". Host realtime (createRealtimeRoom() with authority \"host\") can ship until the update is pure; say that is why, and do not describe host as the better fit for a continuous game. step is a .wasm module exporting exactly one function, step, and importing nothing. A later switch is another deploy after the creator confirms again; rooms already open keep the authority they started with.",
+        "- Do not ask the creator to choose server, and do not write authority \"server\", until Loki has enabled server authority in production. Until then, continuous games use host realtime. The server question above applies once that switch is on.",
+        "- After confirming each mode's profile, choose createSynchronizedRoom() for turn-based or event-driven state, or createRealtimeRoom() for continuous realtime. Choose by how authoritative state actually progresses, not by genre or animation smoothness. Do not run both room types for the same mode.",
         "- createSynchronizedRoom(): define this repository's state and actions, then provide a reducer. Loki owns authority checks, state versions, snapshots, retries, and membership.",
         "- Clients dispatch actions through the synchronized room. Do not create a parallel authoritative backend or direct Nakama integration.",
         "- Keep replicated state JSON-compatible and use finite safe integers. Reducers must be synchronous, deterministic, and fast, with no rendering, timers, network calls, or other I/O.",

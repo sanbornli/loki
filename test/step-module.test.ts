@@ -153,6 +153,7 @@ function buildZip(files: Record<string, Uint8Array | string>): Uint8Array {
 function setupProject() {
   const platform = new PlatformService();
   const creator = platform.registerCreator("creator@example.test", "Studio");
+  platform.assignPlan(creator.account.id, "loki");
   const project = platform.createProject(
     creator.account.id,
     creator.organization.id,

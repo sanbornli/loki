@@ -414,6 +414,7 @@ export class DeploymentService {
       throw new Error("game.json is invalid JSON");
     }
     const manifest = GameManifestSchema.parse(manifestInput);
+    await this.platform.assertManifestAllowed(auth.projectId, manifest);
     if (!files.has(manifest.entrypoint)) {
       throw new Error(`entrypoint ${manifest.entrypoint} is missing`);
     }

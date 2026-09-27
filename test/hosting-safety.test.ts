@@ -51,6 +51,7 @@ test("guest player sessions resume the same identity from a signed cookie", asyn
     { name: "Public Game", slug: "public-game" },
   );
   platform.transitionProject(creator.account.id, project.id, "private");
+  platform.assignPlan(creator.account.id, "loki");
   platform.transitionProject(creator.account.id, project.id, "unlisted");
   platform.setActiveDeployment(creator.account.id, project.id, crypto.randomUUID());
   const guestResume = new GuestResumeSigner(Buffer.alloc(32, 9));
@@ -102,6 +103,7 @@ test("player session endpoint ignores client supplied player identity", async (t
     { name: "Unlisted Game", slug: "unlisted-game" },
   );
   platform.transitionProject(creator.account.id, project.id, "private");
+  platform.assignPlan(creator.account.id, "loki");
   platform.transitionProject(creator.account.id, project.id, "unlisted");
   platform.setActiveDeployment(creator.account.id, project.id, crypto.randomUUID());
   const server = startApiServer({

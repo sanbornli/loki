@@ -43,6 +43,14 @@ const ProviderEnvironmentSchema = z
     SENTRY_DSN: optionalUrl,
     SENTRY_ENVIRONMENT: z.string().default("local"),
     SENTRY_RELEASE: z.string().optional(),
+
+    LOKI_CREATOR_ORIGIN: optionalUrl,
+    STRIPE_SECRET_KEY: optionalSecret,
+    STRIPE_WEBHOOK_SECRET: optionalSecret,
+    STRIPE_PRICE_LOKI_MONTHLY: z.string().min(1).optional(),
+    STRIPE_PRICE_LOKI_ANNUAL: z.string().min(1).optional(),
+    STRIPE_PRICE_PRO_MONTHLY: z.string().min(1).optional(),
+    STRIPE_PRICE_PRO_ANNUAL: z.string().min(1).optional(),
   })
   .superRefine((environment, context) => {
     const githubKeys = [

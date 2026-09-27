@@ -1,15 +1,33 @@
+import type { GameManifest, StepModuleDescriptor } from "../../../packages/protocol/src/index.js";
 import type { PlatformOperations } from "./platform.js";
+
+export interface NakamaTenantConfig {
+  maxPlayers: number;
+  tickRate: number;
+  teamSize?: number;
+  concurrentRoomQuota?: number;
+  authority: "host" | "server";
+  // Explicit null clears a previously stored server module. Omitting the
+  // field would keep it, and Nakama then rejects host-plus-module.
+  stepModule: StepModuleDescriptor | null;
+}
+
+export function nakamaTenantConfigFromManifest(manifest: GameManifest): NakamaTenantConfig {
+  const multiplayer = manifest.multiplayer;
+  if (!multiplayer?.enabled) throw new Error("multiplayer is not enabled");
+  return {
+    maxPlayers: multiplayer.maxPlayers,
+    tickRate: multiplayer.tickRate,
+    authority: multiplayer.authority,
+    stepModule: multiplayer.authority === "server" ? multiplayer.step ?? null : null,
+  };
+}
 
 export interface NakamaGatewayOptions {
   origin: string;
   serverKey: string;
   httpKey: string;
-  projectConfig?(projectId: string): Promise<{
-    maxPlayers: number;
-    tickRate: number;
-    teamSize?: number;
-    concurrentRoomQuota?: number;
-  }>;
+  projectConfig?(projectId: string): Promise<NakamaTenantConfig>;
 }
 
 export class NakamaGateway {

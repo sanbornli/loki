@@ -19,6 +19,7 @@ import type { PlatformOperations } from "./platform.js";
 import type { GuestResumeSigner, HostingAuthorization } from "./hosting-auth.js";
 import { clientAddress, rateLimitFor } from "./http-rate-limit.js";
 import { ServiceError, type SafetyOperations } from "./safety.js";
+import { assertPriceKey, type BillingService } from "./billing.js";
 
 export interface ApiDependencies {
   platform: PlatformOperations;
@@ -41,6 +42,7 @@ export interface ApiDependencies {
   hostingAuth?: HostingAuthorization;
   guestResume?: GuestResumeSigner;
   safety?: SafetyOperations;
+  billing?: BillingService;
   readiness?(): Promise<Record<string, boolean>>;
   log?(record: Record<string, unknown>): void;
   allowOrigin?(origin: string): boolean;
@@ -610,6 +612,29 @@ export function createApiHandler(dependencies: ApiDependencies) {
         } else {
           json(response, 200, { accessToken: result.accessToken });
         }
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/v1/billing/webhook") {
+        if (!dependencies.billing) throw new Error("billing is not configured");
+        const signature = request.headers["stripe-signature"];
+        if (typeof signature !== "string") throw new Error("invalid stripe signature");
+        await dependencies.billing.handleWebhook(await readBody(request, 1024 * 1024), signature);
+        json(response, 200, { received: true });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/v1/billing/checkout") {
+        if (!dependencies.billing) throw new Error("billing is not configured");
+        const actorId = await dependencies.authenticateCreator(request);
+        const input = JSON.parse((await readBody(request, 8 * 1024)).toString("utf8")) as {
+          price?: unknown;
+        };
+        json(response, 200, await dependencies.billing.createCheckout(actorId, assertPriceKey(input.price)));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/v1/billing/portal") {
+        if (!dependencies.billing) throw new Error("billing is not configured");
+        const actorId = await dependencies.authenticateCreator(request);
+        json(response, 200, await dependencies.billing.createPortal(actorId));
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/organizations") {

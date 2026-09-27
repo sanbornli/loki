@@ -18,7 +18,23 @@ import type {
   Organization,
   PlatformOperations,
   Project,
+  SubscriptionUpdate,
 } from "./platform.js";
+import {
+  activationState,
+  assertPublicCatalog,
+  assertRoomSize,
+  assertServerAuthority,
+  assertWithinCap,
+  consumesPlayLink,
+  effectivePlan,
+  isPlanId,
+  isPlanStatus,
+  limitsFor,
+  roomQuotaForPlan,
+  type PlanId,
+  type PlanStatus,
+} from "./plans.js";
 import {
   playablePath,
   validateOrganizationSlug,
@@ -39,6 +55,37 @@ type ProjectRow = {
 
 const iso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+
+type BillingRow = {
+  id: string;
+  plan: string;
+  plan_status: string;
+  plan_period_end: Date | string | null;
+  stripe_customer_id?: string | null;
+};
+
+const accountBilling = (row: BillingRow): {
+  plan: PlanId;
+  planStatus: PlanStatus;
+  planPeriodEnd?: string;
+  manageBilling: boolean;
+} => {
+  if (!isPlanId(row.plan) || !isPlanStatus(row.plan_status)) {
+    throw new Error("invalid account plan");
+  }
+  const periodEnd = row.plan_period_end ? iso(row.plan_period_end) : undefined;
+  const plan = effectivePlan({
+    plan: row.plan,
+    status: row.plan_status,
+    periodEnd,
+  });
+  return {
+    plan,
+    planStatus: row.plan_status,
+    planPeriodEnd: periodEnd,
+    manageBilling: Boolean(row.stripe_customer_id),
+  };
+};
 
 const projectFromRow = (row: ProjectRow): Project => ({
   id: row.id,
@@ -88,6 +135,62 @@ async function requireMember(
   if (!membership.rowCount) throw new Error("organization access denied");
 }
 
+async function lockOwnerBilling(
+  client: PoolClient,
+  organizationId: string,
+): Promise<BillingRow> {
+  const result = await client.query<BillingRow>(
+    `SELECT accounts.id, accounts.plan, accounts.plan_status, accounts.plan_period_end,
+            accounts.stripe_customer_id
+       FROM organization_members
+       JOIN accounts ON accounts.id = organization_members.account_id
+      WHERE organization_members.organization_id = $1
+        AND organization_members.role = 'owner'
+      FOR UPDATE OF accounts`,
+    [organizationId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error("organization owner not found");
+  return row;
+}
+
+async function countOwnedProjects(
+  client: PoolClient,
+  ownerId: string,
+  playableOnly: boolean,
+): Promise<number> {
+  const result = await client.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM projects
+       JOIN organization_members
+         ON organization_members.organization_id = projects.organization_id
+        AND organization_members.role = 'owner'
+      WHERE organization_members.account_id = $1
+        ${playableOnly ? "AND projects.state IN ('private', 'unlisted', 'published')" : ""}`,
+    [ownerId],
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+async function assertPlanTransition(
+  client: PoolClient,
+  organizationId: string,
+  from: string,
+  next: string,
+): Promise<void> {
+  const owner = await lockOwnerBilling(client, organizationId);
+  const plan = accountBilling(owner).plan;
+  const limits = limitsFor(plan);
+  if (next === "unlisted" || next === "published") assertPublicCatalog(plan);
+  if (consumesPlayLink(from, next)) {
+    assertWithinCap(
+      await countOwnedProjects(client, owner.id, true),
+      limits.playLinks,
+      "plan play link limit reached",
+    );
+  }
+}
+
 async function recordAudit(
   client: PoolClient,
   input: {
@@ -132,10 +235,15 @@ export class PostgresPlatformService implements PlatformOperations {
       email: string;
       platform_role: "creator" | "admin";
       created_at: Date | string;
+      plan: string;
+      plan_status: string;
+      plan_period_end: Date | string | null;
+      stripe_customer_id: string | null;
     }>(
       `UPDATE accounts SET email = $2
         WHERE auth_subject = $1
-        RETURNING id, email, platform_role, created_at`,
+        RETURNING id, email, platform_role, created_at, plan, plan_status,
+                  plan_period_end, stripe_customer_id`,
       [authSubject, normalizedEmail],
     );
     if (existing.rows[0]) {
@@ -155,6 +263,8 @@ export class PostgresPlatformService implements PlatformOperations {
         email: account.email,
         platformRole: account.platform_role,
         createdAt: iso(account.created_at),
+        limits: limitsFor(accountBilling(account).plan),
+        ...accountBilling(account),
       };
     }
     if (!legalVersions) throw new Error("legal acceptance required");
@@ -164,12 +274,17 @@ export class PostgresPlatformService implements PlatformOperations {
         email: string;
         platform_role: "creator" | "admin";
         created_at: Date | string;
+        plan: string;
+        plan_status: string;
+        plan_period_end: Date | string | null;
+        stripe_customer_id: string | null;
       }>(
         `INSERT INTO accounts (auth_subject, email)
          VALUES ($1, $2)
          ON CONFLICT (auth_subject)
          DO UPDATE SET email = EXCLUDED.email
-         RETURNING id, email, platform_role, created_at`,
+         RETURNING id, email, platform_role, created_at, plan, plan_status,
+                   plan_period_end, stripe_customer_id`,
         [authSubject, normalizedEmail],
       );
       const row = result.rows[0]!;
@@ -179,11 +294,14 @@ export class PostgresPlatformService implements PlatformOperations {
          ON CONFLICT DO NOTHING`,
         [row.id, legalVersions.terms, legalVersions.privacy, legalVersions.aup],
       );
+      const billing = accountBilling(row);
       return {
         id: row.id,
         email: row.email,
         platformRole: row.platform_role,
         createdAt: iso(row.created_at),
+        limits: limitsFor(billing.plan),
+        ...billing,
       };
     });
   }
@@ -256,6 +374,13 @@ export class PostgresPlatformService implements PlatformOperations {
     validateProjectSlug(input.slug);
     return transaction(this.pool, async (client) => {
       await requireMember(client, actorId, organizationId);
+      const owner = await lockOwnerBilling(client, organizationId);
+      const limits = limitsFor(accountBilling(owner).plan);
+      assertWithinCap(
+        await countOwnedProjects(client, owner.id, false),
+        limits.games,
+        "plan game limit reached",
+      );
       const result = await client.query<ProjectRow>(
         `INSERT INTO projects (organization_id, name, slug)
          VALUES ($1, $2, $3)
@@ -312,6 +437,7 @@ export class PostgresPlatformService implements PlatformOperations {
       if (!transitions[row.state].includes(next)) {
         throw new Error(`invalid project transition ${row.state} -> ${next}`);
       }
+      await assertPlanTransition(client, row.organization_id, row.state, next);
       const updated = await client.query<ProjectRow>(
         `UPDATE projects
             SET state = $2, updated_at = now()
@@ -484,17 +610,20 @@ export class PostgresPlatformService implements PlatformOperations {
         [deploymentId, projectId],
       );
       if (!deployment.rowCount) throw new Error("deployment not found");
+      let nextState = project.state;
+      if (project.state === "draft") {
+        const owner = await lockOwnerBilling(client, project.organization_id);
+        nextState = activationState(accountBilling(owner).plan);
+        await assertPlanTransition(client, project.organization_id, project.state, nextState);
+      }
       const updated = await client.query<ProjectRow>(
         `UPDATE projects
             SET active_deployment_id = $2,
-                state = CASE
-                  WHEN state = 'draft' THEN 'unlisted'::project_state
-                  ELSE state
-                END,
+                state = $3,
                 updated_at = now()
           WHERE id = $1
           RETURNING *`,
-        [projectId, deploymentId],
+        [projectId, deploymentId, nextState],
       );
       await recordAudit(client, {
         actorId,
@@ -620,6 +749,93 @@ export class PostgresPlatformService implements PlatformOperations {
     } finally {
       client.release();
     }
+  }
+
+  async billingContact(
+    accountId: string,
+  ): Promise<{ email: string; stripeCustomerId?: string }> {
+    const result = await this.pool.query<{ email: string; stripe_customer_id: string | null }>(
+      "SELECT email, stripe_customer_id FROM accounts WHERE id = $1",
+      [accountId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("account not found");
+    return { email: row.email, stripeCustomerId: row.stripe_customer_id ?? undefined };
+  }
+
+  async applySubscription(update: SubscriptionUpdate): Promise<void> {
+    const result = await this.pool.query(
+      `UPDATE accounts
+          SET plan = COALESCE($2, plan),
+              plan_status = COALESCE($3, plan_status),
+              plan_period_end = COALESCE($4::timestamptz, plan_period_end),
+              stripe_customer_id = COALESCE($5, stripe_customer_id),
+              stripe_subscription_id = COALESCE($6, stripe_subscription_id)
+        WHERE id = $1`,
+      [
+        update.accountId,
+        update.plan ?? null,
+        update.status ?? null,
+        update.periodEnd ?? null,
+        update.stripeCustomerId ?? null,
+        update.stripeSubscriptionId ?? null,
+      ],
+    );
+    if (!result.rowCount) throw new Error("account not found");
+  }
+
+  async accountIdForStripeCustomer(
+    customerId?: string,
+    subscriptionId?: string,
+  ): Promise<string | undefined> {
+    const result = await this.pool.query<{ id: string }>(
+      `SELECT id FROM accounts
+        WHERE ($1::text IS NOT NULL AND stripe_customer_id = $1)
+           OR ($2::text IS NOT NULL AND stripe_subscription_id = $2)
+        LIMIT 1`,
+      [customerId ?? null, subscriptionId ?? null],
+    );
+    return result.rows[0]?.id;
+  }
+
+  async projectRuntimeLimits(projectId: string): Promise<{
+    plan: PlanId;
+    maxPlayersPerRoom: number;
+    simultaneousRooms: number;
+    serverAuthority: boolean;
+  }> {
+    const result = await this.pool.query<BillingRow>(
+      `SELECT accounts.id, accounts.plan, accounts.plan_status, accounts.plan_period_end,
+              accounts.stripe_customer_id
+         FROM projects
+         JOIN organization_members
+           ON organization_members.organization_id = projects.organization_id
+          AND organization_members.role = 'owner'
+         JOIN accounts ON accounts.id = organization_members.account_id
+        WHERE projects.id = $1`,
+      [projectId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("project not found");
+    const plan = accountBilling(row).plan;
+    const limits = limitsFor(plan);
+    return {
+      plan,
+      maxPlayersPerRoom: limits.maxPlayersPerRoom,
+      simultaneousRooms: roomQuotaForPlan(plan),
+      serverAuthority: limits.serverAuthority,
+    };
+  }
+
+  async assertManifestAllowed(
+    projectId: string,
+    manifest: { multiplayer?: { enabled?: boolean; authority: "host" | "server"; maxPlayers: number } },
+  ): Promise<void> {
+    const multiplayer = manifest.multiplayer;
+    if (!multiplayer?.enabled) return;
+    const { plan } = await this.projectRuntimeLimits(projectId);
+    if (multiplayer.authority === "server") assertServerAuthority(plan);
+    assertRoomSize(plan, multiplayer.maxPlayers);
   }
 }
 

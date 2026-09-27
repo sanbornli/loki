@@ -255,6 +255,25 @@ test("teardownServerAuthorityMatch never throws even when the worker is unreacha
   assert.doesNotThrow(() => context.teardownServerAuthorityMatch(failingNk, state));
 });
 
+test("an explicit host config clears a stored server step module, and omitting stepModule does not", async () => {
+  const context = await loadLokiRuntime();
+  const previous = context.validateProjectConfig(
+    "project-1",
+    { authority: "server", stepModule: validStep },
+    undefined,
+  );
+  const cleared = context.validateProjectConfig(
+    "project-1",
+    { authority: "host", stepModule: null },
+    previous,
+  );
+  assert.equal(cleared.authority, "host");
+  assert.equal(cleared.stepModule, null);
+  assert.throws(() =>
+    context.validateProjectConfig("project-1", { authority: "host" }, previous),
+  );
+});
+
 test("two join attempts cannot both take the last open seat", async () => {
   const context = await loadLokiRuntime();
   const project = {

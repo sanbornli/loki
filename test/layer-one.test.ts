@@ -11,7 +11,8 @@ import {
   DeploymentService,
   MemoryArtifactStore,
 } from "../apps/api/src/deployments.js";
-import { NakamaGateway } from "../apps/api/src/nakama.js";
+import { NakamaGateway, nakamaTenantConfigFromManifest } from "../apps/api/src/nakama.js";
+import { GameManifestSchema } from "../packages/protocol/src/index.js";
 import {
   PlatformService,
   type PlatformOperations,
@@ -80,6 +81,7 @@ function buildZip(files: Record<string, string>): Uint8Array {
 function setupProject() {
   const platform = new PlatformService();
   const creator = platform.registerCreator("creator@example.test", "Studio");
+  platform.assignPlan(creator.account.id, "loki");
   const project = platform.createProject(
     creator.account.id,
     creator.organization.id,
@@ -140,6 +142,7 @@ test("finished builds are scanned, stored immutably and activated", async () => 
 test("a new project's first activated deployment becomes public", async () => {
   const platform = new PlatformService();
   const creator = platform.registerCreator("public@example.test", "Public Studio");
+  platform.assignPlan(creator.account.id, "loki");
   const project = platform.createProject(
     creator.account.id,
     creator.organization.id,
@@ -873,6 +876,35 @@ test("Nakama sessions expose the authoritative Nakama user id", async (t) => {
 
   assert.equal(session.playerId, nakamaPlayerId);
   assert.notEqual(session.playerId, lokiPlayerId);
+});
+
+test("a player session forwards authority and clears stepModule when the manifest is host", () => {
+  const base = {
+    schemaVersion: 1 as const,
+    name: "game",
+    entrypoint: "index.html",
+  };
+  const step = {
+    abiVersion: 1 as const,
+    modulePath: "server/step.wasm",
+    sha256: "a".repeat(64),
+  };
+  const host = nakamaTenantConfigFromManifest(
+    GameManifestSchema.parse({
+      ...base,
+      multiplayer: { enabled: true, authority: "host", maxPlayers: 8, tickRate: 10 },
+    }),
+  );
+  assert.equal(host.authority, "host");
+  assert.equal(host.stepModule, null);
+  const server = nakamaTenantConfigFromManifest(
+    GameManifestSchema.parse({
+      ...base,
+      multiplayer: { enabled: true, authority: "server", maxPlayers: 8, tickRate: 10, step },
+    }),
+  );
+  assert.equal(server.authority, "server");
+  assert.deepEqual(server.stepModule, step);
 });
 
 test("CLI initializes, validates and archives finished builds", async () => {

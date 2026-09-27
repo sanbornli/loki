@@ -17,6 +17,7 @@ import type {
   Organization,
   Project,
 } from "./platform.js";
+import { isPlanId, isPlanStatus, limitsFor, effectivePlan } from "./plans.js";
 
 export type MembershipRole = "owner" | "member";
 
@@ -94,6 +95,10 @@ type AccountRow = {
   email: string;
   platform_role: "creator" | "admin";
   created_at: Date | string;
+  plan: string;
+  plan_status: string;
+  plan_period_end: Date | string | null;
+  stripe_customer_id: string | null;
 };
 
 type OrganizationRow = {
@@ -168,12 +173,28 @@ const iso = (value: Date | string): string => {
   return date.toISOString();
 };
 
-const accountFromRow = (row: AccountRow): Account => ({
-  id: row.id,
-  email: row.email,
-  platformRole: row.platform_role,
-  createdAt: iso(row.created_at),
-});
+const accountFromRow = (row: AccountRow): Account => {
+  if (!isPlanId(row.plan) || !isPlanStatus(row.plan_status)) {
+    throw new Error("invalid account plan");
+  }
+  const planPeriodEnd = row.plan_period_end ? iso(row.plan_period_end) : undefined;
+  const plan = effectivePlan({
+    plan: row.plan,
+    status: row.plan_status,
+    periodEnd: planPeriodEnd,
+  });
+  return {
+    id: row.id,
+    email: row.email,
+    platformRole: row.platform_role,
+    createdAt: iso(row.created_at),
+    plan,
+    planStatus: row.plan_status,
+    planPeriodEnd,
+    manageBilling: Boolean(row.stripe_customer_id),
+    limits: limitsFor(plan),
+  };
+};
 
 const organizationFromRow = (row: OrganizationRow): Organization => ({
   id: row.id,
@@ -344,7 +365,9 @@ export class DashboardService implements DashboardOperations {
   async creatorOverview(actorId: string): Promise<CreatorOverview> {
     const [accountResult, membershipResult, projectResult] = await Promise.all([
       this.pool.query<AccountRow>(
-        "SELECT id, email, platform_role, created_at FROM accounts WHERE id = $1",
+        `SELECT id, email, platform_role, created_at, plan, plan_status,
+                plan_period_end, stripe_customer_id
+           FROM accounts WHERE id = $1`,
         [actorId],
       ),
       this.pool.query<OrganizationRow & { role: MembershipRole }>(

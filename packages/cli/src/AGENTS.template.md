@@ -78,32 +78,45 @@
   `authority` is `"server"` — `step`. Report the richer profile in the
   final report: values, supporting evidence, and creator-confirmed
   decisions.
-- `authority: "server"` is disabled in production until the sandbox gates
-  in the server-authority plan pass; do not offer it to a creator as a
-  working option today. If a mode still needs it, `step` must name a
-  compiled WebAssembly module (`modulePath`, `.wasm`) exporting exactly one
-  function, `step`, and importing nothing — no WASI, clocks, randomness, or
-  host functions. A seed, when the game needs one, is a supplied input
-  field, not something the module reads from the environment. Compile the
-  game's headless simulation to that ABI yourself; do not hand the creator
-  a module that imports anything, since the validator rejects it and the
-  worker never mounts it.
-  decisions.
-- `authority: "server"` is disabled in production until the sandbox gates
-  in the server-authority plan pass; do not offer it to a creator as a
-  working option today. If a mode still needs it, `step` must name a
-  compiled WebAssembly module (`modulePath`, `.wasm`) exporting exactly one
-  function, `step`, and importing nothing — no WASI, clocks, randomness, or
-  host functions. A seed, when the game needs one, is a supplied input
-  field, not something the module reads from the environment. Compile the
-  game's headless simulation to that ABI yourself; do not hand the creator
-  a module that imports anything, since the validator rejects it and the
-  worker never mounts it.
+- Classify authority from the code that advances match state, not from the
+  genre or the frame rate. Turn-based or event-driven means that state
+  changes only when a player action is committed. Continuous realtime means
+  state advances on a tick even when nobody has just pressed a button. If
+  that reading is ambiguous, stop and ask the creator what the match state
+  depends on. Do not guess.
+- One `game.json` has one `authority` for the whole project. If modes
+  disagree, say so and ask which one this project is.
+- Host is more suitable for turn-based and event-driven games. Write
+  `"authority": "host"`, omit `step`, and use `createSynchronizedRoom()`.
+- Server is more suitable for continuous realtime games. Tell the creator
+  what the update path does, then ask them to confirm server. Write
+  `"authority": "server"` and `step`. Do not elect a player host. Server
+  rooms are browser-only, run in Singapore, and end if the step fails; they
+  do not fall back to a player. That is fairness, not lower latency.
+- Before compiling `step`, change the state update so the next state depends
+  only on the previous state and this tick's inputs. Drawing, sound, and
+  asset loads stay in the browser. If the update reads the DOM, the clock,
+  randomness, or assets, remove those calls from it. A seed or the tick
+  index, when the game needs one, is an input field, not something the
+  module reads itself. If you cannot make that change, say so and do not
+  write `"authority": "server"`. Host realtime (`createRealtimeRoom()` with
+  `"authority": "host"`) can ship until the update is pure; say that is why,
+  and do not describe host as the better fit for a continuous game.
+- `step` names a compiled `.wasm` module (`modulePath`) exporting exactly
+  one function, `step`, and importing nothing — no WASI, clocks, randomness,
+  or host functions. Compile it yourself. The validator rejects imports, and
+  the worker never mounts anything else.
+- A later switch is another deploy after the creator confirms again. Rooms
+  already open keep the authority they started with.
+- Do not ask the creator to choose server, and do not write
+  `"authority": "server"`, until Loki has enabled server authority in
+  production. Until then, continuous games use host realtime. The server
+  question above applies once that switch is on.
 - After inspecting and confirming each game mode's profile, choose
   `createSynchronizedRoom()` for turn-based or event-driven state, or
-  `createRealtimeRoom()` for continuous host-authoritative simulation. Do not
-  choose by genre or animation smoothness; choose by how authoritative state
-  actually progresses. Do not run both room types for the same mode.
+  `createRealtimeRoom()` for continuous realtime. Do not choose by genre or
+  animation smoothness; choose by how authoritative state actually
+  progresses. Do not run both room types for the same mode.
 - `createSynchronizedRoom()`: define project-owned state and actions, then
   provide a reducer. Do not implement a parallel authority, version, or
   membership protocol.

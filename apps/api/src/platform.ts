@@ -10,6 +10,21 @@ import {
   type ProjectState,
 } from "../../../packages/protocol/src/index.js";
 import {
+  activationState,
+  assertPublicCatalog,
+  assertRoomSize,
+  assertServerAuthority,
+  assertWithinCap,
+  consumesPlayLink,
+  effectivePlan,
+  limitsFor,
+  roomQuotaForPlan,
+  type BillingRecord,
+  type PlanId,
+  type PlanLimits,
+  type PlanStatus,
+} from "./plans.js";
+import {
   allocateUniqueSlug,
   playablePath,
   validateOrganizationSlug,
@@ -22,6 +37,20 @@ export interface Account {
   email: string;
   platformRole: "creator" | "admin";
   createdAt: string;
+  plan: PlanId;
+  planStatus: PlanStatus;
+  planPeriodEnd?: string;
+  manageBilling: boolean;
+  limits: PlanLimits;
+}
+
+export interface SubscriptionUpdate {
+  accountId: string;
+  plan?: PlanId;
+  status?: PlanStatus;
+  periodEnd?: string;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
 }
 
 export interface Organization {
@@ -101,6 +130,22 @@ export interface PlatformOperations {
   ): Awaitable<Pick<Project, "id" | "name" | "slug" | "state" | "activeDeploymentId">>;
   projectPlayPath(projectId: string): Awaitable<string>;
   auditLog(actorId: string, organizationId: string): Awaitable<AuditRecord[]>;
+  billingContact(accountId: string): Awaitable<{ email: string; stripeCustomerId?: string }>;
+  applySubscription(update: SubscriptionUpdate): Awaitable<void>;
+  accountIdForStripeCustomer(
+    customerId?: string,
+    subscriptionId?: string,
+  ): Awaitable<string | undefined>;
+  projectRuntimeLimits(projectId: string): Awaitable<{
+    plan: PlanId;
+    maxPlayersPerRoom: number;
+    simultaneousRooms: number;
+    serverAuthority: boolean;
+  }>;
+  assertManifestAllowed(
+    projectId: string,
+    manifest: { multiplayer?: { enabled?: boolean; authority: "host" | "server"; maxPlayers: number } },
+  ): Awaitable<void>;
 }
 
 interface DeploymentCredential {
@@ -124,13 +169,31 @@ const transitions: Record<ProjectState, ProjectState[]> = {
 const secretHash = (value: string): string =>
   createHash("sha256").update(value).digest("hex");
 
+interface StoredAccount {
+  id: string;
+  email: string;
+  platformRole: "creator" | "admin";
+  createdAt: string;
+  plan: PlanId;
+  planStatus: PlanStatus;
+  planPeriodEnd?: string;
+}
+
+interface StripeLink {
+  customerId?: string;
+  subscriptionId?: string;
+}
+
 export class PlatformService {
-  readonly #accounts = new Map<string, Account>();
+  readonly #accounts = new Map<string, StoredAccount>();
   readonly #organizations = new Map<string, Organization>();
   readonly #members = new Map<string, Map<string, "owner" | "member">>();
   readonly #projects = new Map<string, Project>();
   readonly #credentials = new Map<string, DeploymentCredential>();
   readonly #audit: AuditRecord[] = [];
+  readonly #stripe = new Map<string, StripeLink>();
+  readonly #customers = new Map<string, string>();
+  readonly #subscriptions = new Map<string, string>();
 
   constructor(readonly tokens = new SessionTokenService()) {}
 
@@ -172,11 +235,13 @@ export class PlatformService {
       throw new Error("email already registered");
     }
     const now = new Date().toISOString();
-    const account: Account = {
+    const account: StoredAccount = {
       id: randomUUID(),
       email: normalizedEmail,
       platformRole: "creator",
       createdAt: now,
+      plan: "free",
+      planStatus: "active",
     };
     const name = organizationName.trim();
     if (!name) throw new Error("organization name required");
@@ -194,7 +259,20 @@ export class PlatformService {
     this.#record(account.id, organization.id, undefined, "creator.registered", {
       email: normalizedEmail,
     });
-    return { account: structuredClone(account), organization: structuredClone(organization) };
+    return { account: this.#present(account), organization: structuredClone(organization) };
+  }
+
+  assignPlan(
+    accountId: string,
+    plan: PlanId,
+    status: PlanStatus = "active",
+    periodEnd?: string,
+  ): Account {
+    const account = this.#requireAccount(accountId);
+    account.plan = plan;
+    account.planStatus = status;
+    account.planPeriodEnd = periodEnd;
+    return this.#present(account);
   }
 
   createProject(
@@ -203,6 +281,13 @@ export class PlatformService {
     input: { name: string; slug: string },
   ): Project {
     this.#requireMember(actorId, organizationId);
+    const owner = this.#owner(organizationId);
+    const limits = limitsFor(effectivePlan(this.#billing(owner)));
+    assertWithinCap(
+      this.#ownedProjects(owner.id).length,
+      limits.games,
+      "plan game limit reached",
+    );
     validateProjectSlug(input.slug);
     if (
       [...this.#projects.values()].some(
@@ -247,6 +332,7 @@ export class PlatformService {
     if (!transitions[project.state].includes(next)) {
       throw new Error(`invalid project transition ${project.state} -> ${next}`);
     }
+    this.#assertTransitionAllowed(project, next);
     const previous = project.state;
     project.state = next;
     project.updatedAt = new Date().toISOString();
@@ -339,7 +425,12 @@ export class PlatformService {
     const project = this.#requireProject(projectId);
     this.#requireMember(actorId, project.organizationId);
     project.activeDeploymentId = deploymentId;
-    if (project.state === "draft") project.state = "unlisted";
+    if (project.state === "draft") {
+      const plan = effectivePlan(this.#billing(this.#owner(project.organizationId)));
+      const next = activationState(plan);
+      this.#assertTransitionAllowed(project, next);
+      project.state = next;
+    }
     project.updatedAt = new Date().toISOString();
     this.#record(actorId, project.organizationId, project.id, "deployment.activated", {
       deploymentId,
@@ -405,7 +496,66 @@ export class PlatformService {
       .map((record) => structuredClone(record));
   }
 
-  #requireAccount(accountId: string): Account {
+  billingContact(accountId: string): { email: string; stripeCustomerId?: string } {
+    const account = this.#requireAccount(accountId);
+    return { email: account.email, stripeCustomerId: this.#stripe.get(accountId)?.customerId };
+  }
+
+  applySubscription(update: SubscriptionUpdate): void {
+    const account = this.#requireAccount(update.accountId);
+    if (update.plan) account.plan = update.plan;
+    if (update.status) account.planStatus = update.status;
+    if (update.periodEnd) account.planPeriodEnd = update.periodEnd;
+    const previous = this.#stripe.get(account.id);
+    if (previous?.customerId) this.#customers.delete(previous.customerId);
+    if (previous?.subscriptionId) this.#subscriptions.delete(previous.subscriptionId);
+    const next: StripeLink = {
+      customerId: update.stripeCustomerId ?? previous?.customerId,
+      subscriptionId: update.stripeSubscriptionId ?? previous?.subscriptionId,
+    };
+    this.#stripe.set(account.id, next);
+    if (next.customerId) this.#customers.set(next.customerId, account.id);
+    if (next.subscriptionId) this.#subscriptions.set(next.subscriptionId, account.id);
+  }
+
+  accountIdForStripeCustomer(
+    customerId?: string,
+    subscriptionId?: string,
+  ): string | undefined {
+    if (customerId && this.#customers.has(customerId)) return this.#customers.get(customerId);
+    if (subscriptionId) return this.#subscriptions.get(subscriptionId);
+    return undefined;
+  }
+
+  projectRuntimeLimits(projectId: string): {
+    plan: PlanId;
+    maxPlayersPerRoom: number;
+    simultaneousRooms: number;
+    serverAuthority: boolean;
+  } {
+    const project = this.#requireProject(projectId);
+    const plan = effectivePlan(this.#billing(this.#owner(project.organizationId)));
+    const limits = limitsFor(plan);
+    return {
+      plan,
+      maxPlayersPerRoom: limits.maxPlayersPerRoom,
+      simultaneousRooms: roomQuotaForPlan(plan),
+      serverAuthority: limits.serverAuthority,
+    };
+  }
+
+  assertManifestAllowed(
+    projectId: string,
+    manifest: { multiplayer?: { enabled?: boolean; authority: "host" | "server"; maxPlayers: number } },
+  ): void {
+    const multiplayer = manifest.multiplayer;
+    if (!multiplayer?.enabled) return;
+    const plan = this.projectRuntimeLimits(projectId).plan;
+    if (multiplayer.authority === "server") assertServerAuthority(plan);
+    assertRoomSize(plan, multiplayer.maxPlayers);
+  }
+
+  #requireAccount(accountId: string): StoredAccount {
     const account = this.#accounts.get(accountId);
     if (!account) throw new Error("account not found");
     return account;
@@ -422,6 +572,56 @@ export class PlatformService {
     const project = this.#projects.get(projectId);
     if (!project) throw new Error("project not found");
     return project;
+  }
+
+  #owner(organizationId: string): StoredAccount {
+    const members = this.#members.get(organizationId);
+    for (const [accountId, role] of members ?? []) {
+      if (role === "owner") return this.#requireAccount(accountId);
+    }
+    throw new Error("organization owner not found");
+  }
+
+  #billing(account: StoredAccount): BillingRecord {
+    return {
+      plan: account.plan,
+      status: account.planStatus,
+      periodEnd: account.planPeriodEnd,
+    };
+  }
+
+  #ownedProjects(ownerId: string): Project[] {
+    return [...this.#projects.values()].filter(
+      (project) => this.#owner(project.organizationId).id === ownerId,
+    );
+  }
+
+  #assertTransitionAllowed(project: Project, next: ProjectState): void {
+    const owner = this.#owner(project.organizationId);
+    const plan = effectivePlan(this.#billing(owner));
+    const limits = limitsFor(plan);
+    if (next === "unlisted" || next === "published") assertPublicCatalog(plan);
+    if (consumesPlayLink(project.state, next)) {
+      const playable = this.#ownedProjects(owner.id).filter((item) =>
+        consumesPlayLink("draft", item.state),
+      ).length;
+      assertWithinCap(playable, limits.playLinks, "plan play link limit reached");
+    }
+  }
+
+  #present(account: StoredAccount): Account {
+    const plan = effectivePlan(this.#billing(account));
+    return {
+      id: account.id,
+      email: account.email,
+      platformRole: account.platformRole,
+      createdAt: account.createdAt,
+      plan,
+      planStatus: account.planStatus,
+      planPeriodEnd: account.planPeriodEnd,
+      manageBilling: Boolean(this.#stripe.get(account.id)?.customerId),
+      limits: limitsFor(plan),
+    };
   }
 
   #record(
