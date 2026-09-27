@@ -254,3 +254,51 @@ test("teardownServerAuthorityMatch never throws even when the worker is unreacha
   };
   assert.doesNotThrow(() => context.teardownServerAuthorityMatch(failingNk, state));
 });
+
+test("two join attempts cannot both take the last open seat", async () => {
+  const context = await loadLokiRuntime();
+  const project = {
+    projectId: "project-1",
+    status: "active",
+    maxPlayers: 8,
+    tickRate: 10,
+    visibility: "private",
+    teamSize: 0,
+    inviteTtlSeconds: 3600,
+    concurrentRoomQuota: 20,
+    leaderboardNamespace: "ns",
+    authority: "host",
+    stepModule: null,
+  };
+  const nk = {
+    storageRead: (reads: Array<{ collection: string }>) => {
+      const read = reads[0];
+      if (!read) return [];
+      if (read.collection === "_loki_tenants") return [{ value: { projectId: "project-1" } }];
+      return [{ value: project }];
+    },
+  };
+  const state = {
+    projectId: "project-1",
+    maxPlayers: 2,
+    members: { host: { sessionId: "host-session" } },
+    joinReservations: {},
+    realtime: { capableSessions: {}, pendingCapability: {}, active: false },
+  };
+  const attempt = (userId: string) =>
+    context.matchJoinAttempt(
+      {},
+      null,
+      nk,
+      {},
+      1,
+      state,
+      { userId, sessionId: `${userId}-session` },
+      {},
+    );
+  const first = attempt("guest");
+  const second = attempt("racer");
+  assert.equal(first.accept, true);
+  assert.equal(second.accept, false);
+  assert.match(String(second.rejectMessage), /ROOM_FULL/);
+});

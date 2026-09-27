@@ -1659,6 +1659,7 @@ var matchInit = function (ctx, logger, nk, params) {
       nextJoinOrdinal: 0,
       membershipRevision: 0,
       members: {},
+      joinReservations: {},
       rateLimits: {},
       joinSyncs: [],
       disconnectGraces: {},
@@ -1697,6 +1698,20 @@ var matchInit = function (ctx, logger, nk, params) {
   };
 };
 
+// Seats promised by an accepted join attempt but not yet written into
+// state.members. Nakama can run two MatchJoinAttempt calls before either
+// MatchJoin, so the last open seat has to be reserved here or both racers
+// are admitted.
+var reservedSeatCount = function (state, exceptUserId) {
+  var pending = state.joinReservations || {};
+  var count = 0;
+  Object.keys(pending).forEach(function (userId) {
+    if (userId === exceptUserId) return;
+    if (!state.members[userId]) count += 1;
+  });
+  return count;
+};
+
 var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, presence, metadata) {
   var accepted = false;
   var reason = "TENANT_MISMATCH: tenant mismatch";
@@ -1715,8 +1730,12 @@ var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, prese
     : Boolean(existingCapability && existingCapability.webrtc);
   try {
     accepted = tenantForUser(nk, presence.userId) === state.projectId;
-    if (accepted && !state.members[presence.userId] &&
-        Object.keys(state.members).length >= state.maxPlayers) {
+    if (
+      accepted &&
+      !state.members[presence.userId] &&
+      Object.keys(state.members).length + reservedSeatCount(state, presence.userId) >=
+        state.maxPlayers
+    ) {
       accepted = false;
       reason = "ROOM_FULL: room full";
     }
@@ -1732,6 +1751,10 @@ var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, prese
     }
   } catch (error) {
     reason = String(error && error.message ? error.message : error);
+  }
+  if (accepted && !state.members[presence.userId]) {
+    state.joinReservations = state.joinReservations || {};
+    state.joinReservations[presence.userId] = presence.sessionId;
   }
   if (accepted && state.realtime) {
     state.realtime.pendingCapability[presence.userId] = realtimeCapable;
@@ -1942,6 +1965,7 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
       member.username = presence.username;
       member.node = presence.node || presence.nodeId;
     }
+    if (state.joinReservations) delete state.joinReservations[presence.userId];
     // Server-authority rooms never elect a player host; hostId stays "" for
     // the room's entire life and the worker is the only authority.
     if (state.authority !== "server" && (!state.hostId || !state.members[state.hostId])) {
