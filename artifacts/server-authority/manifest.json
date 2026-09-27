@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "scope": "platform-wide",
+  "generatedAt": "2026-09-27T12:03:50.961Z",
+  "evidence": [
+    {
+      "gate": "warm-start",
+      "status": "pass",
+      "observedAt": "2026-09-27T12:03:50.961Z",
+      "environment": "local-darwin-arm64",
+      "evidenceFile": "warm-start.json",
+      "evidenceSha256": "72f740a903b4b7666bc6780d6a851394e09c1033653e6fe67da555d169d27555"
+    },
+    {
+      "gate": "metering",
+      "status": "pass",
+      "observedAt": "2026-09-27T12:03:50.961Z",
+      "environment": "local-darwin-arm64",
+      "evidenceFile": "metering.json",
+      "evidenceSha256": "8116521c7c2d741f5668c73a7bfc264b09730cc19fd2b523244ed1e57b31ac79"
+    },
+    {
+      "gate": "import-rejection",
+      "status": "pass",
+      "observedAt": "2026-09-27T12:03:50.961Z",
+      "environment": "local-darwin-arm64",
+      "evidenceFile": "import-rejection.json",
+      "evidenceSha256": "e502941dc56aed16fa017bdf3541fb1bb4d8823ef286aaced888592a996b8c97"
+    },
+    {
+      "gate": "crash-recovery",
+      "status": "pass",
+      "observedAt": "2026-09-27T12:03:50.961Z",
+      "environment": "local-darwin-arm64",
+      "evidenceFile": "crash-recovery.json",
+      "evidenceSha256": "cd2d7c566b3f7fa01171f6aa0024524944a1df52bd89e965128a600ab7848b2d"
+    },
+    {
+      "gate": "replay-determinism",
+      "status": "pass",
+      "observedAt": "2026-09-27T12:03:50.961Z",
+      "environment": "local-darwin-arm64",
+      "evidenceFile": "replay-determinism.json",
+      "evidenceSha256": "fafab064b2f8d639622f02f1b360d2afddfa2c7255e525c118ba839b9b2c03bf"
+    },
+    {
+      "gate": "local-runner-parity",
+      "status": "pass",
+      "observedAt": "2026-09-27T12:03:50.961Z",
+      "environment": "local-darwin-arm64",
+      "evidenceFile": "local-runner.json",
+      "evidenceSha256": "fa4125da5f075ad4f6594d40086e1c8b559857758523f78b0f3d301d24606cf1"
+    }
+  ]
+}

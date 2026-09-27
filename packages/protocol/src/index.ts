@@ -3,6 +3,22 @@ import { z } from "zod";
 
 export const MAX_TICK_RATE = 30;
 
+// A pinned WebAssembly step module for a `"server"`-authority room. The
+// module ABI is one export, `step`; it may import nothing (no WASI, clocks,
+// randomness, or host functions). `sha256` pins the exact bytes the
+// validator accepted and the worker fleet will fetch by hash, so a room
+// never silently runs a different build than the one that passed the
+// upload-boundary checks.
+export const StepModuleDescriptorSchema = z
+  .object({
+    abiVersion: z.literal(1),
+    modulePath: z
+      .string()
+      .regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+\.wasm$/),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+
 export const ProjectStateSchema = z.enum([
   "draft",
   "private",
@@ -22,10 +38,21 @@ export const GameManifestSchema = z
     multiplayer: z
       .object({
         enabled: z.boolean(),
-        authority: z.literal("host"),
+        authority: z.enum(["host", "server"]),
         maxPlayers: z.number().int().min(1).max(16),
         tickRate: z.number().int().min(1).max(MAX_TICK_RATE),
+        // Present if and only if authority is "server". tickRate stays the isolate's tick.
+        step: StepModuleDescriptorSchema.optional(),
       })
+      .strict()
+      .refine(
+        (value) => value.authority !== "server" || value.step !== undefined,
+        "server authority requires a pinned step module descriptor",
+      )
+      .refine(
+        (value) => value.authority === "server" || value.step === undefined,
+        "step is only valid together with server authority",
+      )
       .optional(),
     networkAllowlist: z.array(z.string().url()).max(10).default([]),
   })
@@ -94,6 +121,7 @@ export const CapabilitySchema = z.enum([
   "synchronized_rooms",
   "realtime_rooms",
   "public_room_browser",
+  "realtime_webrtc",
 ]);
 
 export const ActionIdSchema = z
@@ -119,6 +147,11 @@ export const RuntimeCapabilityBlockSchema = z
     synchronized_rooms: z.boolean().optional(),
     realtime_rooms: z.boolean().optional(),
     public_room_browser: z.boolean().optional(),
+    // Whether this runtime relays WebRTC signaling for realtime rooms. A
+    // client should only attempt host-star negotiation when this is true;
+    // a runtime that omits or sets this false silently ignores signaling
+    // opcodes and every realtime message stays on the Nakama WebSocket.
+    realtime_webrtc: z.boolean().optional(),
     realtimeProtocolVersion: z.number().int().positive().optional(),
     limits: ProtocolLimitsSchema.optional(),
     minimumProtocolVersion: z.number().int().positive().optional(),
@@ -151,6 +184,19 @@ const EnvelopeBase = {
   roomId: z.string().min(1).max(256),
   sequence: z.number().int().nonnegative(),
 };
+
+// A game-owned, bounded label shown next to a score. Loki never infers this
+// from the authenticated player id; a game that has none falls back to
+// showing the (opaque) playerId itself.
+export const LeaderboardDisplayNameSchema = z.string().trim().min(1).max(32);
+
+export const LeaderboardRecordSchema = z.object({
+  playerId: z.string().min(1).max(128),
+  displayName: LeaderboardDisplayNameSchema.optional(),
+  score: z.number().int(),
+  subscore: z.number().int(),
+  rank: z.number().int().positive(),
+});
 
 export const ClientEnvelopeSchema = z.discriminatedUnion("type", [
   z.object({
@@ -198,6 +244,7 @@ export const ClientEnvelopeSchema = z.discriminatedUnion("type", [
     leaderboardId: z.string().regex(/^[a-z0-9-]{1,64}$/),
     score: z.number().int(),
     subscore: z.number().int().default(0),
+    displayName: z.string().trim().min(1).max(32).optional(),
   }),
 ]);
 
@@ -267,14 +314,7 @@ export const ServerEnvelopeSchema = z.discriminatedUnion("type", [
     ...EnvelopeBase,
     type: z.literal("leaderboard"),
     leaderboardId: z.string().regex(/^[a-z0-9-]{1,64}$/),
-    records: z.array(
-      z.object({
-        playerId: z.string().min(1).max(128),
-        score: z.number().int(),
-        subscore: z.number().int(),
-        rank: z.number().int().positive(),
-      }),
-    ),
+    records: z.array(LeaderboardRecordSchema),
   }),
   z.object({
     ...EnvelopeBase,
@@ -492,6 +532,125 @@ export const RealtimeServerEnvelopeSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+// Additive, capability-gated WebRTC signaling. These are a *separate*
+// closed union from RealtimeClientEnvelopeSchema/RealtimeServerEnvelopeSchema
+// above: a runtime or client that does not recognize these types must never
+// have them routed through the realtime data-plane parser (that union would
+// throw on an unrecognized discriminant). Opcodes 22-24 are dedicated to
+// this signaling plane and never overlap 10-16 (v1) or 17-21 (v2 data).
+export const REALTIME_SIGNAL_OPCODES = {
+  offer: 22,
+  answer: 23,
+  ice: 24,
+} as const;
+
+const RealtimeSignalEnvelopeBase = {
+  protocolVersion: z.literal(REALTIME_PROTOCOL_VERSION),
+  roomId: z.string().min(1).max(256),
+  sequence: z.number().int().nonnegative(),
+  // The authority epoch this negotiation belongs to, so a signal describing
+  // a since-migrated host cannot be misapplied after the fact.
+  authorityEpoch: z.number().int().nonnegative(),
+};
+
+export const RealtimeSignalClientEnvelopeSchema = z.discriminatedUnion("type", [
+  z.object({
+    ...RealtimeSignalEnvelopeBase,
+    type: z.literal("webrtc_offer"),
+    toId: z.string().min(1).max(128),
+    sdp: z.string().min(1).max(8_192),
+  }),
+  z.object({
+    ...RealtimeSignalEnvelopeBase,
+    type: z.literal("webrtc_answer"),
+    toId: z.string().min(1).max(128),
+    sdp: z.string().min(1).max(8_192),
+  }),
+  z.object({
+    ...RealtimeSignalEnvelopeBase,
+    type: z.literal("webrtc_ice"),
+    toId: z.string().min(1).max(128),
+    candidate: z.string().min(1).max(2_048),
+    sdpMid: z.string().max(64).optional(),
+    sdpMLineIndex: z.number().int().nonnegative().optional(),
+  }),
+]);
+
+export const RealtimeSignalServerEnvelopeSchema = z.discriminatedUnion("type", [
+  z.object({
+    ...RealtimeSignalEnvelopeBase,
+    type: z.literal("webrtc_offer"),
+    fromId: z.string().min(1).max(128),
+    sdp: z.string().min(1).max(8_192),
+  }),
+  z.object({
+    ...RealtimeSignalEnvelopeBase,
+    type: z.literal("webrtc_answer"),
+    fromId: z.string().min(1).max(128),
+    sdp: z.string().min(1).max(8_192),
+  }),
+  z.object({
+    ...RealtimeSignalEnvelopeBase,
+    type: z.literal("webrtc_ice"),
+    fromId: z.string().min(1).max(128),
+    candidate: z.string().min(1).max(2_048),
+    sdpMid: z.string().max(64).optional(),
+    sdpMLineIndex: z.number().int().nonnegative().optional(),
+  }),
+  // Told to the sender when the target is not currently a webrtc-capable
+  // room member (left, reconnecting, or never advertised support); the
+  // caller should stop negotiating and stay on the WebSocket for that peer.
+  z.object({
+    ...RealtimeSignalEnvelopeBase,
+    type: z.literal("webrtc_unavailable"),
+    toId: z.string().min(1).max(128),
+  }),
+]);
+
+export type RealtimeSignalClientEnvelope = z.infer<typeof RealtimeSignalClientEnvelopeSchema>;
+export type RealtimeSignalServerEnvelope = z.infer<typeof RealtimeSignalServerEnvelopeSchema>;
+
+// Room-independent leaderboard access (loki_leaderboard_submit /
+// loki_leaderboard_list): usable from a title screen or post-game menu
+// without an active room. The in-room `score_submit` / `leaderboard`
+// envelopes above remain supported unchanged.
+export const LeaderboardListInputSchema = z
+  .object({
+    leaderboardId: z.string().regex(/^[a-z0-9-]{1,64}$/),
+    limit: z.number().int().min(1).max(100).default(20),
+    cursor: z.string().min(1).max(4_096).optional(),
+  })
+  .strict();
+
+export const LeaderboardListResultSchema = z
+  .object({
+    leaderboardId: z.string().regex(/^[a-z0-9-]{1,64}$/),
+    records: z.array(LeaderboardRecordSchema),
+    nextCursor: z.string().min(1).max(4_096).optional(),
+  })
+  .strict();
+
+export const LeaderboardSubmitInputSchema = z
+  .object({
+    leaderboardId: z.string().regex(/^[a-z0-9-]{1,64}$/),
+    score: z.number().int(),
+    subscore: z.number().int().default(0),
+    displayName: LeaderboardDisplayNameSchema.optional(),
+  })
+  .strict();
+
+export const LeaderboardSubmitResultSchema = z
+  .object({
+    record: LeaderboardRecordSchema,
+  })
+  .strict();
+
+export type LeaderboardRecord = z.infer<typeof LeaderboardRecordSchema>;
+export type LeaderboardListInput = z.infer<typeof LeaderboardListInputSchema>;
+export type LeaderboardListResult = z.infer<typeof LeaderboardListResultSchema>;
+export type LeaderboardSubmitInput = z.infer<typeof LeaderboardSubmitInputSchema>;
+export type LeaderboardSubmitResult = z.infer<typeof LeaderboardSubmitResultSchema>;
+
 export type RealtimeOperation = z.infer<typeof RealtimeOperationSchema>;
 export type RealtimeDelivery = z.infer<typeof RealtimeDeliverySchema>;
 export type RealtimeRetainedInput = z.infer<typeof RealtimeRetainedInputSchema>;
@@ -546,6 +705,8 @@ export const ListPublicRoomsInputSchema = z
   })
   .strict();
 
+export type StepModuleDescriptor = z.infer<typeof StepModuleDescriptorSchema>;
+
 export const ListPublicRoomsResultSchema = z
   .object({
     rooms: z.array(PublicRoomSummarySchema).max(50),
@@ -588,6 +749,7 @@ export const DEFAULT_RUNTIME_CAPABILITIES = {
   synchronized_rooms: true,
   realtime_rooms: true,
   public_room_browser: true,
+  realtime_webrtc: true,
   realtimeProtocolVersion: REALTIME_PROTOCOL_VERSION,
   minimumProtocolVersion: PROTOCOL_VERSION,
   limits: {

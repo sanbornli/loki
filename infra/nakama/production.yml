@@ -12,3 +12,5 @@ socket:
 runtime:
   js_entrypoint: loki.js
   path: /nakama/data/modules
+  env:
+    - "LOKI_REGION=sg"

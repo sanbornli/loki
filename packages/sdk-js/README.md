@@ -39,6 +39,23 @@ loading, empty, joining, full-room, waiting, readiness, and error states.
 The Loki overlay does not list, create, or join public rooms. Do not make
 every room public.
 
+Installing the SDK does not add Match or Leaderboard UI either; both are
+required alongside create/join, and the Loki overlay never draws them. Add
+a Match control calling the room wrapper's `matchmake()`
+(`SynchronizedRoom.matchmake()` / `RealtimeRoom.matchmake()`) with
+searching, cancel (abort the in-flight search), timeout, waiting, and error
+states, and a per-game Leaderboard using `LokiClient.listLeaderboard()` /
+`LokiClient.submitLeaderboardScore()` (room-independent; usable before,
+during, or without joining a room) — or the in-room `submitScore()` for a
+mid-room board — with display-name collection or a sensible fallback plus
+loading, empty, pagination, submission, and error states. Player count,
+teams, and scoring stay creator decisions; if the game has no numeric
+result to store, ask the creator once what to record. Leaderboards are
+per-game/project and available to guest sessions without a creator
+account; client-submitted scores are not an anti-cheat boundary.
+Matchmaking is blind, per-project, and single-region; a server-owned
+region is stamped on every ticket and any client-sent region is ignored.
+
 Prefer `createSynchronizedRoom()` for shared state. Supply opaque state, opaque
 actions, and a reducer. Loki sequences actions, commits only from the current
 authority, tracks `stateVersion`, deduplicates action IDs, restores snapshots,

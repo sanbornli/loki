@@ -22,7 +22,7 @@ export const productSections = [
   },
   {
     id: "agents",
-    label: "Agents",
+    label: "Agent SDK",
     description: "One source of truth for coding agents.",
   },
 ] as const;
@@ -201,7 +201,8 @@ export const marketingStyles = `
   left: 50%;
   z-index: 20;
   display: grid;
-  width: 22.5rem;
+  width: max-content;
+  min-width: 11.5rem;
   padding: 0.45rem;
   transform: translateX(-50%);
   border: 1px solid var(--line-strong);
@@ -215,7 +216,7 @@ export const marketingStyles = `
   position: absolute;
   top: 100%;
   left: 50%;
-  width: 22.5rem;
+  width: 11.5rem;
   height: 0.7rem;
   transform: translateX(-50%);
   content: "";
@@ -229,10 +230,10 @@ export const marketingStyles = `
 }
 
 .nav-menu a {
-  display: grid;
-  gap: 0.2rem;
-  padding: 0.8rem 0.9rem;
+  display: block;
+  padding: 0.7rem 0.9rem;
   border: 1px solid transparent;
+  white-space: nowrap;
 }
 
 .nav-menu a:hover,
@@ -254,18 +255,6 @@ export const marketingStyles = `
   font-weight: 620;
 }
 
-.nav-menu span {
-  color: var(--quiet);
-  font-size: 0.72rem;
-  line-height: 1.4;
-}
-
-.nav-menu a:hover span,
-.nav-menu a:focus-visible span,
-.nav-menu a[aria-current="page"] span {
-  color: var(--muted);
-}
-
 .marketing-menu {
   display: none;
 }
@@ -283,15 +272,30 @@ export const marketingStyles = `
   background: var(--ink-raised);
 }
 
+.menu-product-block {
+  position: relative;
+}
+
+.menu-product-block > a {
+  display: block;
+  padding: 0.45rem 1.5rem 0.45rem 0;
+}
+
 .marketing-menu-panel a,
 .menu-product > summary {
   padding: 0.45rem 0;
 }
 
 .menu-product > summary {
+  position: absolute;
+  top: 0;
+  right: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
+  min-width: 1.5rem;
+  min-height: 1.7rem;
+  cursor: pointer;
 }
 
 .menu-product > summary::after {
@@ -371,6 +375,11 @@ export const marketingStyles = `
 .marketing-hero .game-stage {
   width: 100%;
   min-height: clamp(22rem, 36vw, 32rem);
+}
+
+.marketing-hero .hero-montage {
+  min-height: 0;
+  background: transparent;
 }
 
 .hero-keep {
@@ -1164,25 +1173,6 @@ export const marketingStyles = `
   text-align: center;
 }
 
-.grok-kicker {
-  display: flex;
-  gap: 0.85rem;
-  align-items: center;
-  justify-content: center;
-  margin: 0 0 1.6rem;
-  color: var(--quiet);
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.grok-kicker-rule {
-  width: 1px;
-  height: 0.9rem;
-  background: var(--line-strong);
-}
-
 .grok-hero .display {
   max-width: 100%;
   margin: 0 auto;
@@ -1242,6 +1232,271 @@ export const marketingStyles = `
   color: var(--muted);
   font-size: 1.05rem;
   line-height: 1.6;
+}
+
+.grok-feature.is-centered {
+  align-items: center;
+  text-align: center;
+}
+
+.grok-feature.is-centered > p {
+  margin-inline: auto;
+}
+
+.grok-feature.is-centered .grok-checks {
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
+  text-align: left;
+}
+
+.grok-stage-stack .grok-stage-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.grok-stage-stack .grok-feature {
+  min-height: 0;
+  max-width: 46rem;
+  margin-inline: auto;
+}
+
+.grok-stage-stack .grok-inline-panel {
+  display: block;
+  width: min(100%, 42rem);
+  margin-top: 2.5rem;
+}
+
+.mp-board {
+  width: min(100% - var(--page-inset), var(--page-max));
+  margin: 0 auto;
+  padding: 0 0 clamp(3rem, 6vw, 5rem);
+}
+
+.mp-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.mp-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 1.35rem 1.35rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 1.35rem;
+  background: var(--ink-raised);
+  color: var(--muted);
+  text-align: left;
+}
+
+.mp-card-wide {
+  grid-column: 1 / -1;
+}
+
+.mp-card h2 {
+  margin: 0;
+  color: #c9c3b6;
+  font-size: 1.02rem;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+
+.mp-card > p {
+  max-width: 38rem;
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.mp-scene {
+  display: grid;
+  flex: 1;
+  gap: 0.55rem;
+  align-content: center;
+  margin-top: 1.25rem;
+  padding: 0.9rem;
+  border-radius: 1rem;
+  background: #1a1915;
+}
+
+.mp-row {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: center;
+  min-height: 3rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.8rem;
+  background: #141310;
+}
+
+.mp-row.is-open {
+  background: #1c1914;
+  box-shadow: inset 0 0 0 1px #6d5424;
+}
+
+.mp-row i,
+.mp-people span,
+.mp-pair i,
+.mp-scene-net i {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: #2e2c28;
+  color: var(--paper);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.mp-row strong,
+.mp-row em {
+  display: block;
+}
+
+.mp-row strong {
+  color: #d9d3c7;
+  font-size: 0.92rem;
+  letter-spacing: -0.02em;
+}
+
+.mp-row em {
+  color: #8a847a;
+  font-style: normal;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.mp-row b,
+.mp-scene-match > b {
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  background: #f0a72e;
+  color: #1c1a16;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mp-code {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: #8a847a;
+  font-size: 0.85rem;
+}
+
+.mp-code strong {
+  color: #d9d3c7;
+  font-family: var(--mono);
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+}
+
+.mp-code b {
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  background: #f0a72e;
+  color: #1c1a16;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mp-people,
+.mp-pair,
+.mp-scene-net {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.mp-people .is-you,
+.mp-ranks .is-you b {
+  background: #f0a72e;
+  color: #1c1a16;
+}
+
+.mp-scene-match {
+  min-height: 7.5rem;
+  place-items: center;
+  align-content: center;
+}
+
+.mp-pair span,
+.mp-scene-net em {
+  width: 2.2rem;
+  height: 2px;
+  background: #c47a12;
+}
+
+.mp-ranks {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mp-ranks li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.45rem 0.15rem;
+}
+
+.mp-ranks li span {
+  color: #d9d3c7;
+}
+
+.mp-ranks b {
+  display: grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: #2e2c28;
+  color: var(--paper);
+  font-size: 0.75rem;
+}
+
+.mp-ranks em {
+  color: #8a847a;
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.mp-scene-net {
+  justify-content: center;
+  min-height: 6.5rem;
+}
+
+.mp-scene-net span {
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  color: #d9d3c7;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.mp-scene-net small {
+  color: #c47a12;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .grok-checks {
@@ -1426,7 +1681,8 @@ export const marketingStyles = `
 
 .grok-section-intro {
   max-width: 36rem;
-  margin-bottom: clamp(2rem, 4vw, 3rem);
+  margin: 0 auto clamp(2rem, 4vw, 3rem);
+  text-align: center;
 }
 
 .grok-section-intro h2,
@@ -1537,13 +1793,17 @@ export const marketingStyles = `
     min-height: 0;
   }
 
-  .grok-more-grid,
-  .grok-steps {
+  .mp-grid {
     grid-template-columns: 1fr;
   }
 
-  .grok-kicker {
-    flex-wrap: wrap;
+  .mp-card-wide {
+    grid-column: auto;
+  }
+
+  .grok-more-grid,
+  .grok-steps {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2234,6 +2494,9 @@ export const marketingStyles = `
 }
 
 .game-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   padding: 0;
   background: var(--ink-raised);
 }
@@ -2241,7 +2504,8 @@ export const marketingStyles = `
 .game-art {
   position: relative;
   display: grid;
-  min-height: 11rem;
+  flex: none;
+  height: 12.4rem;
   overflow: hidden;
   border-bottom: 1px solid var(--line);
   background: var(--ink);
@@ -2348,8 +2612,7 @@ export const marketingStyles = `
 .game-art-chess {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
-  grid-template-rows: repeat(8, 1fr);
-  min-height: 11rem;
+  grid-template-rows: repeat(8, minmax(0, 1fr));
   background: #1a1814;
 }
 
@@ -2387,6 +2650,7 @@ export const marketingStyles = `
 }
 
 .game-copy {
+  flex: 1;
   padding: 1.5rem;
 }
 
@@ -2829,6 +3093,111 @@ export const marketingStyles = `
   box-shadow:
     0 0 0 1px #2c2a26,
     0 22px 48px rgba(0, 0, 0, 0.38);
+}
+
+.live-listing {
+  width: min(22rem, 100%);
+  padding: 1.15rem;
+  border-radius: 1.15rem;
+  background: #f7f4ee;
+  color: #1c1a16;
+  box-shadow:
+    0 0 0 1px #2c2a26,
+    0 22px 48px rgba(0, 0, 0, 0.38);
+  text-align: left;
+}
+
+.live-listing-url {
+  margin: 0 0 0.9rem;
+  color: #6d675e;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.live-listing-game {
+  display: grid;
+  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.7rem 0.75rem;
+  border-radius: 0.9rem;
+  background: #fff8ee;
+  box-shadow: inset 0 0 0 2px #c47a12;
+}
+
+.live-listing-game i {
+  display: grid;
+  place-items: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  background: #1c1a16;
+  color: #f7f4ee;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.live-listing-game strong,
+.live-listing-game em {
+  display: block;
+}
+
+.live-listing-game strong {
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.live-listing-game em {
+  color: #6d675e;
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.live-listing-game b {
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  background: #f0a72e;
+  color: #1c1a16;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.live-listing-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+}
+
+.live-listing-metrics p {
+  margin: 0;
+  padding: 0.75rem 0.8rem;
+  border-radius: 0.85rem;
+  background: #fff;
+}
+
+.live-listing-metrics strong,
+.live-listing-metrics span {
+  display: block;
+}
+
+.live-listing-metrics strong {
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.live-listing-metrics span {
+  margin-top: 0.15rem;
+  color: #6d675e;
+  font-size: 0.75rem;
+  font-weight: 650;
 }
 
 .share-phone {
@@ -4233,7 +4602,7 @@ export const marketingStyles = `
 
 .pricing-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 26rem));
+  grid-template-columns: repeat(3, minmax(0, 22rem));
   gap: 1rem;
   justify-content: center;
 }
@@ -4385,7 +4754,7 @@ export const marketingStyles = `
 }
 
 .pricing-compare .compare-wrap {
-  width: min(100%, calc(26rem * 2 + 1rem));
+  width: min(100%, calc(22rem * 3 + 2rem));
   margin: 0 auto;
   padding: 0;
   background: transparent;
@@ -4701,7 +5070,8 @@ export const marketingStyles = `
   .party-flow,
   .ops-wall,
   .play-board,
-  .dist-montage {
+  .dist-montage,
+  .live-listing {
     text-align: left;
   }
 
@@ -4915,12 +5285,12 @@ function header(path: string): string {
     </a>
     <nav class="marketing-nav" aria-label="Primary navigation">
       <div class="nav-flyout">
-        <button class="nav-flyout-toggle" type="button" aria-haspopup="true">Product</button>
+        <a class="nav-flyout-toggle" href="/product"${currentAttr(path, "/product")}>Product</a>
         <div class="nav-menu" role="menu">
           ${productSections
             .map(
               (section) =>
-                `<a href="${productSectionHref(section.id)}"${currentAttr(path, `/${section.id}`)}><strong>${section.label}</strong><span>${section.description}</span></a>`,
+                `<a href="${productSectionHref(section.id)}"${currentAttr(path, `/${section.id}`)}><strong>${section.label}</strong></a>`,
             )
             .join("")}
         </div>
@@ -4932,21 +5302,22 @@ function header(path: string): string {
     <details class="marketing-menu">
       <summary>Menu</summary>
       <div class="marketing-menu-panel">
-        <details class="menu-product"${productMenuOpen(path)}>
-          <summary>Product</summary>
-          <div class="menu-product-list">
-            ${productSections
-              .map(
-                (section) =>
-                  `<a href="${productSectionHref(section.id)}"${currentAttr(path, `/${section.id}`)}>${section.label}</a>`,
-              )
-              .join("")}
-          </div>
-        </details>
+        <div class="menu-product-block">
+          <a href="/product"${currentAttr(path, "/product")}>Product</a>
+          <details class="menu-product"${productMenuOpen(path)}>
+            <summary aria-label="Product sections"></summary>
+            <div class="menu-product-list">
+              ${productSections
+                .map(
+                  (section) =>
+                    `<a href="${productSectionHref(section.id)}"${currentAttr(path, `/${section.id}`)}>${section.label}</a>`,
+                )
+                .join("")}
+            </div>
+          </details>
+        </div>
         <a href="/examples"${currentAttr(path, "/examples")}>Examples</a>
         <a href="/pricing"${currentAttr(path, "/pricing")}>Pricing</a>
-        <a href="/about"${currentAttr(path, "/about")}>About</a>
-        <a href="/contact"${currentAttr(path, "/contact")}>Contact</a>
         <a href="https://docs.lokiplay.cc/">Docs ↗</a>
       </div>
     </details>

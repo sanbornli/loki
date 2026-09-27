@@ -27,6 +27,21 @@
   Loki overlay shows room status, players, invite copy, and chat only; it
   does not create or join rooms. Players still need loading, waiting, and
   error states.
+- Installing the SDK also does not add Match or Leaderboard screens; both
+  are required alongside create/join, and the Loki overlay never draws
+  them. Add a Match control that calls the room wrapper's `matchmake()`
+  (`SynchronizedRoom.matchmake()` / `RealtimeRoom.matchmake()`) with
+  confirmed player/team settings, plus searching, cancel (abort the
+  in-flight search), timeout, waiting, and error states. Add a per-game
+  Leaderboard using `listLeaderboard()`/`submitLeaderboardScore()` (or the
+  in-room `submitScore()` for a mid-room board), with display-name
+  collection or a sensible fallback, plus loading, empty, pagination,
+  submission, and error states. Player count, teams, and scoring stay
+  creator decisions from the confirmed profile; if the game has no numeric
+  result to store, ask the creator once what to record instead of
+  inventing a scoring rule. Leaderboards are per-game/project and available
+  to guest sessions without a creator account; client-submitted scores are
+  not an anti-cheat boundary. Public room browsing stays optional.
 - Before configuring Loki multiplayer, inspect the game's source, existing UI,
   configuration, documentation, tests, and finished build. Locate its game
   modes, seats, local-player handling, AI opponents, teams, start conditions,
@@ -59,9 +74,31 @@
   selection, readiness, player limits, invite and join behavior, waiting
   states, and start conditions.
 - Do not invent new `game.json` fields. Current manifests accept only
-  `enabled`, `authority`, `maxPlayers`, and `tickRate`. Report the richer
-  profile in the final report: values, supporting evidence, and
-  creator-confirmed decisions.
+  `enabled`, `authority`, `maxPlayers`, `tickRate`, and — only when
+  `authority` is `"server"` — `step`. Report the richer profile in the
+  final report: values, supporting evidence, and creator-confirmed
+  decisions.
+- `authority: "server"` is disabled in production until the sandbox gates
+  in the server-authority plan pass; do not offer it to a creator as a
+  working option today. If a mode still needs it, `step` must name a
+  compiled WebAssembly module (`modulePath`, `.wasm`) exporting exactly one
+  function, `step`, and importing nothing — no WASI, clocks, randomness, or
+  host functions. A seed, when the game needs one, is a supplied input
+  field, not something the module reads from the environment. Compile the
+  game's headless simulation to that ABI yourself; do not hand the creator
+  a module that imports anything, since the validator rejects it and the
+  worker never mounts it.
+  decisions.
+- `authority: "server"` is disabled in production until the sandbox gates
+  in the server-authority plan pass; do not offer it to a creator as a
+  working option today. If a mode still needs it, `step` must name a
+  compiled WebAssembly module (`modulePath`, `.wasm`) exporting exactly one
+  function, `step`, and importing nothing — no WASI, clocks, randomness, or
+  host functions. A seed, when the game needs one, is a supplied input
+  field, not something the module reads from the environment. Compile the
+  game's headless simulation to that ABI yourself; do not hand the creator
+  a module that imports anything, since the validator rejects it and the
+  worker never mounts it.
 - After inspecting and confirming each game mode's profile, choose
   `createSynchronizedRoom()` for turn-based or event-driven state, or
   `createRealtimeRoom()` for continuous host-authoritative simulation. Do not

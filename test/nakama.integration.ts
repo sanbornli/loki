@@ -621,6 +621,7 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
     leaderboardId,
     score: 42,
     subscore: 7,
+    displayName: "Racer42",
     playerId: b1.session.user_id,
   });
   const score = await scorePromise;
@@ -628,15 +629,21 @@ test("live Nakama isolates tenants across RPCs, rooms and matchmaking", async (t
     (score.records as Array<{ playerId: string }>)[0]?.playerId,
     a2.session.user_id,
   );
+  assert.equal(
+    (score.records as Array<{ displayName?: string }>)[0]?.displayName,
+    "Racer42",
+  );
 
   const submitted = await rpc<{
-    record: { playerId: string; score: number };
+    record: { playerId: string; score: number; displayName?: string };
   }>(a1, "loki_leaderboard_submit", {
     leaderboardId,
     score: 100,
+    displayName: "  Ace  ",
     playerId: b1.session.user_id,
   });
   assert.equal(submitted.record.playerId, a1.session.user_id);
+  assert.equal(submitted.record.displayName, "Ace");
   const boardA = await rpc<{
     records: Array<{ playerId: string; score: number }>;
   }>(a2, "loki_leaderboard_list", { leaderboardId });
@@ -1494,4 +1501,177 @@ test("live Nakama lists public rooms without leaking private or cross-project ro
   const outcomes = [first, second];
   assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
   assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+});
+
+test("out-of-room leaderboard RPCs support display names, pagination, invalid bounds, and tenant isolation", async (t) => {
+  await waitForNakama();
+  const runId = `board-${Date.now().toString(36)}`;
+  const projectA = `board-a-${runId}`;
+  const projectB = `board-b-${runId}`;
+  const leaderboardId = `season-${runId}`;
+  const [a1, a2, foreign] = await Promise.all([
+    createUser("a1", projectA, runId),
+    createUser("a2", projectA, runId),
+    createUser("f1", projectB, runId),
+  ]);
+  t.after(() => [a1, a2, foreign].forEach((user) => user.socket.disconnect(false)));
+
+  await rpc(a1, "loki_leaderboard_submit", {
+    leaderboardId,
+    score: 10,
+    displayName: "  Nova  ",
+  });
+  await rpc(a2, "loki_leaderboard_submit", { leaderboardId, score: 20 });
+  await rpc(foreign, "loki_leaderboard_submit", { leaderboardId, score: 999 });
+
+  const page1 = await rpc<{
+    records: Array<{ playerId: string; score: number; displayName?: string }>;
+    nextCursor?: string;
+  }>(a1, "loki_leaderboard_list", { leaderboardId, limit: 1 });
+  assert.equal(page1.records.length, 1);
+  assert.equal(page1.records[0]?.playerId, a2.session.user_id);
+  assert.equal(page1.records[0]?.displayName, undefined);
+  assert.ok(page1.nextCursor, "expected a cursor for the remaining page");
+
+  const page2 = await rpc<{
+    records: Array<{ playerId: string; displayName?: string }>;
+  }>(a1, "loki_leaderboard_list", {
+    leaderboardId,
+    limit: 1,
+    cursor: page1.nextCursor,
+  });
+  assert.equal(page2.records[0]?.playerId, a1.session.user_id);
+  assert.equal(page2.records[0]?.displayName, "Nova");
+
+  // The foreign project's submission never appears on projectA's board:
+  // leaderboards are namespaced per project even though the id is shared.
+  const full = await rpc<{ records: Array<{ playerId: string }> }>(a1, "loki_leaderboard_list", {
+    leaderboardId,
+    limit: 100,
+  });
+  assert.deepEqual(
+    new Set(full.records.map((record) => record.playerId)),
+    new Set([a1.session.user_id, a2.session.user_id]),
+  );
+
+  await assert.rejects(rpc(a1, "loki_leaderboard_submit", { leaderboardId, score: 1.5 }));
+  await assert.rejects(
+    rpc(a1, "loki_leaderboard_submit", { leaderboardId, score: 1, displayName: "" }),
+  );
+  await assert.rejects(rpc(a1, "loki_leaderboard_list", { leaderboardId, limit: 0 }));
+  await assert.rejects(rpc(a1, "loki_leaderboard_list", { leaderboardId, limit: 101 }));
+  await assert.rejects(rpc(a1, "loki_leaderboard_list", { leaderboardId: "Not Valid" }));
+});
+
+test("matchmaking stamps a server-owned region, ignores a client-sent region, rejects cross-project matches, and honors ticket removal", async (t) => {
+  await waitForNakama();
+  const runId = `region-${Date.now().toString(36)}`;
+  const projectA = `region-a-${runId}`;
+  const projectB = `region-b-${runId}`;
+  const [a1, a2, b1] = await Promise.all([
+    createUser("a1", projectA, runId, { visibility: "matchmaking", teamSize: 0 }),
+    createUser("a2", projectA, runId, { visibility: "matchmaking", teamSize: 0 }),
+    createUser("b1", projectB, runId, { visibility: "matchmaking", teamSize: 0 }),
+  ]);
+  t.after(() => [a1, a2, b1].forEach((user) => user.socket.disconnect(false)));
+
+  // A client-sent region/stringProperties override is discarded server-side;
+  // beforeMatchmakerAdd always overwrites it with the deployment's own
+  // LOKI_REGION value and rebuilds the query, so this still pairs normally
+  // with another same-project ticket regardless of what was requested here.
+  const matchedA1 = nextMatch(a1);
+  const matchedA2 = nextMatch(a2);
+  await Promise.all([
+    a1.socket.addMatchmaker("*", 2, 2, { region: "not-a-real-region" }),
+    a2.socket.addMatchmaker("*", 2, 2),
+  ]);
+  const [matchA1, matchA2] = await Promise.all([matchedA1, matchedA2]);
+  assert.equal(matchA1.match_id, matchA2.match_id);
+
+  // A single-project ticket with no partner must time out rather than ever
+  // being matched against a different project's ticket; addMatchmaker+
+  // removeMatchmaker exercises the same cancellation path the SDK uses for
+  // a cancelled or abandoned search.
+  const ticket = await b1.socket.addMatchmaker("*", 2, 2);
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  await b1.socket.removeMatchmaker(ticket.ticket);
+  const lateMatch = await Promise.race([
+    nextMatch(b1).then(() => "matched" as const),
+    new Promise((resolve) => setTimeout(() => resolve("timed_out" as const), 3_000)),
+  ]);
+  assert.equal(lateMatch, "timed_out");
+});
+
+const OP_WEBRTC_OFFER = 22;
+const OP_WEBRTC_ANSWER = 23;
+const OP_WEBRTC_ICE = 24;
+
+test("WebRTC signaling relays only between webrtc-capable room members and never to a legacy session", async (t) => {
+  await waitForNakama();
+  const runId = `rtc-${Date.now().toString(36)}`;
+  const projectId = `rtc-${runId}`;
+  const [host, capableGuest, legacyGuest] = await Promise.all([
+    createUser("host", projectId, runId, { maxPlayers: 3 }),
+    createUser("guest", projectId, runId, { maxPlayers: 3 }),
+    createUser("legacy", projectId, runId, { maxPlayers: 3 }),
+  ]);
+  t.after(() =>
+    [host, capableGuest, legacyGuest].forEach((user) => user.socket.disconnect(false)),
+  );
+
+  const room = await rpc<{ matchId: string }>(host, "loki_create_room", {});
+  await host.socket.joinMatch(room.matchId, undefined, {
+    realtimeCapable: "true",
+    webrtcCapable: "true",
+  });
+  await capableGuest.socket.joinMatch(room.matchId, undefined, {
+    realtimeCapable: "true",
+    webrtcCapable: "true",
+  });
+  // A legacy/native-style join advertises no capability metadata at all.
+  await legacyGuest.socket.joinMatch(room.matchId);
+
+  const offerSeen = nextMatchData(
+    capableGuest,
+    room.matchId,
+    OP_WEBRTC_OFFER,
+    (message) => message.type === "webrtc_offer",
+  );
+  await sendRealtimeEnvelope(host, room.matchId, OP_WEBRTC_OFFER, 1, {
+    type: "webrtc_offer",
+    toId: capableGuest.session.user_id,
+    sdp: "v=0 fake-offer",
+    authorityEpoch: 0,
+  });
+  const offer = await offerSeen;
+  assert.equal(offer.fromId, host.session.user_id);
+  assert.equal(offer.sdp, "v=0 fake-offer");
+
+  // The legacy session never advertised webrtc capability, so Loki must
+  // never relay an offer to it, even though it is a current room member.
+  const legacyShouldNotReceive = nextMatchData(
+    legacyGuest,
+    room.matchId,
+    OP_WEBRTC_OFFER,
+    () => true,
+  );
+  await sendRealtimeEnvelope(host, room.matchId, OP_WEBRTC_OFFER, 2, {
+    type: "webrtc_offer",
+    toId: legacyGuest.session.user_id,
+    sdp: "v=0 should-not-arrive",
+    authorityEpoch: 0,
+  });
+  const unavailable = await nextMatchData(
+    host,
+    room.matchId,
+    OP_WEBRTC_OFFER,
+    (message) => message.type === "webrtc_unavailable",
+  );
+  assert.equal(unavailable.toId, legacyGuest.session.user_id);
+  await assert.rejects(
+    Promise.race([
+      legacyShouldNotReceive,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("expected timeout")), 1_500)),
+    ]),
+  );
 });

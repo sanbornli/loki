@@ -64,10 +64,32 @@ test("protocol validates manifests and canonical state consistently", () => {
       entrypoint: "../index.html",
     }),
   );
+  // Server authority requires a pinned step module descriptor.
   assert.throws(() =>
     GameManifestSchema.parse({
       ...manifest,
       multiplayer: { ...manifest.multiplayer, authority: "server" },
+    }),
+  );
+  const stepDescriptor = {
+    abiVersion: 1 as const,
+    modulePath: "server/step.wasm",
+    sha256: "a".repeat(64),
+  };
+  const serverManifest = GameManifestSchema.parse({
+    ...manifest,
+    multiplayer: {
+      ...manifest.multiplayer!,
+      authority: "server",
+      step: stepDescriptor,
+    },
+  });
+  assert.deepEqual(serverManifest.multiplayer?.step, stepDescriptor);
+  // step is only meaningful together with server authority.
+  assert.throws(() =>
+    GameManifestSchema.parse({
+      ...manifest,
+      multiplayer: { ...manifest.multiplayer!, step: stepDescriptor },
     }),
   );
   assert.equal(canonicalJson({ z: 1, a: [2, 3] }), '{"a":[2,3],"z":1}');
@@ -243,6 +265,7 @@ test("shared conformance fixture matches canonical JSON and hash", async () => {
     ),
   ) as {
     manifest: unknown;
+    serverAuthorityManifest: unknown;
     canonicalState: { input: unknown; json: string; sha256: string };
     hello: unknown;
     roomConfig: unknown;
@@ -250,6 +273,9 @@ test("shared conformance fixture matches canonical JSON and hash", async () => {
     serverReplay: unknown[];
   };
   GameManifestSchema.parse(fixture.manifest);
+  const serverManifest = GameManifestSchema.parse(fixture.serverAuthorityManifest);
+  assert.equal(serverManifest.multiplayer?.authority, "server");
+  assert.equal(serverManifest.multiplayer?.step?.abiVersion, 1);
   ProtocolHelloSchema.parse(fixture.hello);
   RoomConfigSchema.parse(fixture.roomConfig);
   fixture.clientMessages.forEach((message) => ClientEnvelopeSchema.parse(message));

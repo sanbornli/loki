@@ -79,6 +79,7 @@ function pricingPlans(): string {
               <li>1 game</li>
               <li>2 rooms at the same time</li>
               <li>4 players per room</li>
+              <li>Host authoritative</li>
             </ul>
             <a class="button" href="https://app.lokiplay.cc/signup">Get started</a>
           </article>
@@ -87,11 +88,25 @@ function pricingPlans(): string {
             <p class="pricing-amount"><span class="price-monthly">$12</span><span class="price-annual">$8</span></p>
             <p class="pricing-period"><span class="price-monthly">per month</span><span class="price-annual">per month, billed annually</span></p>
             <ul class="pricing-features">
-              <li>Unlimited games</li>
+              <li>20 games</li>
               <li>8 players per room</li>
               <li>Priority listing in the public catalog</li>
+              <li>Host and server authoritative</li>
             </ul>
             <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Loki</a>
+          </article>
+          <article class="pricing-card">
+            <h3>Loki Pro</h3>
+            <p class="pricing-amount">$20</p>
+            <p class="pricing-period">per month</p>
+            <ul class="pricing-features">
+              <li>Unlimited games</li>
+              <li>Unlimited links</li>
+              <li>8 players per room</li>
+              <li>Priority listing in the public catalog</li>
+              <li>Host and server authoritative</li>
+            </ul>
+            <a class="button" href="https://app.lokiplay.cc/signup">Get Loki Pro</a>
           </article>
         </div>
       </div>`;
@@ -107,63 +122,8 @@ const homeMain = `
           <a class="button" href="#workflow">See how it works</a>
         </div>
       </div>
-      <figure class="game-stage ops-wall" aria-label="Agentic Game Ops Wall preview">
-        <div class="ops-command" aria-hidden="true">
-          <div class="ops-panel-head"><span>Agent prompt</span><em>Cursor / Claude / Codex</em></div>
-          <div class="ops-terminal">
-            <code class="ops-type ops-type-1">build me a multiplayer browser game</code>
-            <code class="ops-type ops-type-2">install @lokiplay/sdk and host it</code>
-            <code class="ops-type ops-type-3">create rooms, invites, chat, scores</code>
-          </div>
-          <ol class="ops-log">
-            <li><b>01</b><span>Package installed</span><em>@lokiplay/sdk</em></li>
-            <li><b>02</b><span>Rules loaded</span><em>game.json</em></li>
-            <li><b>03</b><span>Room wired</span><em>sync ready</em></li>
-            <li><b>04</b><span>Build live</span><em>play URL</em></li>
-          </ol>
-        </div>
-        <div class="ops-core" aria-hidden="true">
-          <div class="ops-node ops-node-agent">Agent</div>
-          <div class="ops-beam ops-beam-a"></div>
-          <div class="ops-node ops-node-loki">LOKI</div>
-          <div class="ops-beam ops-beam-b"></div>
-          <div class="ops-node ops-node-game">Live</div>
-        </div>
-        <div class="ops-live" aria-hidden="true">
-          <div class="ops-panel-head"><span>Live game ops</span><em>Room ready</em></div>
-          <div class="ops-room-card">
-            <div>
-              <strong>battleship-party-04</strong>
-              <span>3 players · host authoritative</span>
-            </div>
-            <small>PUBLIC URL ON</small>
-          </div>
-          <div class="ops-mini-grid">
-            <div class="ops-mini ops-mini-board">
-              <span>Battleship</span>
-              <i></i><i></i><i></i><i></i><i></i><i></i>
-            </div>
-            <div class="ops-mini ops-mini-pool">
-              <span>Pool</span>
-              <i></i><i></i><i></i>
-            </div>
-            <div class="ops-mini ops-mini-chat">
-              <span>Room chat</span>
-              <p>Maya joined from invite.</p>
-              <p>Leo is ready.</p>
-            </div>
-          </div>
-          <div class="ops-player-rail">
-            <span><i>Y</i>You</span>
-            <span><i>M</i>Maya</span>
-            <span><i>L</i>Leo</span>
-            <span class="ops-seat-open"><i>+</i>Invite</span>
-          </div>
-          <div class="ops-url-card">
-            <span>https://play.lokiplay.cc/battleship-party</span>
-            <b>copied</b>
-          </div>
-        </div>
+      <figure class="game-stage hero-montage" aria-label="A montage of vibe-coded games: racing, shooting, and chess.">
+        <video class="dist-montage" autoplay muted loop playsinline poster="/assets/loki-game-montage.webp" src="/assets/loki-game-montage.mp4"></video>
       </figure>
     </section>
 
@@ -172,7 +132,7 @@ const homeMain = `
         <div class="feature-row feature-row-flip workflow-row">
           <div class="feature-copy">
             <h2 id="workflow-title">From side project<br>to Global Game<br>in a single prompt.</h2>
-            <p>Give a finished browser game a host, a room, and a playable URL—without standing up a backend or wiring five services together.</p>
+            <p>Give your game hosting, a shareable game link, real-time online multiplayer and game publishing without managing multiple different services (and paying all of them).</p>
             <a class="card-link" href="https://docs.lokiplay.cc/sdk">See the SDK →</a>
           </div>
           <div class="editorial-grid editorial-stack party-flow" aria-label="Prompt-to-party timeline">
@@ -208,7 +168,7 @@ const homeMain = `
             <div class="feature-copy">
               <p class="card-index">01 / Hosting</p>
               <h3>Launch to the World<br>in Minutes.</h3>
-              <p>Ship a finished browser game to a secure Loki URL. Every upload is scanned, isolated, and saved as an immutable release.</p>
+              <p>Get a canonical play link for every game to share with your players.</p>
               <a class="card-link" href="${productSectionHref("hosting")}">See hosting →</a>
             </div>
             <div class="feature-stage scene-phone" aria-label="A phone conversation that ends with a game link and Maya joining">
@@ -261,8 +221,8 @@ const homeMain = `
           <article class="feature-row feature-row-flip">
             <div class="feature-copy">
               <p class="card-index">02 / Multiplayer</p>
-              <h3 class="play-title">Play your<br>Game with Anyone,<br>Anywhere.</h3>
-              <p>Add rooms, invites, matchmaking, chat, shared state, and leaderboards through one game-ready SDK.</p>
+              <h3 class="play-title">Play your game<br>with anyone,<br>anywhere.</h3>
+              <p>Add real-time, synchronised online multiplayer, public rooms, private rooms, invites, matchmaking, and leaderboards without the trial and error of network infrastructure code.</p>
               <a class="card-link" href="${productSectionHref("multiplayer")}">See multiplayer →</a>
             </div>
             <div class="feature-stage scene-phone scene-rooms" aria-label="A phone and a laptop joining the same Battleship room">
@@ -327,13 +287,24 @@ const homeMain = `
           </article>
           <article class="feature-row">
             <div class="feature-copy">
-              <p class="card-index">03 / Distribution</p>
-              <h3>Experience what Loki can do.</h3>
-              <p>Keep it private while you experiment. When the game is ready, make it public and share one playable link.</p>
+              <p class="card-index">03 / Publishing</p>
+              <h3>Start earning from Day One.</h3>
+              <p>Skip waiting for weeks to get published. Earn from every link opened with your game, today.</p>
               <a class="card-link" href="${productSectionHref("distribution")}">See distribution →</a>
             </div>
-            <div class="feature-stage scene-board" aria-label="A montage of vibe-coded games: racing, shooting, and chess.">
-              <video class="dist-montage" autoplay muted loop playsinline poster="/assets/loki-game-montage.webp" src="/assets/loki-game-montage.mp4"></video>
+            <div class="feature-stage scene-board" aria-label="Battleship listed live on play.lokiplay.cc, with opens and creator share">
+              <div class="live-listing">
+                <p class="live-listing-url">play.lokiplay.cc/battleship</p>
+                <div class="live-listing-game">
+                  <i>B</i>
+                  <span><strong>Battleship</strong><em>Public</em></span>
+                  <b>Live</b>
+                </div>
+                <div class="live-listing-metrics">
+                  <p><strong>24</strong><span>Opened today</span></p>
+                  <p><strong>On</strong><span>Creator share</span></p>
+                </div>
+              </div>
             </div>
           </article>
         </div>
@@ -498,10 +469,8 @@ const agentsPanel = `
 
 const productMain = `
     <section class="grok-hero" aria-labelledby="page-title">
-      <p class="grok-kicker"><span>Product</span><span class="grok-kicker-rule" aria-hidden="true"></span><span>Hosting, multiplayer, distribution, and agents</span></p>
       <h1 class="display" id="page-title">From side project<br>to Global Game<br>in a single prompt.</h1>
-      <p class="lede">Hosting, online multiplayer, distribution — everything your game needs in one plugin, one package.</p>
-      <p class="lede">Ship a finished game for the world to play together in minutes.</p>
+      <p class="lede">Hosting, online multiplayer, distribution — everything your game needs in one plugin, one package. Ship your game for the world to play together in minutes.</p>
       <div class="page-actions">
         <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started for Free</a>
         <a class="button" href="https://docs.lokiplay.cc/">Read Docs</a>
@@ -511,12 +480,12 @@ const productMain = `
       <div class="grok-stage-grid">
         <div class="grok-features">
           <article class="grok-feature" id="hosting">
-            <h2>A home for every build.</h2>
-            <p>Upload a playable game to Loki and immediately receive a playable link. Every subsequent release is shipped to the same link so you don't need to send your players a new one after each update.</p>
+            <h2>A home for every Game.</h2>
+            <p>Upload a playable game to Loki and receive a playable link which you can share or publish immediately. Every subsequent release is shipped to the same link so you don't need to send your players a new one after each update.</p>
             <ul class="grok-checks">
               <li>Each game runs on its own origin under *.lokiplay.cc.</li>
               <li>Give your game a customised, playable link.</li>
-              <li>Solving all your hosting needs with one prompt.</li>
+              <li>Solve all your hosting needs with one prompt.</li>
             </ul>
             <div class="grok-inline-panel">${hostingPanel}</div>
           </article>
@@ -530,7 +499,68 @@ const productMain = `
             </ul>
             <div class="grok-inline-panel">${multiplayerPanel}</div>
           </article>
-          <article class="grok-feature" id="distribution">
+        </div>
+        <div class="grok-visual" aria-hidden="true">
+          <div class="grok-sticky">
+            <div class="grok-panel" data-panel="hosting">${hostingPanel}</div>
+            <div class="grok-panel" data-panel="multiplayer">${multiplayerPanel}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="mp-board" aria-label="Ways to play together">
+      <div class="mp-grid">
+        <article class="mp-card" id="public-rooms">
+          <h2>Public Rooms</h2>
+          <p>Open a game and let anyone looking for a match hop in. Players find a room that's already going and join from the lobby.</p>
+          <div class="mp-scene" aria-hidden="true">
+            <div class="mp-row is-open"><i>B</i><span><strong>Battleship - Game 1</strong><em>Open · 2 spots</em></span><b>Join</b></div>
+            <div class="mp-row"><i>B</i><span><strong>Battleship - Game 2</strong><em>Open · 1 spot</em></span><b>Join</b></div>
+          </div>
+        </article>
+        <article class="mp-card" id="private-rooms">
+          <h2>Private Rooms</h2>
+          <p>Keep the game to the people you choose. Send a code or a link, and only those players get in.</p>
+          <div class="mp-scene" aria-hidden="true">
+            <p class="mp-code"><span>Room code</span><strong>482917</strong><b>Copy</b></p>
+          </div>
+        </article>
+        <article class="mp-card" id="matchmaking">
+          <h2>Matchmaking</h2>
+          <p>Players who want a game get one. Loki pairs people who are ready and puts them straight into a match.</p>
+          <div class="mp-scene mp-scene-match" aria-hidden="true">
+            <b>Match found</b>
+            <div class="mp-pair"><i>M</i><span></span><i>L</i></div>
+          </div>
+        </article>
+        <article class="mp-card" id="leaderboard">
+          <h2>Leaderboard</h2>
+          <p>Every win has a place on the board. Players see who's ahead and come back to take the top spot.</p>
+          <div class="mp-scene" aria-hidden="true">
+            <ol class="mp-ranks">
+              <li><b>1</b><span>Maya</span><em>12 wins</em></li>
+              <li><b>2</b><span>Leo</span><em>9 wins</em></li>
+              <li class="is-you"><b>3</b><span>You</span><em>7 wins</em></li>
+            </ol>
+          </div>
+        </article>
+        <article class="mp-card mp-card-wide" id="network">
+          <h2>Network</h2>
+          <p>Your players can be anywhere and still share one game. If someone steps away, they can come back to the match they left.</p>
+          <div class="mp-scene mp-scene-net" aria-hidden="true">
+            <span><i>Y</i>You</span>
+            <em></em>
+            <span><i>M</i>Maya</span>
+            <em></em>
+            <span class="is-back"><i>L</i>Leo<small>Back in</small></span>
+          </div>
+        </article>
+      </div>
+    </section>
+    <section class="grok-stage grok-stage-stack" data-active="distribution" aria-label="Distribution and agents">
+      <div class="grok-stage-grid">
+        <div class="grok-features">
+          <article class="grok-feature is-centered" id="distribution">
             <h2>Launch your game to the world through Loki.</h2>
             <p>Loki Play is the live platform where finished games are listed and played. Players find your game there and open it in the browser, and you earn a share of creator revenue as they play.</p>
             <ul class="grok-checks">
@@ -540,7 +570,7 @@ const productMain = `
             </ul>
             <div class="grok-inline-panel">${distributionPanel}</div>
           </article>
-          <article class="grok-feature" id="agents">
+          <article class="grok-feature is-centered" id="agents">
             <h2>Built for the Agentic AI Era.</h2>
             <p>Seamless integration with your development setup in Cursor, Claude Code, Codex and similar agentic tools. Loki gives them one prompt, one package and one protocol. Just leave it to your Agent.</p>
             <ul class="grok-checks">
@@ -551,14 +581,6 @@ const productMain = `
             <div class="grok-inline-panel">${agentsPanel}</div>
           </article>
         </div>
-        <div class="grok-visual" aria-hidden="true">
-          <div class="grok-sticky">
-            <div class="grok-panel" data-panel="hosting">${hostingPanel}</div>
-            <div class="grok-panel" data-panel="multiplayer">${multiplayerPanel}</div>
-            <div class="grok-panel" data-panel="distribution">${distributionPanel}</div>
-            <div class="grok-panel" data-panel="agents">${agentsPanel}</div>
-          </div>
-        </div>
       </div>
     </section>
     <section class="marketing-section grok-start" aria-labelledby="start-title">
@@ -568,9 +590,9 @@ const productMain = `
           <p>Start free with private hosting. Add a room when you need one, and go public only when you mean it.</p>
         </div>
         <ol class="grok-steps">
-          <li><span>01</span><h3>Create a project</h3><p>Open Projects and create a project for your game. Each project gets its own agent prompt and release history.</p></li>
-          <li><span>02</span><h3>Copy the agent prompt</h3><p>On the project card, click "Copy agent prompt" to copy the full integration prompt for that project.</p></li>
-          <li><span>03</span><h3>Paste it into your game agent</h3><p>Paste the prompt into your coding agent's chat (Cursor, Claude Code, or similar) inside your game's repository.</p></li>
+          <li><span>01</span><h3>Sign Up</h3><p>Sign up on the Loki website to open your creator account.</p></li>
+          <li><span>02</span><h3>Create a project</h3><p>Open Projects and create a project for your game. Each project gets its own agent prompt and release history.</p></li>
+          <li><span>03</span><h3>Install Loki</h3><p>Copy the agent prompt from your project and paste it into your coding agent to install Loki.</p></li>
           <li><span>04</span><h3>Let it run</h3><p>The agent will install the official Loki packages, connect this project, and ship the build.</p></li>
         </ol>
         <div class="page-actions">
@@ -643,7 +665,7 @@ const pricingMain = `
         <div>
           <p class="eyebrow">Pricing</p>
           <h1 class="display" id="page-title">Start free.</h1>
-          <p class="lede">Start free. Loki is $12 a month, or $8 a month billed annually.</p>
+          <p class="lede">Start free. Loki is $12 a month, or $8 a month billed annually. Loki Pro is $20 a month.</p>
         </div>
       </div>
     </section>
@@ -656,233 +678,14 @@ ${pricingPlans()}
       <div class="compare-wrap">
         <table class="compare-table pricing-compare-table">
           <thead>
-            <tr><th></th><th>Free</th><th>Loki</th></tr>
+            <tr><th></th><th>Free</th><th>Loki</th><th>Loki Pro</th></tr>
           </thead>
           <tbody>
-            <tr><td>Games</td><td>1</td><td>Unlimited</td></tr>
-            <tr><td>Players per room</td><td>4</td><td>8</td></tr>
-            <tr><td>Public catalog</td><td>—</td><td>Priority listing</td></tr>
-          </tbody>
-        </table>
-      </div>
-        <article class="pricing-card">
-          <h3>Custom</h3>
-          <p class="pricing-amount">Talk</p>
-          <p class="pricing-note">For teams that need more rooms, review help, or a path that is not on the public plans.</p>
-          <ul class="pricing-features">
-            <li>Custom room and player caps</li>
-            <li>Guided review and launch</li>
-            <li>Direct operator contact</li>
-            <li>Terms that match the team</li>
-          </ul>
-          <a class="button" href="/contact">Contact us</a>
-        </article>
-      </div>
-    </section>
-    <section class="pricing-compare" aria-labelledby="compare-title">
-      <h2 id="compare-title">Compare features across plans</h2>
-      <div class="compare-wrap">
-        <table class="compare-table pricing-compare-table">
-          <thead>
-            <tr><th></th><th>Free</th><th>Studio</th><th>Custom</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Secure hosting</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Private play links</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Multiplayer rooms</td><td>Capped</td><td>Higher caps</td><td>✓</td></tr>
-            <tr><td>Public catalog</td><td>—</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Payouts</td><td>—</td><td>After launch</td><td>✓</td></tr>
-            <tr><td>Priority support</td><td>—</td><td>✓</td><td>✓</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-    <section class="pricing-custom" aria-labelledby="custom-title">
-      <div class="pricing-custom-copy">
-        <h2 id="custom-title">Need a custom plan?</h2>
-        <p>If the public tiers do not fit the game, we can talk through rooms, review, and launch before anything is billed.</p>
-      </div>
-      <a class="button button-primary" href="/contact">Contact us</a>
-        <article class="pricing-card">
-          <h3>Custom</h3>
-          <p class="pricing-amount">Talk</p>
-          <p class="pricing-note">For teams that need more rooms, review help, or a path that is not on the public plans.</p>
-          <ul class="pricing-features">
-            <li>Custom room and player caps</li>
-            <li>Guided review and launch</li>
-            <li>Direct operator contact</li>
-            <li>Terms that match the team</li>
-          </ul>
-          <a class="button" href="/contact">Contact us</a>
-        </article>
-      </div>
-    </section>
-    <section class="pricing-compare" aria-labelledby="compare-title">
-      <h2 id="compare-title">Compare features across plans</h2>
-      <div class="compare-wrap">
-        <table class="compare-table pricing-compare-table">
-          <thead>
-            <tr><th></th><th>Free</th><th>Studio</th><th>Custom</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Secure hosting</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Private play links</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Multiplayer rooms</td><td>Capped</td><td>Higher caps</td><td>✓</td></tr>
-            <tr><td>Public catalog</td><td>—</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Payouts</td><td>—</td><td>After launch</td><td>✓</td></tr>
-            <tr><td>Priority support</td><td>—</td><td>✓</td><td>✓</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-    <section class="pricing-custom" aria-labelledby="custom-title">
-      <div class="pricing-custom-copy">
-        <h2 id="custom-title">Need a custom plan?</h2>
-        <p>If the public tiers do not fit the game, we can talk through rooms, review, and launch before anything is billed.</p>
-      </div>
-      <a class="button button-primary" href="/contact">Contact us</a>
-        <article class="pricing-card">
-          <h3>Custom</h3>
-          <p class="pricing-amount">Talk</p>
-          <p class="pricing-note">For teams that need more rooms, review help, or a path that is not on the public plans.</p>
-          <ul class="pricing-features">
-            <li>Custom room and player caps</li>
-            <li>Guided review and launch</li>
-            <li>Direct operator contact</li>
-            <li>Terms that match the team</li>
-          </ul>
-          <a class="button" href="/contact">Contact us</a>
-        </article>
-      </div>
-    </section>
-    <section class="pricing-compare" aria-labelledby="compare-title">
-      <h2 id="compare-title">Compare features across plans</h2>
-      <div class="compare-wrap">
-        <table class="compare-table pricing-compare-table">
-          <thead>
-            <tr><th></th><th>Free</th><th>Studio</th><th>Custom</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Secure hosting</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Private play links</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Multiplayer rooms</td><td>Capped</td><td>Higher caps</td><td>✓</td></tr>
-            <tr><td>Public catalog</td><td>—</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Payouts</td><td>—</td><td>After launch</td><td>✓</td></tr>
-            <tr><td>Priority support</td><td>—</td><td>✓</td><td>✓</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-    <section class="pricing-custom" aria-labelledby="custom-title">
-      <div class="pricing-custom-copy">
-        <h2 id="custom-title">Need a custom plan?</h2>
-        <p>If the public tiers do not fit the game, we can talk through rooms, review, and launch before anything is billed.</p>
-      </div>
-      <a class="button button-primary" href="/contact">Contact us</a>
-        <article class="pricing-card">
-          <h3>Custom</h3>
-          <p class="pricing-amount">Talk</p>
-          <p class="pricing-note">For teams that need more rooms, review help, or a path that is not on the public plans.</p>
-          <ul class="pricing-features">
-            <li>Custom room and player caps</li>
-            <li>Guided review and launch</li>
-            <li>Direct operator contact</li>
-            <li>Terms that match the team</li>
-          </ul>
-          <a class="button" href="/contact">Contact us</a>
-        </article>
-      </div>
-    </section>
-    <section class="pricing-compare" aria-labelledby="compare-title">
-      <h2 id="compare-title">Compare features across plans</h2>
-      <div class="compare-wrap">
-        <table class="compare-table pricing-compare-table">
-          <thead>
-            <tr><th></th><th>Free</th><th>Studio</th><th>Custom</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Secure hosting</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Private play links</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Multiplayer rooms</td><td>Capped</td><td>Higher caps</td><td>✓</td></tr>
-            <tr><td>Public catalog</td><td>—</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Payouts</td><td>—</td><td>After launch</td><td>✓</td></tr>
-            <tr><td>Priority support</td><td>—</td><td>✓</td><td>✓</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-    <section class="pricing-custom" aria-labelledby="custom-title">
-      <div class="pricing-custom-copy">
-        <h2 id="custom-title">Need a custom plan?</h2>
-        <p>If the public tiers do not fit the game, we can talk through rooms, review, and launch before anything is billed.</p>
-      </div>
-      <a class="button button-primary" href="/contact">Contact us</a>
-        <article class="pricing-card">
-          <h3>Custom</h3>
-          <p class="pricing-amount">Talk</p>
-          <p class="pricing-note">For teams that need more rooms, review help, or a path that is not on the public plans.</p>
-          <ul class="pricing-features">
-            <li>Custom room and player caps</li>
-            <li>Guided review and launch</li>
-            <li>Direct operator contact</li>
-            <li>Terms that match the team</li>
-          </ul>
-          <a class="button" href="/contact">Contact us</a>
-        </article>
-      </div>
-    </section>
-    <section class="pricing-compare" aria-labelledby="compare-title">
-      <h2 id="compare-title">Compare features across plans</h2>
-      <div class="compare-wrap">
-        <table class="compare-table pricing-compare-table">
-          <thead>
-            <tr><th></th><th>Free</th><th>Studio</th><th>Custom</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Secure hosting</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Private play links</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Multiplayer rooms</td><td>Capped</td><td>Higher caps</td><td>✓</td></tr>
-            <tr><td>Public catalog</td><td>—</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Payouts</td><td>—</td><td>After launch</td><td>✓</td></tr>
-            <tr><td>Priority support</td><td>—</td><td>✓</td><td>✓</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-    <section class="pricing-custom" aria-labelledby="custom-title">
-      <div class="pricing-custom-copy">
-        <h2 id="custom-title">Need a custom plan?</h2>
-        <p>If the public tiers do not fit the game, we can talk through rooms, review, and launch before anything is billed.</p>
-      </div>
-      <a class="button button-primary" href="/contact">Contact us</a>
-        <article class="pricing-card">
-          <h3>Custom</h3>
-          <p class="pricing-amount">Talk</p>
-          <p class="pricing-note">For teams that need more rooms, review help, or a path that is not on the public plans.</p>
-          <ul class="pricing-features">
-            <li>Custom room and player caps</li>
-            <li>Guided review and launch</li>
-            <li>Direct operator contact</li>
-            <li>Terms that match the team</li>
-          </ul>
-          <a class="button" href="/contact">Contact us</a>
-        </article>
-      </div>
-    </section>
-    <section class="pricing-compare" aria-labelledby="compare-title">
-      <h2 id="compare-title">Compare features across plans</h2>
-      <div class="compare-wrap">
-        <table class="compare-table pricing-compare-table">
-          <thead>
-            <tr><th></th><th>Free</th><th>Studio</th><th>Custom</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Secure hosting</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Private play links</td><td>✓</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Multiplayer rooms</td><td>Capped</td><td>Higher caps</td><td>✓</td></tr>
-            <tr><td>Public catalog</td><td>—</td><td>✓</td><td>✓</td></tr>
-            <tr><td>Payouts</td><td>—</td><td>After launch</td><td>✓</td></tr>
-            <tr><td>Priority support</td><td>—</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Games</td><td>1</td><td>20</td><td>Unlimited</td></tr>
+            <tr><td>Play links</td><td>1</td><td>20</td><td>Unlimited</td></tr>
+            <tr><td>Players per room</td><td>4</td><td>8</td><td>8</td></tr>
+            <tr><td>Public catalog</td><td>—</td><td>Priority listing</td><td>Priority listing</td></tr>
+            <tr><td>Authority</td><td>Host</td><td>Host and server</td><td>Host and server</td></tr>
           </tbody>
         </table>
       </div>
@@ -1198,16 +1001,18 @@ function productScrollScript(path: MarketingRoute): string {
       history.replaceState(null, "", "/product#" + fromPath);
       document.getElementById(fromPath)?.scrollIntoView();
     }
-    const stage = document.querySelector(".grok-stage");
-    const features = [...document.querySelectorAll(".grok-feature")];
-    if (stage && features.length) {
-      const setActive = (id) => { stage.dataset.active = id; };
-      setActive(features[0].id);
+    const stages = [...document.querySelectorAll(".grok-stage")];
+    for (const stage of stages) {
+      const features = [...stage.querySelectorAll(".grok-feature")];
+      if (!features.length) continue;
+      const panelFor = (feature) => feature.dataset.panel || feature.id;
+      const setActive = (feature) => { stage.dataset.active = panelFor(feature); };
+      setActive(features[0]);
       const observer = new IntersectionObserver((entries) => {
         const visible = entries
           .filter((entry) => entry.isIntersecting)
           .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-        if (visible) setActive(visible.target.id);
+        if (visible) setActive(visible.target);
       }, { rootMargin: "-35% 0px -45% 0px", threshold: [0.25, 0.6] });
       for (const feature of features) observer.observe(feature);
     }

@@ -2,26 +2,47 @@ import {
   ClientEnvelopeSchema,
   CreateRoomOptionsSchema,
   JoinPublicRoomInputSchema,
+  LeaderboardListInputSchema,
+  LeaderboardListResultSchema,
+  LeaderboardSubmitInputSchema,
+  LeaderboardSubmitResultSchema,
   ListPublicRoomsInputSchema,
   ListPublicRoomsResultSchema,
   RealtimeClientEnvelopeSchema,
   RealtimeServerEnvelopeSchema,
+  RealtimeSignalServerEnvelopeSchema,
   ServerEnvelopeSchema,
   PROTOCOL_VERSION,
   REALTIME_PROTOCOL_VERSION,
   REALTIME_OPCODES,
+  REALTIME_SIGNAL_OPCODES,
   dequantize,
   quantize,
   type ClientEnvelope,
   type CreateRoomOptions,
   type JoinPublicRoomInput,
+  type LeaderboardListInput,
+  type LeaderboardListResult,
+  type LeaderboardRecord,
+  type LeaderboardSubmitResult,
   type ListPublicRoomsInput,
   type ListPublicRoomsResult,
   type RealtimeClientEnvelope,
   type RealtimeDelivery,
   type RealtimeServerEnvelope,
+  type RealtimeSignalClientEnvelope,
+  type RealtimeSignalServerEnvelope,
   type ServerEnvelope,
 } from "../../protocol/src/index.js";
+import {
+  WebrtcStar,
+  defaultPeerConnectionFactory,
+  DEFAULT_STUN_SERVERS,
+  type IceServerConfig,
+  type PeerConnectionFactory,
+  type WebrtcSignalInbound,
+  type WebrtcSignalOutbound,
+} from "./webrtc-star.js";
 import { Client, Session, type Socket } from "@heroiclabs/nakama-js";
 import {
   createBrowserPageLifecycle,
@@ -121,12 +142,32 @@ export {
 } from "./reconnect.js";
 export type { LifecycleCause, LifecycleState, PageLifecycle } from "./reconnect.js";
 export type {
+  ClientEnvelope,
   CreateRoomOptions,
   JoinPublicRoomInput,
+  LeaderboardListInput,
+  LeaderboardListResult,
+  LeaderboardRecord,
+  LeaderboardSubmitResult,
   ListPublicRoomsInput,
   ListPublicRoomsResult,
   PublicRoomSummary,
+  ServerEnvelope,
 } from "../../protocol/src/index.js";
+
+export {
+  WebrtcStar,
+  defaultPeerConnectionFactory,
+  DEFAULT_STUN_SERVERS,
+} from "./webrtc-star.js";
+export type {
+  IceServerConfig,
+  PeerConnectionFactory,
+  PeerConnectionLike,
+  DataChannelLike,
+  WebrtcPeerState,
+  WebrtcStarOptions,
+} from "./webrtc-star.js";
 
 export const LOKI_API_ORIGIN = "https://api.lokiplay.cc";
 
@@ -266,13 +307,34 @@ export interface LokiTransport {
   sendRealtime?(message: RealtimeClientEnvelope): Promise<void>;
   subscribe(listener: (message: unknown) => void): () => void;
   resolveInvite?(inviteCode: string): Promise<{ roomId: string; inviteCode: string }>;
-  matchmake?(input: { minPlayers: number; maxPlayers: number; teamSize?: number }): Promise<JoinedRoom>;
+  matchmake?(
+    input: { minPlayers: number; maxPlayers: number; teamSize?: number; realtimeCapable?: boolean },
+    options?: { signal?: AbortSignal },
+  ): Promise<JoinedRoom>;
+  /** Room-independent leaderboard read; usable without an active room. */
+  listLeaderboard?(input: LeaderboardListInput): Promise<LeaderboardListResult>;
+  /** Room-independent leaderboard write; usable without an active room. */
+  submitLeaderboardScore?(input: {
+    leaderboardId: string;
+    score: number;
+    subscore?: number;
+    displayName?: string;
+  }): Promise<LeaderboardRecord>;
   leaveRoom?(roomId: string): Promise<void>;
   reconnect?(): Promise<void>;
   refresh?(): Promise<void>;
   close(): Promise<void>;
   subscribeConnection?(listener: (event: ConnectionEvent) => void): () => void;
+  /** Optional, read-only, additive: current room's transport mix. Does not change any existing callback contract. */
+  getTransportDiagnostics?(): TransportDiagnostics;
 }
+
+export type TransportDiagnostics = {
+  /** "websocket" when no data channel is connected, "webrtc" when every peer that matters is on a data channel, "mixed" otherwise. */
+  mode: "websocket" | "webrtc" | "mixed";
+  connectedPeers: number;
+  webrtcSupported: boolean;
+};
 
 export interface LokiClientOptions {
   projectId: string;
@@ -294,6 +356,13 @@ export class LokiClient {
   #receiveSequence = 0;
   #realtimeSendSequence = 0;
   #realtimeReceiveSequence = 0;
+  // See #dispatchRealtime: a bounded, content-keyed dedupe window so a
+  // realtime message that legitimately arrives twice (once over the
+  // Nakama WebSocket, once over a WebRTC data channel) is only delivered
+  // once, without dropping a data-channel frame that happens to carry a
+  // lower transport `sequence` than an already-delivered WebSocket frame.
+  #realtimeSeenKeys = new Set<string>();
+  #realtimeSeenKeyOrder: string[] = [];
   #inviteCode = "";
   #connectionListeners = new Set<(event: ConnectionEvent) => void>();
   #unsubscribeConnection?: () => void;
@@ -363,6 +432,7 @@ export class LokiClient {
         createRoom: (input) => this.createRoom(input),
         joinRoom: (input) => this.joinRoom(input),
         joinPublicRoom: (input) => this.joinPublicRoom(input),
+        matchmake: (input, matchOptions) => this.matchmake(input, matchOptions),
         leaveRoom: (roomId) => this.leaveRoom(roomId),
         reconnect: () => this.reconnect(),
         onMessage: (listener) => this.onMessage(listener),
@@ -382,6 +452,8 @@ export class LokiClient {
         createRoom: (input) => this.createRoom({ ...input, realtimeCapable: true }),
         joinRoom: (input) => this.joinRoom(input, { realtimeCapable: true }),
         joinPublicRoom: (input) => this.joinPublicRoom(input, { realtimeCapable: true }),
+        matchmake: (input, matchOptions) =>
+          this.matchmake({ ...input, realtimeCapable: true }, matchOptions),
         leaveRoom: (roomId) => this.leaveRoom(roomId),
         reconnect: () => this.reconnect(),
         sendRealtimeInput: (payload, extras) => this.sendRealtimeInput(payload, extras),
@@ -554,12 +626,52 @@ export class LokiClient {
   }
 
   #dispatchRealtime(message: RealtimeServerEnvelope): void {
-    if (
-      message.roomId !== this.#roomId ||
-      message.sequence < this.#realtimeReceiveSequence
-    ) return;
-    this.#realtimeReceiveSequence = message.sequence;
+    if (message.roomId !== this.#roomId) return;
+    const key = this.#realtimeDedupeKey(message);
+    if (key) {
+      if (this.#realtimeSeenKeys.has(key)) return;
+      this.#rememberRealtimeKey(key);
+    } else if (message.sequence < this.#realtimeReceiveSequence) {
+      // Types without a content-based dedupe key (sync responses, errors)
+      // are never dual-delivered over both the WebSocket and a data
+      // channel, so the original monotonic-sequence guard still applies.
+      return;
+    }
+    if (message.sequence > this.#realtimeReceiveSequence) {
+      this.#realtimeReceiveSequence = message.sequence;
+    }
     notifyListeners(this.#realtimeListeners, message);
+  }
+
+  // realtime_snapshot, realtime_input, realtime_effect, and
+  // realtime_guest_report can legitimately arrive twice for the same
+  // logical event (once over the Nakama WebSocket, once over a WebRTC data
+  // channel); this content-derived key -- not the transport-assigned
+  // `sequence` -- is what identifies a duplicate, so a data-channel frame
+  // is never dropped just because a higher-numbered WebSocket frame
+  // already arrived.
+  #realtimeDedupeKey(message: RealtimeServerEnvelope): string | undefined {
+    switch (message.type) {
+      case "realtime_snapshot":
+        return `snapshot:${message.authorityEpoch}:${message.runtimeSnapshotSequence}`;
+      case "realtime_input":
+        return `input:${message.senderId}:${message.inputSequence}:${message.delivery}`;
+      case "realtime_effect":
+        return `effect:${message.effectId}`;
+      case "realtime_guest_report":
+        return `report:${message.senderId}:${message.roundSequence}`;
+      default:
+        return undefined;
+    }
+  }
+
+  #rememberRealtimeKey(key: string): void {
+    this.#realtimeSeenKeys.add(key);
+    this.#realtimeSeenKeyOrder.push(key);
+    if (this.#realtimeSeenKeyOrder.length > 256) {
+      const oldest = this.#realtimeSeenKeyOrder.shift();
+      if (oldest !== undefined) this.#realtimeSeenKeys.delete(oldest);
+    }
   }
 
   async sendAction(
@@ -639,17 +751,54 @@ export class LokiClient {
     await this.#sendRoomMessage({ type: "chat", channel, text });
   }
 
+  /** In-room score message. Kept for backward compatibility; prefer `submitLeaderboardScore` when no room is joined (e.g. a title-screen or post-game board). */
   async submitScore(
     leaderboardId: string,
     score: number,
     subscore = 0,
+    options?: { displayName?: string },
   ): Promise<void> {
     await this.#sendRoomMessage({
       type: "score_submit",
       leaderboardId,
       score,
       subscore,
+      displayName: options?.displayName,
     });
+  }
+
+  /** Room-independent leaderboard read (works before, during, or without joining a room). Loki does not ship a leaderboard screen; the game renders these records. */
+  async listLeaderboard(
+    leaderboardId: string,
+    options: { limit?: number; cursor?: string } = {},
+  ): Promise<LeaderboardListResult> {
+    if (!this.#playerId) throw new Error("authenticate before listing a leaderboard");
+    if (!this.#transport.listLeaderboard) throw new Error("leaderboards are unsupported");
+    const parsed = LeaderboardListInputSchema.parse({
+      leaderboardId,
+      limit: options.limit,
+      cursor: options.cursor,
+    });
+    return LeaderboardListResultSchema.parse(await this.#transport.listLeaderboard(parsed));
+  }
+
+  /** Room-independent leaderboard write (works without joining a room). `displayName` is a game-owned label; Loki never infers one from the player's identity. */
+  async submitLeaderboardScore(
+    leaderboardId: string,
+    score: number,
+    options: { subscore?: number; displayName?: string } = {},
+  ): Promise<LeaderboardRecord> {
+    if (!this.#playerId) throw new Error("authenticate before submitting a score");
+    if (!this.#transport.submitLeaderboardScore) throw new Error("leaderboards are unsupported");
+    const parsed = LeaderboardSubmitInputSchema.parse({
+      leaderboardId,
+      score,
+      subscore: options.subscore,
+      displayName: options.displayName,
+    });
+    return LeaderboardSubmitResultSchema.parse({
+      record: await this.#transport.submitLeaderboardScore(parsed),
+    }).record;
   }
 
   async resolveInvite(inviteCode: string): Promise<{ roomId: string; inviteCode: string }> {
@@ -657,14 +806,20 @@ export class LokiClient {
     return this.#transport.resolveInvite(requireInviteCode(inviteCode));
   }
 
-  async matchmake(input: {
-    minPlayers: number;
-    maxPlayers: number;
-    teamSize?: number;
-  }): Promise<JoinedRoom> {
+  /** Optional, read-only transport diagnostics for the current room; undefined when the transport does not report them. Never affects delivery. */
+  getTransportDiagnostics(): TransportDiagnostics | undefined {
+    return this.#transport.getTransportDiagnostics?.();
+  }
+
+  async matchmake(
+    input: { minPlayers: number; maxPlayers: number; teamSize?: number; realtimeCapable?: boolean },
+    options?: { signal?: AbortSignal },
+  ): Promise<JoinedRoom> {
     if (!this.#playerId) throw new Error("authenticate before matchmaking");
     if (!this.#transport.matchmake) throw new Error("matchmaking is unsupported");
-    return this.#serialize(() => this.#enterRoom(() => this.#transport.matchmake!(input)));
+    return this.#serialize(() =>
+      this.#enterRoom(() => this.#transport.matchmake!(input, options)),
+    );
   }
 
   async leaveRoom(roomId?: string): Promise<void> {
@@ -848,6 +1003,7 @@ export class LokiClient {
           leaderboardId: string;
           score: number;
           subscore: number;
+          displayName?: string;
         },
   ): Promise<void> {
     if (!this.#roomId) throw new Error("join a room before sending messages");
@@ -876,6 +1032,68 @@ export class LokiClient {
   }
 }
 
+/** Shape of the `loki_turn_credentials` RPC result. An old Nakama module without this RPC, or a deployment with no TURN secret configured, both resolve to no `urls`/`username`/`credential`. */
+export interface TurnCredentialsResult {
+  urls?: string[];
+  username?: string;
+  credential?: string;
+  ttlSeconds?: number;
+}
+
+/**
+ * Pure, exported for testing: merges the base ICE servers (caller-supplied,
+ * or Loki's default STUN set when omitted) with any short-lived TURN
+ * entries. TURN is additive ICE candidate configuration, never a separate
+ * transport; the caller still falls back to the WebSocket whenever every
+ * ICE path fails.
+ */
+export function mergeIceServers(
+  base: IceServerConfig[] | undefined,
+  turnServers: IceServerConfig[],
+): IceServerConfig[] {
+  const resolvedBase = base ?? DEFAULT_STUN_SERVERS;
+  return turnServers.length ? [...resolvedBase, ...turnServers] : resolvedBase;
+}
+
+/**
+ * Pure, exported for testing: turns a `loki_turn_credentials` RPC result
+ * into zero or one ICE server entries, plus the wall-clock time after which
+ * the caller should refetch. Refreshing a little before the credential's
+ * actual TTL (rather than exactly at it) means a credential fetched near
+ * the end of one reconnect window is never presented as still valid for
+ * the next one.
+ */
+export function parseTurnCredentials(
+  result: TurnCredentialsResult,
+  nowMs: number = Date.now(),
+): { servers: IceServerConfig[]; expiresAtMs: number } {
+  const servers: IceServerConfig[] =
+    result.urls?.length && result.username && result.credential
+      ? [{ urls: result.urls, username: result.username, credential: result.credential }]
+      : [];
+  const ttlSeconds = typeof result.ttlSeconds === "number" ? result.ttlSeconds : 0;
+  return { servers, expiresAtMs: nowMs + Math.max(0, ttlSeconds - 30) * 1_000 };
+}
+
+/** Pure, exported for testing: whether a previously fetched TURN credential is old enough that FirstPartyTransport should refetch before the next reconnect. */
+export function turnCredentialsStale(expiresAtMs: number, nowMs: number = Date.now()): boolean {
+  return nowMs >= expiresAtMs;
+}
+
+/**
+ * Pure, exported for testing: whether a room's runtime allows the SDK to
+ * attempt WebRTC host-star negotiation at all, based on the snapshot's
+ * `capabilities.realtime_webrtc`. Missing/older-runtime snapshots (no
+ * capabilities block, or the flag simply absent) default to true so
+ * nothing changes for existing host-authority deployments; only an
+ * explicit `false` (as loki.js now sends for `authority: "server"` rooms,
+ * which have no player host to negotiate a star with) disables it.
+ */
+export function webrtcAllowedFrom(snapshot: ServerEnvelope): boolean {
+  if (snapshot.type !== "snapshot") return true;
+  return snapshot.capabilities?.realtime_webrtc !== false;
+}
+
 export interface FirstPartyTransportOptions {
   apiOrigin?: string;
   nakamaHost?: string;
@@ -889,6 +1107,10 @@ export interface FirstPartyTransportOptions {
     refreshToken?: string;
     playerId: string;
   }>;
+  /** Overrides WebRTC peer-connection creation; defaults to the browser global when available. Pass a fake factory in tests, or `undefined`/omit in Node to keep WebRTC disabled (all realtime traffic then always uses the WebSocket). */
+  createPeerConnection?: PeerConnectionFactory;
+  /** Base ICE servers for the host-star data channel, merged with any short-lived TURN credentials fetched from `loki_turn_credentials`. Defaults to Loki's public STUN configuration. */
+  iceServers?: IceServerConfig[];
 }
 
 export class FirstPartyTransport implements LokiTransport {
@@ -910,6 +1132,27 @@ export class FirstPartyTransport implements LokiTransport {
   #scheduler: ReconnectScheduler;
   #foreground: ForegroundController;
   #unsubscribeLifecycle?: () => void;
+  // The metadata used on the most recent successful joinMatch, remembered
+  // so a bare reconnect (which passes no metadata of its own) can rejoin
+  // with the same realtime/webrtc capability instead of silently losing it.
+  #lastJoinMetadata?: Record<string, string>;
+  // Whether the current room's runtime advertised realtime_webrtc on its
+  // last snapshot. Host-authority rooms advertise this normally; a
+  // server-authority room has no player host to negotiate a star with, so
+  // its runtime omits/falsifies this capability and the SDK must never
+  // attempt WebRTC there even if webrtcCapable metadata was sent. Also
+  // remembered across a bare reconnect, same as #lastJoinMetadata.
+  #webrtcAllowed = true;
+  #star?: WebrtcStar;
+  #createPeerConnection?: PeerConnectionFactory;
+  #iceServers?: IceServerConfig[];
+  #signalSendSequence = 0;
+  // Short-lived TURN credentials from `loki_turn_credentials`, merged with
+  // #iceServers (or DEFAULT_STUN_SERVERS) for every peer connection. Empty
+  // whenever the server has no TURN secret configured or the RPC fails, so
+  // WebRTC stays STUN-only exactly like before this existed.
+  #turnServers: IceServerConfig[] = [];
+  #turnExpiresAtMs = 0;
 
   constructor(options: FirstPartyTransportOptions = {}) {
     this.#apiOrigin = (options.apiOrigin ?? LOKI_API_ORIGIN).replace(/\/+$/, "");
@@ -944,6 +1187,112 @@ export class FirstPartyTransport implements LokiTransport {
       10_000,
       false,
     );
+    this.#createPeerConnection =
+      options.createPeerConnection ?? defaultPeerConnectionFactory();
+    this.#iceServers = options.iceServers;
+  }
+
+  // Builds the joinMatch metadata for a fresh join. webrtcCapable is only
+  // ever true when the caller also asked for realtimeCapable and this
+  // environment can actually construct a peer connection; a client that
+  // cannot attempt WebRTC never advertises the capability, so Nakama's
+  // relay/rate limiting simply never targets it.
+  #joinMetadata(realtimeCapable?: boolean): Record<string, string> | undefined {
+    if (!realtimeCapable) return undefined;
+    const metadata: Record<string, string> = { realtimeCapable: "true" };
+    if (this.#createPeerConnection) metadata.webrtcCapable = "true";
+    return metadata;
+  }
+
+  // webrtcAllowed reflects the room's own runtime.capabilities.realtime_webrtc
+  // (defaulting to true for callers, e.g. #close, that are just tearing
+  // down and never intend to arm a star anyway); a server-authority room's
+  // false here means the star is never created regardless of metadata.
+  #armWebrtc(metadata: Record<string, string> | undefined, webrtcAllowed = true): void {
+    this.#lastJoinMetadata = metadata;
+    this.#webrtcAllowed = webrtcAllowed;
+    this.#star?.closeAll();
+    this.#star = undefined;
+    if (!webrtcAllowed || !metadata?.webrtcCapable || !this.#playerId) return;
+    this.#star = new WebrtcStar({
+      playerId: this.#playerId,
+      createPeerConnection: this.#createPeerConnection,
+      iceServers: this.#effectiveIceServers(),
+      sendSignal: (signal) => this.#sendSignal(signal),
+      onMessage: (fromId, data) => this.#handleStarMessage(fromId, data),
+    });
+  }
+
+  // The base STUN configuration (caller-supplied or Loki's default) plus
+  // any short-lived TURN entry fetched from loki_turn_credentials. TURN is
+  // just another ICE candidate source here, never a separate transport
+  // mode; a peer still falls back to the WebSocket if every ICE path fails.
+  #effectiveIceServers(): IceServerConfig[] {
+    return mergeIceServers(this.#iceServers, this.#turnServers);
+  }
+
+  // Fetches short-lived TURN credentials for this session. Missing secret
+  // (STUN-only deployment), an RPC error, or an old Nakama module without
+  // this RPC all resolve to "no TURN servers" rather than throwing, since
+  // TURN is additive and WebRTC must keep working without it.
+  async #refreshTurnCredentials(): Promise<void> {
+    if (!this.#session) return;
+    try {
+      const result = payload<TurnCredentialsResult>(
+        await wrapLokiCall(() =>
+          this.#client.rpc(this.#session!, "loki_turn_credentials", {}),
+        ),
+      );
+      const parsed = parseTurnCredentials(result);
+      this.#turnServers = parsed.servers;
+      this.#turnExpiresAtMs = parsed.expiresAtMs;
+    } catch {
+      this.#turnServers = [];
+      this.#turnExpiresAtMs = 0;
+    }
+  }
+
+  #sendSignal(message: WebrtcSignalOutbound): void {
+    if (!this.#socket || !this.#roomId) return;
+    const opCode =
+      message.type === "webrtc_offer"
+        ? REALTIME_SIGNAL_OPCODES.offer
+        : message.type === "webrtc_answer"
+          ? REALTIME_SIGNAL_OPCODES.answer
+          : REALTIME_SIGNAL_OPCODES.ice;
+    const envelope = {
+      protocolVersion: REALTIME_PROTOCOL_VERSION,
+      roomId: this.#roomId,
+      sequence: ++this.#signalSendSequence,
+      // Signaling delivery does not depend on the current authority epoch;
+      // stale peers are torn down directly via WebrtcStar#setHostId
+      // whenever LokiClient learns of a new host.
+      authorityEpoch: 0,
+      ...message,
+    };
+    const roomId = this.#roomId;
+    void this.#socket.sendMatchState(roomId, opCode, encodeMatchStateBytes(envelope));
+  }
+
+  // A data-channel frame is handed to the same generic listener pipeline
+  // as a WebSocket message so LokiClient's existing parse/dedupe/dispatch
+  // logic treats both delivery paths identically.
+  #handleStarMessage(_fromId: string, data: unknown): void {
+    notifyListeners(this.#listeners, data);
+  }
+
+  // Additive diagnostics only; never used to decide routing (see
+  // #trySendOverStar), so a caller polling this cannot affect delivery.
+  // This transport does not track total room membership, so "webrtc" (every
+  // peer on a data channel) is never reported; "mixed" covers any partial
+  // coverage, which is the conservative, always-accurate choice here.
+  getTransportDiagnostics(): TransportDiagnostics {
+    const connectedPeers = this.#star?.connectedPeerCount ?? 0;
+    return {
+      mode: connectedPeers > 0 ? "mixed" : "websocket",
+      connectedPeers,
+      webrtcSupported: Boolean(this.#createPeerConnection),
+    };
   }
 
   async authenticate(token: string): Promise<{ playerId: string }> {
@@ -971,6 +1320,10 @@ export class FirstPartyTransport implements LokiTransport {
     if (!checked.token || !checked.playerId) throw new Error("invalid Loki session response");
     this.#session = Session.restore(checked.token, checked.refreshToken ?? "");
     this.#playerId = checked.playerId;
+    // Only worth fetching when this environment can attempt WebRTC at all;
+    // #refreshTurnCredentials never throws, so a stale/missing RPC cannot
+    // fail authentication.
+    if (this.#createPeerConnection) await this.#refreshTurnCredentials();
     await this.#connectSocket();
     return { playerId: checked.playerId };
   }
@@ -998,17 +1351,15 @@ export class FirstPartyTransport implements LokiTransport {
     if (!created.matchId || !created.inviteCode) {
       throw new Error("Loki did not return a room invite");
     }
-    await socket.joinMatch(
-      created.matchId,
-      undefined,
-      input.realtimeCapable ? { realtimeCapable: "true" } : undefined,
-    );
+    const metadata = this.#joinMetadata(input.realtimeCapable);
     try {
       const snapshot = await this.#snapshot(created.matchId);
       if (input.visibility === "public") this.#requirePublicRoomBrowser(snapshot);
       this.#roomId = created.matchId;
       this.#foreground.notify();
       this.#roomKey = created.roomKey;
+      this.#armWebrtc(metadata, webrtcAllowedFrom(snapshot));
+      if (snapshot.type === "snapshot") this.#star?.setHostId(snapshot.hostId);
       return {
         roomId: created.matchId,
         inviteCode: created.inviteCode,
@@ -1019,6 +1370,7 @@ export class FirstPartyTransport implements LokiTransport {
       if (this.#roomId === created.matchId) {
         this.#roomId = undefined;
         this.#roomKey = undefined;
+        this.#armWebrtc(undefined);
       }
       throw error;
     }
@@ -1040,16 +1392,14 @@ export class FirstPartyTransport implements LokiTransport {
         this.#client.rpc(session, "loki_join_room", { inviteCode }),
       ),
     );
-    if (!joined.matchId) throw new Error("Loki did not return a room");
-    await socket.joinMatch(
-      joined.matchId,
-      undefined,
-      input.realtimeCapable ? { realtimeCapable: "true" } : undefined,
-    );
+    const metadata = this.#joinMetadata(input.realtimeCapable);
+    await socket.joinMatch(joined.matchId, undefined, metadata);
     try {
       const snapshot = await this.#snapshot(joined.matchId);
       this.#foreground.notify();
       this.#roomId = joined.matchId;
+      this.#armWebrtc(metadata, webrtcAllowedFrom(snapshot));
+      if (snapshot.type === "snapshot") this.#star?.setHostId(snapshot.hostId);
       return {
         roomId: joined.matchId,
         inviteCode: joined.inviteCode ?? inviteCode,
@@ -1057,7 +1407,10 @@ export class FirstPartyTransport implements LokiTransport {
       };
     } catch (error) {
       await socket.leaveMatch(joined.matchId).catch(() => undefined);
-      if (this.#roomId === joined.matchId) this.#roomId = undefined;
+      if (this.#roomId === joined.matchId) {
+        this.#roomId = undefined;
+        this.#armWebrtc(undefined);
+      }
       throw error;
     }
   }
@@ -1089,16 +1442,15 @@ export class FirstPartyTransport implements LokiTransport {
       ),
     );
     if (!joined.matchId) throw new Error("Loki did not return a room");
-    await socket.joinMatch(
-      joined.matchId,
-      undefined,
-      input.realtimeCapable ? { realtimeCapable: "true" } : undefined,
-    );
+    const metadata = this.#joinMetadata(input.realtimeCapable);
+    await socket.joinMatch(joined.matchId, undefined, metadata);
     try {
       const snapshot = await this.#snapshot(joined.matchId);
       this.#requirePublicRoomBrowser(snapshot);
       this.#foreground.notify();
       this.#roomId = joined.matchId;
+      this.#armWebrtc(metadata, webrtcAllowedFrom(snapshot));
+      if (snapshot.type === "snapshot") this.#star?.setHostId(snapshot.hostId);
       return {
         roomId: joined.matchId,
         inviteCode: "",
@@ -1106,7 +1458,10 @@ export class FirstPartyTransport implements LokiTransport {
       };
     } catch (error) {
       await socket.leaveMatch(joined.matchId).catch(() => undefined);
-      if (this.#roomId === joined.matchId) this.#roomId = undefined;
+      if (this.#roomId === joined.matchId) {
+        this.#roomId = undefined;
+        this.#armWebrtc(undefined);
+      }
       throw error;
     }
   }
@@ -1115,6 +1470,30 @@ export class FirstPartyTransport implements LokiTransport {
     if (snapshot.type !== "snapshot" || snapshot.capabilities?.public_room_browser !== true) {
       throw new Error("runtime does not advertise public_room_browser");
     }
+  }
+
+  async listLeaderboard(input: LeaderboardListInput): Promise<LeaderboardListResult> {
+    return LeaderboardListResultSchema.parse(
+      payload<LeaderboardListResult>(
+        await wrapLokiCall(() =>
+          this.#client.rpc(this.#requireSession(), "loki_leaderboard_list", input),
+        ),
+      ),
+    );
+  }
+
+  async submitLeaderboardScore(input: {
+    leaderboardId: string;
+    score: number;
+    subscore?: number;
+    displayName?: string;
+  }): Promise<LeaderboardRecord> {
+    const result = payload<{ leaderboardId: string; record: LeaderboardRecord }>(
+      await wrapLokiCall(() =>
+        this.#client.rpc(this.#requireSession(), "loki_leaderboard_submit", input),
+      ),
+    );
+    return LeaderboardSubmitResultSchema.parse({ record: result.record }).record;
   }
 
   async resolveInvite(inviteCode: string): Promise<{ roomId: string; inviteCode: string }> {
@@ -1133,40 +1512,69 @@ export class FirstPartyTransport implements LokiTransport {
     };
   }
 
-  async matchmake(input: {
-    minPlayers: number;
-    maxPlayers: number;
-    teamSize?: number;
-  }): Promise<JoinedRoom> {
+  async matchmake(
+    input: { minPlayers: number; maxPlayers: number; teamSize?: number; realtimeCapable?: boolean },
+    options?: { signal?: AbortSignal },
+  ): Promise<JoinedRoom> {
+    options?.signal?.throwIfAborted();
     const socket = await this.#connectSocket();
-    const matched = new Promise<{ match_id?: string; token?: string }>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("matchmaking timed out")), 30_000);
-      socket.onmatchmakermatched = (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      };
-    });
-    await socket.addMatchmaker("*", input.minPlayers, input.maxPlayers, undefined, {
+    const added = await socket.addMatchmaker("*", input.minPlayers, input.maxPlayers, undefined, {
       teamSize: input.teamSize ?? 0,
     });
-    const result = await matched;
-    const joined = await socket.joinMatch(result.match_id, result.token);
+    let ticket: string | undefined = added.ticket;
+    // Removes the ticket from Nakama's matchmaker on any exit path other
+    // than a completed match, so an abandoned search (timeout, cancel, or
+    // leaving before a match forms) never leaves a stale ticket behind.
+    // Once a match has actually formed, the ticket is already consumed
+    // server-side and this becomes a harmless no-op.
+    const removeTicket = async (): Promise<void> => {
+      if (!ticket) return;
+      const value = ticket;
+      ticket = undefined;
+      await socket.removeMatchmaker(value).catch(() => undefined);
+    };
+    let onAbort: (() => void) | undefined;
     try {
-      const snapshot = await this.#snapshot(joined.match_id);
-      this.#roomId = joined.match_id;
-      this.#foreground.notify();
-      this.#roomKey = `match-${joined.match_id.slice(0, 12).toLowerCase()}`;
-      return {
-        roomId: joined.match_id,
-        inviteCode: "",
-        snapshot,
-      };
-    } catch (error) {
-      await socket.leaveMatch(joined.match_id).catch(() => undefined);
-      if (this.#roomId === joined.match_id) {
-        this.#roomId = undefined;
-        this.#roomKey = undefined;
+      const matched = await new Promise<{ match_id?: string; token?: string }>(
+        (resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("matchmaking timed out")), 30_000);
+          const settle = (fn: () => void) => {
+            clearTimeout(timer);
+            if (onAbort) options?.signal?.removeEventListener("abort", onAbort);
+            fn();
+          };
+          socket.onmatchmakermatched = (value) => settle(() => resolve(value));
+          onAbort = () =>
+            settle(() => reject(new DOMException("matchmaking cancelled", "AbortError")));
+          if (options?.signal) options.signal.addEventListener("abort", onAbort);
+        },
+      );
+      ticket = undefined;
+      const metadata = this.#joinMetadata(input.realtimeCapable);
+      const joined = await socket.joinMatch(matched.match_id, matched.token, metadata);
+      try {
+        const snapshot = await this.#snapshot(joined.match_id);
+        this.#roomId = joined.match_id;
+        this.#foreground.notify();
+        this.#roomKey = `match-${joined.match_id.slice(0, 12).toLowerCase()}`;
+        this.#armWebrtc(metadata, webrtcAllowedFrom(snapshot));
+        if (snapshot.type === "snapshot") this.#star?.setHostId(snapshot.hostId);
+        return {
+          roomId: joined.match_id,
+          inviteCode: "",
+          snapshot,
+        };
+      } catch (error) {
+        await socket.leaveMatch(joined.match_id).catch(() => undefined);
+        if (this.#roomId === joined.match_id) {
+          this.#roomId = undefined;
+          this.#roomKey = undefined;
+          this.#armWebrtc(undefined);
+        }
+        throw error;
       }
+    } catch (error) {
+      await removeTicket();
       throw error;
     }
   }
@@ -1195,6 +1603,14 @@ export class FirstPartyTransport implements LokiTransport {
   }
 
   async sendRealtime(message: RealtimeClientEnvelope): Promise<void> {
+    // Snapshots are always dual-delivered (WebSocket for persistence/host
+    // ACK, data channel as a faster additive copy); a guest's latest-wins
+    // input and its periodic guest report may go over the data channel
+    // exclusively when connected. Ordered inputs, sync/recovery requests,
+    // and effects always stay on the WebSocket, matching the star's own
+    // routing contract (see #trySendOverStar).
+    if (message.type === "realtime_snapshot") this.#star?.broadcastAsHost(message);
+    if (this.#trySendOverStar(message)) return;
     const socket = await this.#connectSocket();
     const opCode =
       message.type === "realtime_input"
@@ -1211,6 +1627,22 @@ export class FirstPartyTransport implements LokiTransport {
       opCode,
       encodeMatchStateBytes(message),
     );
+  }
+
+  // Latest-wins inputs and guest reports may be delivered exclusively over
+  // the data channel when the star has an open connection to the host;
+  // returning false here always falls back to the (always-available)
+  // WebSocket path, which is also the only path for ordered inputs,
+  // sync/recovery, and effects.
+  #trySendOverStar(message: RealtimeClientEnvelope): boolean {
+    if (!this.#star) return false;
+    if (message.type === "realtime_input" && message.delivery === "latest") {
+      return this.#star.sendToHost(message);
+    }
+    if (message.type === "realtime_guest_report") {
+      return this.#star.sendToHost(message);
+    }
+    return false;
   }
 
   subscribe(listener: (message: unknown) => void): () => void {
@@ -1239,6 +1671,7 @@ export class FirstPartyTransport implements LokiTransport {
     if (this.#roomId === roomId) {
       this.#roomId = undefined;
       this.#roomKey = undefined;
+      this.#armWebrtc(undefined);
     }
   }
 
@@ -1271,8 +1704,17 @@ export class FirstPartyTransport implements LokiTransport {
     try {
       previous?.disconnect(false);
       if (this.#session?.isexpired(Math.floor(Date.now() / 1_000))) await this.refresh();
+      if (this.#createPeerConnection && turnCredentialsStale(this.#turnExpiresAtMs)) {
+        await this.#refreshTurnCredentials();
+      }
       const socket = await this.#connectSocket();
-      if (this.#roomId) await socket.joinMatch(this.#roomId);
+      this.#armWebrtc(this.#lastJoinMetadata, this.#webrtcAllowed);
+      // Reuse the realtime/webrtc capability metadata from the original
+      // join. Nakama's own join handler also tolerates missing metadata
+      // by preserving the session's prior capability, but passing it
+      // here keeps the two systems in agreement and avoids relying on
+      // that fallback for the common case.
+      if (this.#roomId) await socket.joinMatch(this.#roomId, undefined, this.#lastJoinMetadata);
     } finally {
       this.#ignoreDisconnect = false;
     }
@@ -1285,6 +1727,7 @@ export class FirstPartyTransport implements LokiTransport {
     this.#unsubscribeLifecycle = undefined;
     this.#socket?.disconnect(false);
     this.#socket = undefined;
+    this.#armWebrtc(undefined);
     this.#listeners.clear();
     this.#connectionListeners.clear();
   }
@@ -1297,6 +1740,16 @@ export class FirstPartyTransport implements LokiTransport {
       if (message.match_id !== this.#roomId) return;
       try {
         const decoded = JSON.parse(textDecoder.decode(message.data)) as unknown;
+        const record = decoded as { hostId?: unknown };
+        if (typeof record?.hostId === "string") this.#star?.setHostId(record.hostId);
+        if (
+          message.op_code === REALTIME_SIGNAL_OPCODES.offer ||
+          message.op_code === REALTIME_SIGNAL_OPCODES.answer ||
+          message.op_code === REALTIME_SIGNAL_OPCODES.ice
+        ) {
+          this.#star?.handleSignal(decoded as WebrtcSignalInbound);
+          return;
+        }
         notifyListeners(this.#listeners, decoded);
       } catch {
         // Invalid server data is ignored and cannot reach game listeners.

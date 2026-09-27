@@ -1,0 +1,21 @@
+{
+  "environment": "local-darwin-arm64",
+  "generatedAt": "2026-09-27T12:03:52.623203Z",
+  "inputLogSha256": "8c33f0ce3d1f1fb85d25852cb0d7720b87db4cd658c3507d95a9d19fa1b40440",
+  "runs": [
+    {
+      "finalStateSha256": "50f5d7d20ee6ecf3e3d6786d3b89ba3791f09ec14c1a70ad3abc29a7a700eda6",
+      "runId": "1",
+      "ticksExecuted": 2
+    },
+    {
+      "finalStateSha256": "50f5d7d20ee6ecf3e3d6786d3b89ba3791f09ec14c1a70ad3abc29a7a700eda6",
+      "runId": "2",
+      "ticksExecuted": 2
+    }
+  ],
+  "schemaVersion": 1,
+  "sourceReferences": [
+    "infra/worker/gates_test.go"
+  ]
+}

@@ -48,6 +48,12 @@ var OP_REALTIME_SNAPSHOT = 18;
 var OP_REALTIME_SYNC = 19;
 var OP_REALTIME_EFFECT = 20;
 var OP_REALTIME_GUEST_REPORT = 21;
+// Additive WebRTC signaling opcodes. Never overlap 10-16 (v1) or 17-21 (v2
+// data); a runtime that does not recognize these silently ignores them
+// (matchLoop's dispatcher below only handles opcodes it explicitly lists).
+var OP_WEBRTC_OFFER = 22;
+var OP_WEBRTC_ANSWER = 23;
+var OP_WEBRTC_ICE = 24;
 var REALTIME_INPUT_RATE_LIMIT = 20;
 var REALTIME_SNAPSHOT_RATE_LIMIT = 30;
 var REALTIME_MAX_IN_FLIGHT_SNAPSHOTS = 8;
@@ -59,6 +65,186 @@ var REALTIME_GUEST_REPORT_RATE_LIMIT = 3;
 var REALTIME_MAX_ORDERED_INPUTS = 32;
 var REALTIME_MAX_RETAINED_EFFECTS = 32;
 var REALTIME_HOST_AUTHORITY_GRACE_SECONDS = 5;
+
+// The matchmaking pool a ticket belongs to. Single-region today (this
+// deployment is always "sg"); a later region reads its own LOKI_REGION
+// runtime env value and this same query/stamp keeps matches within one
+// deployment. Never trust a client-supplied region.
+var DEFAULT_REGION = "sg";
+var currentRegion = function (ctx) {
+  return (ctx && ctx.env && typeof ctx.env.LOKI_REGION === "string" && ctx.env.LOKI_REGION) ||
+    DEFAULT_REGION;
+};
+
+var WEBRTC_SIGNAL_RATE_LIMIT = 20;
+var WEBRTC_SIGNAL_RATE_WINDOW_MS = 10000;
+
+// TURN relay credentials (coturn REST API "static-auth-secret" format).
+// The secret lives only in Nakama runtime env (LOKI_TURN_SECRET); it is
+// never sent to a client. What a client receives is a short-lived
+// username/password pair a coturn server configured with the same secret
+// will also derive and accept, so Loki never proxies relayed media/data
+// itself. A deployment with no secret configured returns an empty
+// credential set, which keeps WebRTC exactly STUN-only as before this
+// existed.
+var TURN_CREDENTIAL_TTL_SECONDS = 300;
+
+// A minimal, dependency-free SHA-1 (RFC 3174) over a byte array, used only
+// to build the HMAC-SHA1 credential below. Nakama's JS runtime (goja) has
+// no Node "crypto" module, so this has to be self-contained.
+var sha1Bytes = function (messageBytes) {
+  var rotl = function (value, shift) {
+    return ((value << shift) | (value >>> (32 - shift))) >>> 0;
+  };
+  var messageLengthBits = messageBytes.length * 8;
+  var padded = messageBytes.concat([0x80]);
+  while (padded.length % 64 !== 56) padded.push(0);
+  for (var byteIndex = 7; byteIndex >= 0; byteIndex -= 1) {
+    padded.push(Math.floor(messageLengthBits / Math.pow(2, byteIndex * 8)) & 0xff);
+  }
+  var h0 = 0x67452301;
+  var h1 = 0xefcdab89;
+  var h2 = 0x98badcfe;
+  var h3 = 0x10325476;
+  var h4 = 0xc3d2e1f0;
+  for (var chunkStart = 0; chunkStart < padded.length; chunkStart += 64) {
+    var words = new Array(80);
+    for (var wordIndex = 0; wordIndex < 16; wordIndex += 1) {
+      var offset = chunkStart + wordIndex * 4;
+      words[wordIndex] =
+        ((padded[offset] << 24) |
+          (padded[offset + 1] << 16) |
+          (padded[offset + 2] << 8) |
+          padded[offset + 3]) >>>
+        0;
+    }
+    for (var expandIndex = 16; expandIndex < 80; expandIndex += 1) {
+      words[expandIndex] = rotl(
+        words[expandIndex - 3] ^ words[expandIndex - 8] ^ words[expandIndex - 14] ^ words[expandIndex - 16],
+        1,
+      );
+    }
+    var a = h0;
+    var b = h1;
+    var c = h2;
+    var d = h3;
+    var e = h4;
+    for (var round = 0; round < 80; round += 1) {
+      var f;
+      var k;
+      if (round < 20) {
+        f = (b & c) | (~b & d);
+        k = 0x5a827999;
+      } else if (round < 40) {
+        f = b ^ c ^ d;
+        k = 0x6ed9eba1;
+      } else if (round < 60) {
+        f = (b & c) | (b & d) | (c & d);
+        k = 0x8f1bbcdc;
+      } else {
+        f = b ^ c ^ d;
+        k = 0xca62c1d6;
+      }
+      var temp = (rotl(a, 5) + f + e + k + words[round]) >>> 0;
+      e = d;
+      d = c;
+      c = rotl(b, 30);
+      b = a;
+      a = temp;
+    }
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
+  }
+  var digestBytes = [];
+  [h0, h1, h2, h3, h4].forEach(function (word) {
+    digestBytes.push((word >>> 24) & 0xff, (word >>> 16) & 0xff, (word >>> 8) & 0xff, word & 0xff);
+  });
+  return digestBytes;
+};
+
+var utf8Bytes = function (text) {
+  var bytes = [];
+  for (var index = 0; index < text.length; index += 1) {
+    var code = text.charCodeAt(index);
+    // A high surrogate followed by a low surrogate is one astral code point
+    // (e.g. an emoji); combine the pair before encoding so this matches a
+    // real UTF-8 encoder instead of emitting one 3-byte sequence per half.
+    if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+      var low = text.charCodeAt(index + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        code = (code - 0xd800) * 0x400 + (low - 0xdc00) + 0x10000;
+        index += 1;
+      }
+    }
+    if (code < 0x80) {
+      bytes.push(code);
+    } else if (code < 0x800) {
+      bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code < 0x10000) {
+      bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    } else {
+      bytes.push(
+        0xf0 | (code >> 18),
+        0x80 | ((code >> 12) & 0x3f),
+        0x80 | ((code >> 6) & 0x3f),
+        0x80 | (code & 0x3f),
+      );
+    }
+  }
+  return bytes;
+};
+
+var hmacSha1Bytes = function (keyBytes, messageBytes) {
+  var blockSize = 64;
+  var key = keyBytes.length > blockSize ? sha1Bytes(keyBytes) : keyBytes.slice();
+  while (key.length < blockSize) key.push(0);
+  var innerPad = [];
+  var outerPad = [];
+  for (var index = 0; index < blockSize; index += 1) {
+    innerPad.push(key[index] ^ 0x36);
+    outerPad.push(key[index] ^ 0x5c);
+  }
+  return sha1Bytes(outerPad.concat(sha1Bytes(innerPad.concat(messageBytes))));
+};
+
+var BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var base64Encode = function (bytes) {
+  var output = "";
+  for (var index = 0; index < bytes.length; index += 3) {
+    var byte0 = bytes[index];
+    var hasByte1 = index + 1 < bytes.length;
+    var hasByte2 = index + 2 < bytes.length;
+    var byte1 = hasByte1 ? bytes[index + 1] : 0;
+    var byte2 = hasByte2 ? bytes[index + 2] : 0;
+    var triplet = (byte0 << 16) | (byte1 << 8) | byte2;
+    output += BASE64_ALPHABET.charAt((triplet >> 18) & 0x3f);
+    output += BASE64_ALPHABET.charAt((triplet >> 12) & 0x3f);
+    output += hasByte1 ? BASE64_ALPHABET.charAt((triplet >> 6) & 0x3f) : "=";
+    output += hasByte2 ? BASE64_ALPHABET.charAt(triplet & 0x3f) : "=";
+  }
+  return output;
+};
+
+// The coturn REST API static-auth-secret credential: base64(HMAC-SHA1(secret, username)).
+var hmacSha1Base64 = function (secret, message) {
+  return base64Encode(hmacSha1Bytes(utf8Bytes(secret), utf8Bytes(message)));
+};
+
+var turnUrlsFromEnv = function (ctx) {
+  var raw = ctx && ctx.env && ctx.env.LOKI_TURN_URLS;
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map(function (url) {
+      return url.trim();
+    })
+    .filter(function (url) {
+      return url.length > 0;
+    });
+};
 
 var nowMs = function () {
   return Date.now();
@@ -332,6 +518,9 @@ var runtimeCapabilities = function (state) {
     synchronized_rooms: true,
     realtime_rooms: true,
     public_room_browser: true,
+    // WebRTC's host-star topology has no meaning without a player host;
+    // server-authority rooms stay on the Nakama WebSocket only.
+    realtime_webrtc: !state || state.authority !== "server",
     realtimeProtocolVersion: REALTIME_PROTOCOL_VERSION,
     minimumProtocolVersion: PROTOCOL_VERSION,
     limits: {
@@ -361,7 +550,24 @@ var defaultProjectConfig = function (projectId) {
     inviteTtlSeconds: DEFAULT_INVITE_TTL_SECONDS,
     concurrentRoomQuota: DEFAULT_ROOM_QUOTA,
     leaderboardNamespace: "",
+    authority: "host",
+    stepModule: null,
   };
+};
+
+// Matches packages/protocol StepModuleDescriptorSchema: one export ("step"),
+// no imports, pinned by hash. Shape only; validateAndStoreStepModule (the
+// upload boundary in apps/api) is what actually inspected the WASM bytes.
+var validStepModuleDescriptor = function (value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    value.abiVersion === 1 &&
+    typeof value.modulePath === "string" &&
+    value.modulePath.length > 0 &&
+    typeof value.sha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(value.sha256)
+  );
 };
 
 var validateProjectConfig = function (projectId, input, previous) {
@@ -384,6 +590,9 @@ var validateProjectConfig = function (projectId, input, previous) {
         ? config.concurrentRoomQuota
         : input.concurrentRoomQuota,
     leaderboardNamespace: config.leaderboardNamespace || "",
+    authority: input.authority === undefined ? (config.authority || "host") : input.authority,
+    stepModule:
+      input.stepModule === undefined ? (config.stepModule || null) : input.stepModule,
   };
   if (next.status !== "active" && next.status !== "suspended") {
     throw codedError("INVALID_MESSAGE", "status must be active or suspended");
@@ -412,6 +621,45 @@ var validateProjectConfig = function (projectId, input, previous) {
   }
   if (!integerInRange(next.concurrentRoomQuota, 1, 100)) {
     throw codedError("INVALID_MESSAGE", "concurrentRoomQuota must be between 1 and 100");
+  }
+  if (next.authority !== "host" && next.authority !== "server") {
+    throw codedError("INVALID_MESSAGE", "authority must be host or server");
+  }
+  if (next.authority === "server") {
+    if (!validStepModuleDescriptor(next.stepModule)) {
+      throw codedError("INVALID_MESSAGE", "server authority requires a valid stepModule descriptor");
+    }
+  } else if (next.stepModule) {
+    throw codedError("INVALID_MESSAGE", "stepModule is only valid with server authority");
+  }
+  if (
+    next.visibility !== "private" &&
+    next.visibility !== "unlisted" &&
+    next.visibility !== "matchmaking"
+  ) {
+    throw codedError("INVALID_MESSAGE", "invalid visibility");
+  }
+  if (!integerInRange(next.teamSize, 0, 16)) {
+    throw codedError("INVALID_MESSAGE", "teamSize must be between 0 and 16");
+  }
+  if (next.teamSize && next.maxPlayers % next.teamSize !== 0) {
+    throw codedError("INVALID_MESSAGE", "teamSize must divide maxPlayers");
+  }
+  if (!integerInRange(next.inviteTtlSeconds, 30, 86400)) {
+    throw codedError("INVALID_MESSAGE", "inviteTtlSeconds must be between 30 and 86400");
+  }
+  if (!integerInRange(next.concurrentRoomQuota, 1, 100)) {
+    throw codedError("INVALID_MESSAGE", "concurrentRoomQuota must be between 1 and 100");
+  }
+  if (next.authority !== "host" && next.authority !== "server") {
+    throw codedError("INVALID_MESSAGE", "authority must be host or server");
+  }
+  if (next.authority === "server") {
+    if (!validStepModuleDescriptor(next.stepModule)) {
+      throw codedError("INVALID_MESSAGE", "server authority requires a valid stepModule descriptor");
+    }
+  } else if (next.stepModule) {
+    throw codedError("INVALID_MESSAGE", "stepModule is only valid with server authority");
   }
   return next;
 };
@@ -961,10 +1209,15 @@ var beforeMatchmakerAdd = function (ctx, logger, nk, envelope) {
     envelope.matchmakerAdd.stringProperties || {};
   envelope.matchmakerAdd.numericProperties =
     envelope.matchmakerAdd.numericProperties || {};
+  var region = currentRegion(ctx);
   envelope.matchmakerAdd.stringProperties.projectId = projectId;
+  envelope.matchmakerAdd.stringProperties.region = region;
   envelope.matchmakerAdd.stringProperties.lokiConfig = JSON.stringify(config);
   envelope.matchmakerAdd.numericProperties.teamSize = config.teamSize;
-  envelope.matchmakerAdd.query = "+properties.projectId:" + projectId;
+  // Any region a client tried to set above is overwritten by the query
+  // below regardless; matches only ever pool within this deployment.
+  envelope.matchmakerAdd.query =
+    "+properties.projectId:" + projectId + " +properties.region:" + region;
   return envelope;
 };
 
@@ -985,12 +1238,19 @@ var matchmakerMatched = function (ctx, logger, nk, matches) {
     throw codedError("INVALID_MESSAGE", "empty matchmaker result");
   }
   var projectId = matchedProperty(matches[0], "projectId");
-  if (typeof projectId !== "string") {
+  var region = matchedProperty(matches[0], "region");
+  if (typeof projectId !== "string" || typeof region !== "string") {
     throw codedError("FORBIDDEN", "trusted matchmaking properties missing");
   }
   for (var index = 1; index < matches.length; index += 1) {
     if (matchedProperty(matches[index], "projectId") !== projectId) {
       throw codedError("TENANT_MISMATCH", "matchmaker crossed tenant boundary");
+    }
+    // Defense-in-depth: the query above already scopes tickets to one
+    // region, so this should be unreachable, but a match must never be
+    // created from tickets stamped with different regions.
+    if (matchedProperty(matches[index], "region") !== region) {
+      throw codedError("TENANT_MISMATCH", "matchmaker crossed region boundary");
     }
   }
   var config = requireActiveProject(nk, projectId);
@@ -1162,6 +1422,166 @@ var applyHostState = function (state, expectedVersion, nextState, expectedStateV
   return true;
 };
 
+// --- Server-authority match routing ----------------------------------------
+// A "server"-authority room runs no player host at all: hostId stays "" for
+// its entire life (see matchJoin/applyLeaves below, both of which skip host
+// election when state.authority === "server"), and its simulation lives in
+// one fuel-metered isolate on the Go worker fleet (infra/worker), addressed
+// by state.worker.url. Clients still send inputs on the existing socket;
+// this module only forwards them and relays the worker's snapshots back.
+
+// Ship-disabled by default: server authority never places a match, even
+// with a validly configured project, until an operator sets this runtime
+// env value. See docs/SERVER_AUTHORITY.md for the gates that must pass
+// first.
+var serverAuthorityEnabled = function (ctx) {
+  return Boolean(ctx && ctx.env && ctx.env.LOKI_SERVER_AUTHORITY_ENABLED === "true");
+};
+
+var workerOrchestratorUrl = function (ctx) {
+  var raw = ctx && ctx.env && ctx.env.LOKI_WORKER_ORCHESTRATOR_URL;
+  return typeof raw === "string" && raw ? raw.replace(/\/+$/, "") : "";
+};
+
+// Calls the orchestrator (the worker fleet's own HTTP API; see
+// infra/worker) to place a brand-new match on a worker before the room ever
+// accepts a player. A placement failure here means the room never starts,
+// the same fail-closed behavior as an unreachable worker mid-match: server
+// authority never falls back to electing a player host.
+var placeServerAuthorityMatch = function (ctx, nk, matchId, tickRate, stepModule) {
+  var orchestratorUrl = workerOrchestratorUrl(ctx);
+  if (!orchestratorUrl) {
+    throw codedError("SERVICE_UNAVAILABLE", "no worker orchestrator is configured");
+  }
+  var response;
+  try {
+    response = nk.httpRequest(
+      orchestratorUrl + "/matches",
+      "post",
+      { "content-type": "application/json" },
+      JSON.stringify({ matchId: matchId, tickRate: tickRate, stepModule: stepModule }),
+      5000,
+    );
+  } catch (error) {
+    throw codedError("SERVICE_UNAVAILABLE", "worker placement request failed");
+  }
+  if (!response || response.code < 200 || response.code >= 300) {
+    throw codedError("SERVICE_UNAVAILABLE", "worker placement was refused");
+  }
+  var placement;
+  try {
+    placement = JSON.parse(response.body);
+  } catch (error) {
+    throw codedError("SERVICE_UNAVAILABLE", "worker placement returned an invalid response");
+  }
+  if (!placement || typeof placement.workerUrl !== "string" || !placement.workerUrl) {
+    throw codedError("SERVICE_UNAVAILABLE", "worker placement did not return a worker");
+  }
+  return { url: placement.workerUrl.replace(/\/+$/, ""), placedAt: nowMs() };
+};
+
+// A room queues realtime input for the worker instead of relaying it to a
+// player host; the worker sees exactly the inputs a host would have.
+var queueServerAuthorityInput = function (state, senderId, input, receivedAt) {
+  state.serverAuthority.pendingInputs.push({
+    senderId: senderId,
+    inputSequence: input.inputSequence,
+    targetTick: input.targetTick,
+    delivery: input.delivery,
+    clientSendTime: input.clientSendTime,
+    serverReceiveTime: receivedAt,
+    payload: input.payload,
+  });
+};
+
+// One matchLoop tick's worth of work for a server-authority room: send
+// every input queued since the last tick, and relay back whatever snapshot
+// the worker returns. `state.realtime.authorityEpoch` never advances for
+// these rooms (there is no host migration to fence), matching the "no
+// fallback to a player host" contract.
+var stepServerAuthorityMatch = function (ctx, nk, dispatcher, state, tick, now) {
+  var inputs = state.serverAuthority.pendingInputs;
+  state.serverAuthority.pendingInputs = [];
+  var response;
+  try {
+    response = nk.httpRequest(
+      state.worker.url + "/matches/" + encodeURIComponent(state.roomId) + "/tick",
+      "post",
+      { "content-type": "application/json" },
+      JSON.stringify({ tick: tick, inputs: inputs }),
+      Math.max(200, Math.floor(1000 / state.tickRate)),
+    );
+  } catch (error) {
+    response = null;
+  }
+  if (!response || response.code < 200 || response.code >= 300) {
+    state.serverAuthority.consecutiveFailures += 1;
+    return false;
+  }
+  var tickResult;
+  try {
+    tickResult = JSON.parse(response.body);
+  } catch (error) {
+    state.serverAuthority.consecutiveFailures += 1;
+    return false;
+  }
+  state.serverAuthority.consecutiveFailures = 0;
+  if (!tickResult || typeof tickResult.simulationTick !== "number") return true;
+  var previous = state.realtime.latestSnapshot;
+  if (previous && tickResult.simulationTick <= previous.simulationTick) return true;
+  state.realtime.runtimeSnapshotSequence += 1;
+  state.realtime.latestSnapshot = {
+    state: tickResult.state,
+    simulationTick: tickResult.simulationTick,
+    hostSnapshotSequence: state.realtime.runtimeSnapshotSequence,
+    processedInputCursors: {},
+  };
+  broadcastRealtimeEnvelope(
+    dispatcher,
+    state,
+    OP_REALTIME_SNAPSHOT,
+    "realtime_snapshot",
+    {
+      hostId: "",
+      authorityEpoch: state.realtime.authorityEpoch,
+      roundSequence: state.realtime.roundSequence,
+      simulationTick: tickResult.simulationTick,
+      runtimeSnapshotSequence: state.realtime.runtimeSnapshotSequence,
+      processedInputCursors: {},
+      hostSendTime: now,
+      serverTime: now,
+      state: tickResult.state,
+    },
+    realtimeCapableTargets(state),
+    null,
+    true,
+  );
+  return true;
+};
+
+// Best-effort: the worker releases its isolate on its own idle timeout even
+// if this never arrives, so a failure here never blocks the room from
+// ending.
+var teardownServerAuthorityMatch = function (nk, state) {
+  if (!state.worker || !state.worker.url) return;
+  try {
+    nk.httpRequest(
+      state.worker.url + "/matches/" + encodeURIComponent(state.roomId) + "/teardown",
+      "post",
+      { "content-type": "application/json" },
+      "{}",
+      2000,
+    );
+  } catch (error) {
+    // Best-effort; the worker's own idle timeout is the backstop.
+  }
+};
+
+// How many consecutive failed ticks (roughly this many seconds, since each
+// tick is one matchLoop invocation) a server-authority room tolerates
+// before ending rather than waiting indefinitely on a dead worker.
+var SERVER_AUTHORITY_MAX_CONSECUTIVE_FAILURES = 5;
+
 var legacySnapshot = function (state) {
   return {
     type: "snapshot",
@@ -1206,6 +1626,15 @@ var matchInit = function (ctx, logger, nk, params) {
   var teamSize = integerInRange(params.teamSize, 0, maxPlayers)
     ? params.teamSize
     : config.teamSize;
+  var authority = config.authority === "server" ? "server" : "host";
+  var worker = null;
+  if (authority === "server") {
+    if (!serverAuthorityEnabled(ctx)) {
+      throw codedError("FORBIDDEN", "server authority is disabled in this environment");
+    }
+    var roomId = ctx.matchId || params.roomKey;
+    worker = placeServerAuthorityMatch(ctx, nk, roomId, tickRate, config.stepModule);
+  }
   return {
     state: {
       roomId: ctx.matchId || "",
@@ -1216,6 +1645,13 @@ var matchInit = function (ctx, logger, nk, params) {
       visibility: params.visibility || config.visibility,
       modeLabel: params.modeLabel || "",
       teamSize: teamSize,
+      authority: authority,
+      stepModule: authority === "server" ? config.stepModule : null,
+      worker: worker,
+      serverAuthority:
+        authority === "server"
+          ? { pendingInputs: [], consecutiveFailures: 0 }
+          : null,
       hostId: "",
       version: 0,
       sequence: 0,
@@ -1230,7 +1666,7 @@ var matchInit = function (ctx, logger, nk, params) {
       emptyTicks: 0,
       lastStatusCheckTick: -1,
       realtime: {
-        active: false,
+        active: authority === "server",
         authorityEpoch: 0,
         roundSequence: 0,
         serverSequence: 0,
@@ -1239,6 +1675,7 @@ var matchInit = function (ctx, logger, nk, params) {
         retainedEffects: [],
         capableSessions: {},
         pendingCapability: {},
+        pendingWebrtcCapability: {},
         latestSnapshot: null,
         latestInputs: {},
         rateLimits: {},
@@ -1263,9 +1700,19 @@ var matchInit = function (ctx, logger, nk, params) {
 var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, presence, metadata) {
   var accepted = false;
   var reason = "TENANT_MISMATCH: tenant mismatch";
-  var realtimeCapable =
-    Boolean(metadata) &&
-    (metadata.realtimeCapable === "true" || metadata.realtimeCapable === true);
+  // A reconnect (or matchmake rejoin) may arrive with no metadata at all.
+  // Only treat that as an explicit downgrade when this session has never
+  // been seen before; otherwise keep whatever capability the original join
+  // established so a client that omits metadata on rejoin does not silently
+  // lose realtime/webrtc eligibility mid-room.
+  var existingCapability =
+    state.realtime && state.realtime.capableSessions[presence.userId];
+  var realtimeCapable = metadata
+    ? metadata.realtimeCapable === "true" || metadata.realtimeCapable === true
+    : Boolean(existingCapability && existingCapability.capable);
+  var webrtcCapable = metadata
+    ? metadata.webrtcCapable === "true" || metadata.webrtcCapable === true
+    : Boolean(existingCapability && existingCapability.webrtc);
   try {
     accepted = tenantForUser(nk, presence.userId) === state.projectId;
     if (accepted && !state.members[presence.userId] &&
@@ -1288,6 +1735,8 @@ var matchJoinAttempt = function (ctx, logger, nk, dispatcher, tick, state, prese
   }
   if (accepted && state.realtime) {
     state.realtime.pendingCapability[presence.userId] = realtimeCapable;
+    state.realtime.pendingWebrtcCapability = state.realtime.pendingWebrtcCapability || {};
+    state.realtime.pendingWebrtcCapability[presence.userId] = webrtcCapable;
   }
   return {
     state: state,
@@ -1316,6 +1765,9 @@ var applyLeaves = function (dispatcher, state, userIds) {
     if (state.realtime) {
       delete state.realtime.capableSessions[userId];
       delete state.realtime.pendingCapability[userId];
+      if (state.realtime.pendingWebrtcCapability) {
+        delete state.realtime.pendingWebrtcCapability[userId];
+      }
       delete state.realtime.latestInputs[userId];
       delete state.realtime.rateLimits[userId];
     }
@@ -1328,7 +1780,7 @@ var applyLeaves = function (dispatcher, state, userIds) {
     updateLabel(dispatcher, state);
     return;
   }
-  if (!state.members[state.hostId]) {
+  if (state.authority !== "server" && !state.members[state.hostId]) {
     var reassignedHostId = electHost(state.members, undefined, state.disconnectGraces);
     if (reassignedHostId !== state.hostId) bumpRealtimeAuthorityEpoch(state);
     state.hostId = reassignedHostId;
@@ -1394,6 +1846,7 @@ var bumpRealtimeAuthorityEpoch = function (state) {
 };
 
 var migrateHostAuthority = function (dispatcher, state, previousHostId) {
+  if (state.authority === "server") return;
   if (!state.members[previousHostId] || state.hostId !== previousHostId) return;
   var nextHost = electHost(state.members, previousHostId, state.disconnectGraces);
   if (!nextHost || nextHost === previousHostId) return;
@@ -1489,15 +1942,24 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
       member.username = presence.username;
       member.node = presence.node || presence.nodeId;
     }
-    if (!state.hostId || !state.members[state.hostId]) {
+    // Server-authority rooms never elect a player host; hostId stays "" for
+    // the room's entire life and the worker is the only authority.
+    if (state.authority !== "server" && (!state.hostId || !state.members[state.hostId])) {
       state.hostId = presence.userId;
     }
     if (state.realtime) {
       state.realtime.capableSessions[presence.userId] = {
         sessionId: presence.sessionId,
         capable: Boolean(state.realtime.pendingCapability[presence.userId]),
+        webrtc: Boolean(
+          state.realtime.pendingWebrtcCapability &&
+            state.realtime.pendingWebrtcCapability[presence.userId],
+        ),
       };
       delete state.realtime.pendingCapability[presence.userId];
+      if (state.realtime.pendingWebrtcCapability) {
+        delete state.realtime.pendingWebrtcCapability[presence.userId];
+      }
     }
     joins.push(memberPresence(presence.userId, member, state.hostId));
     if (roomAlreadyOccupied || index > 0) {
@@ -1655,6 +2117,13 @@ var leaderboardName = function (nk, projectId, leaderboardId) {
   return "loki." + config.leaderboardNamespace + "." + leaderboardId;
 };
 
+// A game-owned label shown next to a score. Bounded and trimmed; Loki never
+// infers this from the authenticated player id or from Nakama's own
+// username. A missing or invalid value simply means no name is stored.
+var validDisplayName = function (value) {
+  return typeof value === "string" && value.trim().length >= 1 && value.trim().length <= 32;
+};
+
 var writeScore = function (nk, projectId, actorId, username, input) {
   if (!validLeaderboardId(input.leaderboardId)) {
     throw codedError("INVALID_MESSAGE", "invalid leaderboardId");
@@ -1666,18 +2135,31 @@ var writeScore = function (nk, projectId, actorId, username, input) {
   if (!integerInRange(subscore, -9007199254740991, 9007199254740991)) {
     throw codedError("INVALID_MESSAGE", "subscore must be a safe integer");
   }
+  if (input.displayName !== undefined && !validDisplayName(input.displayName)) {
+    throw codedError("INVALID_MESSAGE", "displayName must be 1-32 characters");
+  }
   var internalId = leaderboardName(nk, projectId, input.leaderboardId);
   nk.leaderboardCreate(internalId, true, "desc", "best", "", {});
+  var metadata = validDisplayName(input.displayName)
+    ? { displayName: input.displayName.trim() }
+    : {};
   // ownerId is always the authenticated actor; client-supplied identity fields
-  // are deliberately ignored.
+  // are deliberately ignored. displayName is the one game-owned exception,
+  // and it is stored, not used to pick ownerId.
   return nk.leaderboardRecordWrite(
     internalId,
     actorId,
     username || "",
     input.score,
     subscore,
-    {},
+    metadata,
   );
+};
+
+var leaderboardRecordDisplayName = function (record) {
+  return record && record.metadata && validDisplayName(record.metadata.displayName)
+    ? record.metadata.displayName
+    : undefined;
 };
 
 var nextRealtimeServerSequence = function (state) {
@@ -1772,6 +2254,17 @@ var isRealtimeCapable = function (state, userId) {
   return Boolean(entry && entry.capable);
 };
 
+var isWebrtcCapable = function (state, userId) {
+  var entry = state.realtime.capableSessions[userId];
+  return Boolean(entry && entry.capable && entry.webrtc);
+};
+
+var memberPresenceTarget = function (state, userId) {
+  var member = state.members[userId];
+  if (!member) return undefined;
+  return memberTarget(userId, member);
+};
+
 var realtimeCapableTargets = function (state) {
   var targets = [];
   orderedMemberIds(state.members).forEach(function (userId) {
@@ -1837,6 +2330,89 @@ var retainedEffectsForSync = function (state) {
       payload: effect.payload,
     };
   });
+};
+
+var validRealtimeSignalEnvelope = function (state, message, input, expectedType) {
+  return (
+    input &&
+    input.protocolVersion === REALTIME_PROTOCOL_VERSION &&
+    input.roomId === state.roomId &&
+    integerInRange(input.sequence, 0, 9007199254740991) &&
+    input.type === expectedType &&
+    typeof input.toId === "string" &&
+    input.toId.length > 0 &&
+    integerInRange(input.authorityEpoch, 0, 9007199254740991) &&
+    message.sender &&
+    state.members[message.sender.userId] &&
+    state.members[message.sender.userId].sessionId === message.sender.sessionId
+  );
+};
+
+// Relays WebRTC offer/answer/ICE between two current room members so their
+// browsers can negotiate a direct data channel. Loki never parses SDP or
+// candidate contents; it only checks size, membership, capability, and
+// per-sender rate limits, then unicasts the envelope to the named target.
+var processRealtimeSignal = function (logger, nk, dispatcher, state, message, opCode) {
+  var expectedTypes = {};
+  expectedTypes[OP_WEBRTC_OFFER] = "webrtc_offer";
+  expectedTypes[OP_WEBRTC_ANSWER] = "webrtc_answer";
+  expectedTypes[OP_WEBRTC_ICE] = "webrtc_ice";
+  var expectedType = expectedTypes[opCode];
+  if (!expectedType || !message.sender) return;
+  // Capability is recorded at join. A legacy member keeps the v2 simulation
+  // from activating, and those capable peers still need the relay.
+  if (!state.realtime) return;
+  if (!isWebrtcCapable(state, message.sender.userId)) return;
+
+  var raw =
+    typeof message.data === "string" ? message.data : nk.binaryToString(message.data);
+  if (raw.length > MAX_MESSAGE_BYTES) return;
+
+  var input;
+  try {
+    input = parsePayload(raw);
+  } catch (_) {
+    return;
+  }
+  if (!validRealtimeSignalEnvelope(state, message, input, expectedType)) return;
+
+  var retryAfterMs = realtimeRateLimit(
+    state,
+    message.sender.userId,
+    "webrtcSignal",
+    nowMs(),
+    WEBRTC_SIGNAL_RATE_WINDOW_MS,
+    WEBRTC_SIGNAL_RATE_LIMIT,
+  );
+  if (retryAfterMs) return;
+
+  var target = memberPresenceTarget(state, input.toId);
+  if (!target || !isWebrtcCapable(state, input.toId)) {
+    // Tell only the sender; never relay to a session that never
+    // advertised webrtc support, and never broadcast this to the room.
+    broadcastRealtimeEnvelope(
+      dispatcher,
+      state,
+      opCode,
+      "webrtc_unavailable",
+      { authorityEpoch: input.authorityEpoch, toId: input.toId },
+      [message.sender],
+      null,
+      true,
+    );
+    return;
+  }
+
+  var fields = { fromId: message.sender.userId, authorityEpoch: input.authorityEpoch };
+  if (expectedType === "webrtc_ice") {
+    fields.candidate = input.candidate;
+    if (input.sdpMid !== undefined) fields.sdpMid = input.sdpMid;
+    if (input.sdpMLineIndex !== undefined) fields.sdpMLineIndex = input.sdpMLineIndex;
+  } else {
+    fields.sdp = input.sdp;
+  }
+  // Unicast only: signaling is never broadcast to the whole room.
+  broadcastRealtimeEnvelope(dispatcher, state, opCode, expectedType, fields, [target], null, true);
 };
 
 var processRealtimeV2Message = function (logger, nk, dispatcher, state, message, opCode) {
@@ -1960,6 +2536,12 @@ var processRealtimeV2Message = function (logger, nk, dispatcher, state, message,
     var inputRetry = realtimeRateLimit(state, senderId, "realtimeInput", now, 1000, REALTIME_INPUT_RATE_LIMIT);
     if (inputRetry) {
       sendRealtimeError(dispatcher, state, opCode, message.sender, "RATE_LIMITED", "realtime input rate exceeded", inputRetry);
+      return;
+    }
+    // A server-authority room has no host to relay this to; queue it for
+    // the worker's next tick instead (see stepServerAuthorityMatch).
+    if (state.authority === "server") {
+      queueServerAuthorityInput(state, senderId, input, now);
       return;
     }
     if (input.roundSequence !== state.realtime.roundSequence) {
@@ -2246,6 +2828,14 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
     opCode === OP_REALTIME_GUEST_REPORT
   ) {
     processRealtimeV2Message(logger, nk, dispatcher, state, message, opCode);
+    return;
+  }
+  if (
+    opCode === OP_WEBRTC_OFFER ||
+    opCode === OP_WEBRTC_ANSWER ||
+    opCode === OP_WEBRTC_ICE
+  ) {
+    processRealtimeSignal(logger, nk, dispatcher, state, message, opCode);
     return;
   }
   var expectedTypes = {};
@@ -2762,6 +3352,7 @@ var processRealtimeMessage = function (logger, nk, dispatcher, state, message) {
           leaderboardId: input.leaderboardId,
           records: [{
             playerId: message.sender.userId,
+            displayName: leaderboardRecordDisplayName(record),
             score: record.score,
             subscore: record.subscore,
             rank: record.rank || 1,
@@ -2799,6 +3390,7 @@ var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
       null,
       true,
     );
+    if (state.authority === "server") teardownServerAuthorityMatch(nk, state);
     releaseRoomKey(nk, state);
     return null;
   }
@@ -2808,6 +3400,7 @@ var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
   if (!Object.keys(state.members).length) {
     state.emptyTicks += 1;
     if (state.emptyTicks >= state.tickRate * EMPTY_ROOM_GRACE_SECONDS) {
+      if (state.authority === "server") teardownServerAuthorityMatch(nk, state);
       releaseRoomKey(nk, state);
       return null;
     }
@@ -2816,6 +3409,24 @@ var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
   state.emptyTicks = 0;
   for (var index = 0; messages && index < messages.length; index += 1) {
     processRealtimeMessage(logger, nk, dispatcher, state, messages[index]);
+  }
+  if (state.authority === "server") {
+    stepServerAuthorityMatch(ctx, nk, dispatcher, state, tick, nowMs());
+    if (state.serverAuthority.consecutiveFailures >= SERVER_AUTHORITY_MAX_CONSECUTIVE_FAILURES) {
+      broadcastEnvelope(
+        dispatcher,
+        state,
+        OP_SNAPSHOT,
+        "room_closed",
+        { reason: "shutdown" },
+        null,
+        null,
+        true,
+      );
+      teardownServerAuthorityMatch(nk, state);
+      releaseRoomKey(nk, state);
+      return null;
+    }
   }
   for (var syncIndex = state.joinSyncs.length - 1; syncIndex >= 0; syncIndex -= 1) {
     var sync = state.joinSyncs[syncIndex];
@@ -2893,6 +3504,7 @@ var matchTerminate = function (ctx, logger, nk, dispatcher, tick, state, graceSe
       true,
     );
   }
+  if (state.authority === "server") teardownServerAuthorityMatch(nk, state);
   releaseRoomKey(nk, state);
   return { state: state };
 };
@@ -2997,6 +3609,7 @@ var rpcLeaderboardSubmit = function (ctx, logger, nk, payload) {
     leaderboardId: input.leaderboardId,
     record: {
       playerId: ctx.userId,
+      displayName: leaderboardRecordDisplayName(record),
       score: record.score,
       subscore: record.subscore,
       rank: record.rank || 1,
@@ -3024,6 +3637,7 @@ var rpcLeaderboardList = function (ctx, logger, nk, payload) {
   var records = (result.records || []).map(function (record) {
     return {
       playerId: record.ownerId,
+      displayName: leaderboardRecordDisplayName(record),
       score: record.score,
       subscore: record.subscore,
       rank: record.rank,
@@ -3035,6 +3649,36 @@ var rpcLeaderboardList = function (ctx, logger, nk, payload) {
     leaderboardId: input.leaderboardId,
     records: records,
     nextCursor: result.nextCursor || undefined,
+  });
+};
+
+// Room-independent: any authenticated session can mint a TURN credential
+// for its own use, whether or not it currently holds a room. The returned
+// username/credential pair is scoped only by its short TTL, matching what
+// any coturn deployment configured with the same LOKI_TURN_SECRET expects.
+var rpcTurnCredentials = function (ctx, logger, nk) {
+  if (!ctx.userId) throw codedError("UNAUTHORIZED", "authentication required");
+  var secret = ctx.env && ctx.env.LOKI_TURN_SECRET;
+  var urls = turnUrlsFromEnv(ctx);
+  if (!secret || !urls.length) {
+    return JSON.stringify({
+      ok: true,
+      code: "OK",
+      urls: [],
+      username: "",
+      credential: "",
+      ttlSeconds: 0,
+    });
+  }
+  var username = String(Math.floor(nowMs() / 1000) + TURN_CREDENTIAL_TTL_SECONDS);
+  var credential = hmacSha1Base64(secret, username);
+  return JSON.stringify({
+    ok: true,
+    code: "OK",
+    urls: urls,
+    username: username,
+    credential: credential,
+    ttlSeconds: TURN_CREDENTIAL_TTL_SECONDS,
   });
 };
 
@@ -3051,6 +3695,7 @@ var InitModule = function (ctx, logger, nk, initializer) {
   initializer.registerRpc("loki_room_update", rpcRoomUpdate);
   initializer.registerRpc("loki_leaderboard_submit", rpcLeaderboardSubmit);
   initializer.registerRpc("loki_leaderboard_list", rpcLeaderboardList);
+  initializer.registerRpc("loki_turn_credentials", rpcTurnCredentials);
   initializer.registerRtBefore("MatchmakerAdd", beforeMatchmakerAdd);
   initializer.registerMatchmakerMatched(matchmakerMatched);
   initializer.registerMatch(MATCH_NAME, {

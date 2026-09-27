@@ -11,6 +11,8 @@ runtime:
   js_entrypoint: loki.js
   path: /nakama/data/modules
   http_key: defaulthttpkey
+  env:
+    - "LOKI_REGION=sg"
 console:
   username: admin
   password: local-phase-zero-only

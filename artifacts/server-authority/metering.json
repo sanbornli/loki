@@ -1,0 +1,34 @@
+{
+  "environment": "local-darwin-arm64",
+  "faultInjections": [
+    {
+      "killed": true,
+      "killedWithinMs": 653.83,
+      "kind": "fuel",
+      "neighborMatchId": "neighbor",
+      "neighborTicksAfter": 2,
+      "neighborTicksBefore": 1
+    },
+    {
+      "killed": true,
+      "killedWithinMs": 33.222,
+      "kind": "time",
+      "neighborMatchId": "neighbor",
+      "neighborTicksAfter": 3,
+      "neighborTicksBefore": 2
+    },
+    {
+      "killed": true,
+      "killedWithinMs": 1.62,
+      "kind": "memory",
+      "neighborMatchId": "neighbor",
+      "neighborTicksAfter": 4,
+      "neighborTicksBefore": 3
+    }
+  ],
+  "generatedAt": "2026-09-27T12:03:52.623203Z",
+  "schemaVersion": 1,
+  "sourceReferences": [
+    "infra/worker/gates_test.go"
+  ]
+}

@@ -4,9 +4,17 @@ import { strFromU8, unzipSync } from "fflate";
 import {
   GameManifestSchema,
   type GameManifest,
+  type StepModuleDescriptor,
 } from "../../../packages/protocol/src/index.js";
 import { literalOutboundUrls } from "./network-scan.js";
 import type { PlatformOperations } from "./platform.js";
+import {
+  MAX_STEP_MODULE_BYTES,
+  MemoryStepModuleStore,
+  sha256Hex,
+  validateStepModuleBytes,
+  type StepModuleStore,
+} from "./step-module.js";
 
 export interface ScanFinding {
   severity: "warning" | "error";
@@ -243,6 +251,11 @@ function scanFiles(
   const allowedOrigins = new Set(
     manifest.networkAllowlist.map((value) => new URL(value).origin),
   );
+  // The declared step module already passed its own, stricter boundary
+  // (validateAndStoreStepModule: no imports, exactly one "step" export);
+  // it is not a generic "did the creator upload backend source" false
+  // positive just because it lives under a server/ path.
+  const stepModulePath = manifest.multiplayer?.step?.modulePath;
   for (const [name, bytes] of files) {
     const extension = path.posix.extname(name).toLowerCase();
     if (prohibitedExtensions.has(extension)) {
@@ -253,7 +266,7 @@ function scanFiles(
         message: `Executable or backend file type ${extension} is not hosted`,
       });
     }
-    if (/(^|\/)(server|backend)(\.|\/)/i.test(name)) {
+    if (name !== stepModulePath && /(^|\/)(server|backend)(\.|\/)/i.test(name)) {
       findings.push({
         severity: "error",
         code: "BACKEND_SOURCE",
@@ -328,6 +341,7 @@ export class DeploymentService {
         periodSeconds: number,
       ): Promise<number>;
     },
+    readonly stepModules: StepModuleStore = new MemoryStepModuleStore(),
   ) {}
 
   async deployZip(input: {
@@ -403,6 +417,9 @@ export class DeploymentService {
     if (!files.has(manifest.entrypoint)) {
       throw new Error(`entrypoint ${manifest.entrypoint} is missing`);
     }
+    if (manifest.multiplayer?.authority === "server") {
+      await this.validateAndStoreStepModule(files, manifest.multiplayer.step!);
+    }
     const findings = scanFiles(files, manifest);
     const deterministicStatus = findings.some((finding) => finding.severity === "error")
       ? "blocked"
@@ -469,6 +486,33 @@ export class DeploymentService {
         deployment.id,
       );
     }
+  }
+
+  // The upload boundary for a server-authority manifest: the declared
+  // module must be present in this archive, within the size limit, hash to
+  // the pinned sha256, and pass validateStepModuleBytes (no imports, and
+  // exactly one function export named "step"). Extra files in the zip stay
+  // eligible for the static browser release below and are never mounted in
+  // the isolate; only these validated bytes, addressed by hash, are.
+  private async validateAndStoreStepModule(
+    files: Map<string, Uint8Array>,
+    step: StepModuleDescriptor,
+  ): Promise<void> {
+    const moduleBytes = files.get(step.modulePath);
+    if (!moduleBytes) {
+      throw new Error(`step module ${step.modulePath} is missing`);
+    }
+    if (moduleBytes.byteLength > MAX_STEP_MODULE_BYTES) {
+      throw new Error(
+        `step module exceeds the ${MAX_STEP_MODULE_BYTES}-byte prototype limit`,
+      );
+    }
+    const digest = sha256Hex(moduleBytes);
+    if (digest !== step.sha256) {
+      throw new Error("step module sha256 does not match game.json");
+    }
+    validateStepModuleBytes(moduleBytes);
+    await this.stepModules.putIfAbsent(digest, moduleBytes);
   }
 
   async get(projectId: string, deploymentId: string): Promise<Deployment> {

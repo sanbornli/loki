@@ -63,6 +63,19 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{8,128}$"
     },
+    "stepModuleDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["abiVersion", "modulePath", "sha256"],
+      "properties": {
+        "abiVersion": { "const": 1 },
+        "modulePath": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+\\.wasm$"
+        },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
     "actionSenderId": {
       "type": "string",
       "minLength": 1,
@@ -109,10 +122,17 @@
       "required": ["enabled", "authority", "maxPlayers", "tickRate"],
       "properties": {
         "enabled": { "type": "boolean" },
-        "authority": { "const": "host" },
+        "authority": { "enum": ["host", "server"] },
         "maxPlayers": { "type": "integer", "minimum": 1, "maximum": 16 },
-        "tickRate": { "type": "integer", "minimum": 1, "maximum": 30 }
-      }
+        "tickRate": { "type": "integer", "minimum": 1, "maximum": 30 },
+        "step": { "$ref": "#/$defs/stepModuleDescriptor" }
+      },
+      "if": {
+        "properties": { "authority": { "const": "server" } },
+        "required": ["authority"]
+      },
+      "then": { "required": ["step"] },
+      "else": { "not": { "required": ["step"] } }
     },
     "networkAllowlist": {
       "type": "array",

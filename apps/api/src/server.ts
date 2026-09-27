@@ -277,6 +277,32 @@ export function createApiHandler(dependencies: ApiDependencies) {
         json(response, ok ? 200 : 503, { ok, checks });
         return;
       }
+      // Content-addressed step-module bytes for the simulation worker fleet
+      // (see infra/worker's moduleFetcher, LOKI_WORKER_MODULE_BASE_URL). The
+      // sha256 in the path is the only key: no creator/player identity is
+      // involved, matching the worker's own plain fetch-by-hash call, and the
+      // module already passed validateStepModuleBytes at upload time. Every
+      // response for a given hash is byte-identical forever, so it is safe
+      // to cache immutably.
+      const stepModuleMatch = url.pathname.match(
+        /^\/v1\/step-modules\/([a-f0-9]{64})$/i,
+      );
+      if (request.method === "GET" && stepModuleMatch) {
+        const bytes = await dependencies.deployments.stepModules.get(
+          stepModuleMatch[1]!.toLowerCase(),
+        );
+        if (!bytes) {
+          json(response, 404, { error: "step module not found" });
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": "application/wasm",
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-length": String(bytes.byteLength),
+        });
+        response.end(Buffer.from(bytes));
+        return;
+      }
       const rate = rateLimitFor(request.method ?? "GET", url.pathname);
       if (rate && dependencies.safety) {
         await dependencies.safety.rateLimit(

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-27T12:03:50.961Z",
+  "environment": "local-darwin-arm64",
+  "rejections": [
+    {
+      "category": "wasi",
+      "rejectedBeforeScheduling": true,
+      "rejectionReason": "step module imports 1 host value(s); server-authority modules may import nothing (no WASI, clocks, randomness, or host functions)"
+    },
+    {
+      "category": "socket",
+      "rejectedBeforeScheduling": true,
+      "rejectionReason": "step module imports 1 host value(s); server-authority modules may import nothing (no WASI, clocks, randomness, or host functions)"
+    },
+    {
+      "category": "environment",
+      "rejectedBeforeScheduling": true,
+      "rejectionReason": "step module imports 1 host value(s); server-authority modules may import nothing (no WASI, clocks, randomness, or host functions)"
+    }
+  ],
+  "sourceReferences": [
+    "apps/api/src/step-module.ts",
+    "infra/worker/validate.go"
+  ]
+}

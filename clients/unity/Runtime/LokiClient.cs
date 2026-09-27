@@ -86,12 +86,16 @@ namespace Loki.Play.SDK
     public sealed class LeaderboardRecord
     {
         public readonly string PlayerId;
+        // A game-owned, bounded label shown next to a score; null when the
+        // submission carried none. Never inferred by Loki from the player's
+        // identity.
+        public readonly string DisplayName;
         public readonly long Score;
         public readonly long Subscore;
         public readonly long Rank;
-        public LeaderboardRecord(string playerId, long score, long subscore, long rank)
+        public LeaderboardRecord(string playerId, long score, long subscore, long rank, string displayName = null)
         {
-            PlayerId = playerId; Score = score; Subscore = subscore; Rank = rank;
+            PlayerId = playerId; Score = score; Subscore = subscore; Rank = rank; DisplayName = displayName;
         }
     }
 
@@ -289,11 +293,13 @@ namespace Loki.Play.SDK
                 "channel", JsonValue.From(channel), "text", JsonValue.From(text)));
         }
 
-        public Task<JsonValue> SubmitScoreAsync(string roomId, long sequence, string leaderboardId, long score, long subscore = 0)
+        public Task<JsonValue> SubmitScoreAsync(string roomId, long sequence, string leaderboardId, long score, long subscore = 0, string displayName = null)
         {
-            return SendEnvelope(roomId, sequence, "score_submit", Fields(
+            var fields = Fields(
                 "leaderboardId", JsonValue.From(leaderboardId),
-                "score", JsonValue.From(score), "subscore", JsonValue.From(subscore)));
+                "score", JsonValue.From(score), "subscore", JsonValue.From(subscore));
+            if (displayName != null) fields["displayName"] = JsonValue.From(displayName);
+            return SendEnvelope(roomId, sequence, "score_submit", fields);
         }
 
         public async Task<IReadOnlyList<LeaderboardRecord>> GetPrivateLeaderboardAsync(
@@ -310,7 +316,7 @@ namespace Loki.Play.SDK
                 var fields = item.AsObject();
                 records.Add(new LeaderboardRecord(
                     fields.String("playerId"), fields.Long("score"),
-                    fields.Long("subscore"), fields.Long("rank")));
+                    fields.Long("subscore"), fields.Long("rank"), fields.OptionalString("displayName")));
             }
             return records;
         }

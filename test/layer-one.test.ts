@@ -244,6 +244,10 @@ test("player shell and game responses enforce origin isolation", () => {
     headers["content-security-policy"]!,
     /connect-src https:\/\/api\.lokiplay\.cc https:\/\/multiplayer\.lokiplay\.cc wss:\/\/multiplayer\.lokiplay\.cc/
   );
+  assert.match(
+    headers["content-security-policy"]!,
+    /stun:stun\.cloudflare\.com:3478 stun:stun\.l\.google\.com:19302 turn:turn\.lokiplay\.cc:3478 turns:turn\.lokiplay\.cc:5349/,
+  );
   assert.match(headers["permissions-policy"]!, /camera=\(\)/);
   assert.equal(headers["cross-origin-resource-policy"], "cross-origin");
   const shell = renderPlayerShell({
@@ -288,12 +292,13 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(marketing, /editorial-stack/);
   assert.match(marketing, /workflow-row/);
   assert.match(marketing, /feature-row feature-row-flip workflow-row/);
-  assert.match(marketing, /ops-wall/);
-  assert.match(marketing, /Agentic Game Ops Wall preview/);
+  assert.match(marketing, /hero-montage/);
+  assert.match(marketing, /live-listing/);
+  assert.match(marketing, /Creator share/);
   assert.match(marketing, /party-flow/);
   assert.match(marketing, /Prompt-to-party timeline/);
   assert.match(marketing, /From side project<br>to Global Game<br>in a single prompt\./);
-  assert.match(marketing, /Give a finished browser game a host, a room, and a playable URL/);
+  assert.match(marketing, /Give your game hosting, a shareable game link, real-time online multiplayer and game publishing/);
   assert.match(marketing, /Let your Agent handle the rest\./);
   assert.match(marketing, /Ship your game today\./);
   assert.match(marketing, /Get started today for free/);
@@ -380,21 +385,27 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(product, /id="agents"/);
   assert.doesNotMatch(product, /id="sdk"/);
   assert.doesNotMatch(product, /And much more/);
-  assert.match(product, /A home for every build/);
+  assert.match(product, /A home for every Game./);
   assert.match(product, /Instant live multiplayer without the manual setup/);
   assert.match(product, /Launch your game to the world through Loki/);
   assert.match(product, /Built for the Agentic AI Era/);
   assert.doesNotMatch(product, /One protocol\. Four clients/);
-  assert.match(renderMarketingPage(config, "/hosting"), /A home for every build/);
+  assert.match(renderMarketingPage(config, "/hosting"), /A home for every Game./);
   assert.match(renderMarketingPage(config, "/hosting"), /id="hosting"/);
   assert.match(renderMarketingPage(config, "/pricing"), /Start free/);
   assert.match(renderMarketingPage(config, "/pricing"), /<p class="pricing-amount">\$0<\/p>/);
   assert.match(renderMarketingPage(config, "/pricing"), /\$12/);
   assert.match(renderMarketingPage(config, "/pricing"), /\$8/);
+  assert.match(renderMarketingPage(config, "/pricing"), /Loki Pro/);
+  assert.match(renderMarketingPage(config, "/pricing"), /\$20/);
+  assert.match(renderMarketingPage(config, "/pricing"), /20 games/);
+  assert.doesNotMatch(renderMarketingPage(config, "/pricing"), />Studio</);
   assert.match(renderMarketingPage(config, "/pricing"), /pricing-grid/);
   assert.match(renderMarketingPage(config, "/pricing"), /Compare features across plans/);
   assert.match(marketing, /pricing-grid/);
   assert.match(marketing, /\$12/);
+  assert.match(marketing, /Loki Pro/);
+  assert.match(marketing, /\$20/);
   assert.doesNotMatch(marketing, /Compare features across plans/);
   assert.match(renderMarketingPage(config, "/pricing"), /pricing-grid/);
   assert.match(renderMarketingPage(config, "/pricing"), /Compare features across plans/);
@@ -712,6 +723,10 @@ test("web server delivers the active immutable release through a sandbox shell",
   assert.match(
     asset.headers.get("content-security-policy")!,
     /connect-src https:\/\/api\.lokiplay\.cc https:\/\/multiplayer\.lokiplay\.cc wss:\/\/multiplayer\.lokiplay\.cc/
+  );
+  assert.match(
+    asset.headers.get("content-security-policy")!,
+    /turn:turn\.lokiplay\.cc:3478 turns:turn\.lokiplay\.cc:5349/,
   );
   assert.match(await asset.text(), /Playable/);
 });

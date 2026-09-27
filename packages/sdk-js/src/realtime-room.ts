@@ -367,6 +367,10 @@ export interface RealtimeRoomHost {
   createRoom(input?: { visibility?: "public" | "private" | "unlisted"; modeLabel?: string }): Promise<JoinedRoom>;
   joinRoom(input: { inviteCode: string }): Promise<JoinedRoom>;
   joinPublicRoom?(input: { roomId: string }): Promise<JoinedRoom>;
+  matchmake?(
+    input: { minPlayers: number; maxPlayers: number; teamSize?: number },
+    options?: { signal?: AbortSignal },
+  ): Promise<JoinedRoom>;
   leaveRoom(roomId?: string): Promise<void>;
   reconnect(): Promise<void>;
   sendRealtimeInput(
@@ -817,6 +821,17 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     return this.#enter(() => this.#host.joinPublicRoom!(input), {
       requirePublicRoomBrowser: true,
     });
+  }
+
+  /** Blind, single-region matchmaking. Cancel an in-flight search by aborting `options.signal`. */
+  async matchmake(
+    input: { minPlayers: number; maxPlayers: number; teamSize?: number },
+    options?: { signal?: AbortSignal },
+  ): Promise<RealtimeRoomSnapshot<State>> {
+    if (!this.#host.matchmake) {
+      throw new RealtimeRoomError("unsupported", "matchmaking is unsupported");
+    }
+    return this.#enter(() => this.#host.matchmake!(input, options));
   }
 
   async leave(): Promise<void> {

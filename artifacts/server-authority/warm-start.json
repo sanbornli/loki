@@ -1,0 +1,11 @@
+{
+  "concurrentMatches": 8,
+  "environment": "local-darwin-arm64",
+  "generatedAt": "2026-09-27T12:03:52.623203Z",
+  "samples": 40,
+  "schemaVersion": 1,
+  "sourceReferences": [
+    "infra/worker/gates_test.go"
+  ],
+  "warmStartMsP95": 2.204
+}

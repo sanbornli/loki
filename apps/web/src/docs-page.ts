@@ -208,6 +208,12 @@ npm install @lokiplay/sdk@${v}`)}
           </ul>
           <p>Players still need loading, waiting, and error states. The Loki overlay does not create or join rooms.</p>
           <p>Loki’s SDK does not add a public lobby screen. If public-room discovery is enabled, the game agent must build the room browser and all loading, empty, joining, full-room, waiting, readiness, and error states. The Loki overlay does not list, create, or join public rooms. Do not make every room public.</p>
+          <p>Installing the SDK also does not add Match or Leaderboard screens. Both are required alongside create/join, and the Loki overlay never draws them:</p>
+          <ul>
+            <li>A Match control calling the room wrapper's <code>matchmake()</code> (<code>SynchronizedRoom.matchmake()</code> / <code>RealtimeRoom.matchmake()</code>) with confirmed player/team settings, plus searching, cancel, timeout, waiting, and error states.</li>
+            <li>A per-game Leaderboard using <code>listLeaderboard()</code>/<code>submitLeaderboardScore()</code> (or the in-room <code>submitScore()</code> for a mid-room board), with display-name collection or a sensible fallback, plus loading, empty, pagination, submission, and error states.</li>
+          </ul>
+          <p>Player count, teams, and scoring stay creator decisions; if the game has no numeric result to store, ask the creator once what to record instead of inventing a scoring rule. Leaderboards are per-game/project and available to guest sessions without a creator account — client-submitted scores are not an anti-cheat boundary.</p>
           <h2>4. Write <code>game.json</code></h2>
           ${codeBlock(`{
   "schemaVersion": 1,

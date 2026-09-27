@@ -22,6 +22,15 @@ export function gameSecurityHeaders(
     "https://api.lokiplay.cc",
     "https://multiplayer.lokiplay.cc",
     "wss://multiplayer.lokiplay.cc",
+    // STUN plus the Loki-owned coturn TURN relay, for the JS SDK's optional
+    // host-star WebRTC data channel. No camera/microphone permission (see
+    // permissions-policy below): a peer that cannot open a direct or
+    // relayed path falls back to the WebSocket connections above
+    // automatically.
+    "stun:stun.cloudflare.com:3478",
+    "stun:stun.l.google.com:19302",
+    "turn:turn.lokiplay.cc:3478",
+    "turns:turn.lokiplay.cc:5349",
     ...manifest.networkAllowlist.map((value) => new URL(value).origin),
   ].join(" ");
   return {

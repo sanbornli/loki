@@ -21,7 +21,9 @@ service variables and must never be committed or included in game builds.
   has applied its database schema.
 - Railway project `lokiplay-production` with `api`, `web`, and `nakama`
   services deployed in Singapore. Temporary verification endpoints exist for
-  all three services.
+  all three services. The `worker` service (server-authority simulation
+  fleet) is not yet deployed; it stays disabled everywhere until the gates
+  in `.cursor/plans/turn_then_server_auth_344defe4.plan.md` section 6 pass.
 - Cloudflare Pages project `lokiplay` serves the marketing homepage at
   `lokiplay.cc`.
 - Cloudflare R2 is configured and passed write, read, immutable-release, and
@@ -86,6 +88,40 @@ The deployed integration check covers Supabase authentication, account and
 project persistence, deployment credentials, R2 upload/read, player hosting,
 and Nakama session exchange. In-memory implementations remain for local tests.
 
+### Simulation worker (server authority)
+
+`infra/worker` is the fuel-metered WASM isolate fleet from
+`.cursor/plans/turn_then_server_auth_344defe4.plan.md`'s "Simulation fleet"
+step. It is not part of the Phase 1 Layer 1 release path and stays disabled
+in production (`LOKI_SERVER_AUTHORITY_ENABLED` unset) until the gates in that
+plan's section 6 pass. The service uses `infra/worker/Dockerfile` and
+`infra/worker/railway.json`. Configure, in the same Singapore region as
+Nakama, over Railway private networking:
+
+- `LOKI_WORKER_PUBLIC_URL` — the private URL Nakama uses to reach this
+  worker (required; the process refuses to start without it).
+- `LOKI_WORKER_MODULE_BASE_URL=https://api.lokiplay.cc/v1/step-modules` (or
+  the API's private Railway URL) — module bytes are fetched at
+  `{base}/{sha256}` and re-verified against that hash before instantiation.
+  The API stores those bytes in R2 at `step-modules/{sha256}`
+  (`R2StepModuleStore`), so they survive an API restart. `GET
+  /v1/step-modules/:sha256` is unauthenticated by design: the sha256 is the
+  only key, and the bytes already passed the upload-boundary check.
+- `LOKI_WORKER_STATE_DIR` — directory for the last snapshot of each match.
+  Mount a Railway volume here (for example `/data`) so a restarted worker
+  restores that snapshot instead of starting the match over. Unset, snapshots
+  stay in memory and a restart ends the room instead.
+- `LOKI_WORKER_LISTEN_ADDR` (default `:8090`), `LOKI_WORKER_TICK_TIMEOUT_MS`,
+  `LOKI_WORKER_MEMORY_LIMIT_PAGES`, `LOKI_WORKER_MAX_STEPS`,
+  `LOKI_WORKER_IDLE_TIMEOUT_SECONDS` — per-isolate budgets; see
+  `infra/worker/README.md` for defaults and what each one bounds.
+
+On the `nakama` service, set `LOKI_SERVER_AUTHORITY_ENABLED=true` and
+`LOKI_WORKER_ORCHESTRATOR_URL` to this worker's private URL only after the
+plan's section 6 gates have dated evidence
+(`scripts/verify-server-authority-gates.ts`); `infra/nakama/Dockerfile`
+already passes both through to Nakama's runtime env only when both are set.
+
 ## Cloudflare
 
 1. Keep the R2 bucket private and create an API token scoped only to that bucket.
@@ -109,6 +145,43 @@ and Nakama session exchange. In-memory implementations remain for local tests.
 
 Cloudflare Access is an optional extra boundary for staging and the operator
 console. It is not creator/player identity.
+
+## Coturn (WebRTC TURN relay)
+
+WebRTC's host-star data channel is STUN-only by default: a guest that cannot
+open a direct path to the host falls back to the Nakama WebSocket. Coturn adds
+a relay so more of those guests keep a direct-feeling data-channel path
+instead. It never becomes a new transport mode and never carries the
+simulation itself; a peer that cannot open a path through TURN either still
+falls back to the WebSocket exactly as before.
+
+1. Provision a small Singapore VM (coturn has negligible CPU/memory needs;
+   the smallest tier of any provider is enough to start). Point
+   `turn.lokiplay.cc` at its public IPv4 with a DNS-only record. The proxied
+   `*.lokiplay.cc` wildcard must not apply to this name: Cloudflare does not
+   forward TURN, so a proxied record leaves the relay unreachable.
+2. Open `3478/udp`, `3478/tcp`, `5349/tcp` (TLS), and the relay port range
+   configured in [`infra/turn/turnserver.conf`](/Users/sanborn/Desktop/loki/infra/turn/turnserver.conf)
+   (`49152-49452/udp` by default) in the VM's firewall.
+3. Install coturn and deploy `infra/turn/turnserver.conf`, replacing
+   `external-ip` with the VM's real public IPv4 and supplying a TLS
+   certificate for `turn.lokiplay.cc` at the configured `cert`/`pkey` paths.
+4. Generate one random secret and run coturn with
+   `--static-auth-secret="$LOKI_TURN_SECRET"` on the command line (for
+   example as a systemd `ExecStart` argument sourced from an environment
+   file), never inside the committed config.
+5. Set the same value as `LOKI_TURN_SECRET` on the Railway `nakama` service,
+   plus `LOKI_TURN_URLS=turn:turn.lokiplay.cc:3478,turns:turn.lokiplay.cc:5349`.
+   [`infra/nakama/Dockerfile`](/Users/sanborn/Desktop/loki/infra/nakama/Dockerfile)
+   passes both through to Nakama's runtime env only when both are set; leave
+   either unset (as local compose does) and Loki stays STUN-only.
+6. Nakama's `loki_turn_credentials` RPC then mints a short-lived
+   username/password pair from that secret for any authenticated session,
+   and the JS SDK merges it into the ICE servers it hands to
+   `RTCPeerConnection`. No long-term coturn user accounts are created.
+
+Coturn is a single VM outside Railway; it has no database and holds no player
+data, so it is not part of the Supabase/Railway backup story above.
 
 ## GitHub App and Actions deployments
 

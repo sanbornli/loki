@@ -1,0 +1,11 @@
+(module
+  (memory (export "memory") 16)
+  (func $burn (param $n i32)
+    (if (i32.eqz (local.get $n)) (then (return)))
+    (call $burn (i32.sub (local.get $n) (i32.const 1)))
+  )
+  (func (export "step") (param $inputLen i32) (param $stateLen i32) (result i32)
+    (call $burn (i32.const 1000000))
+    (i32.const 4)
+  )
+)

@@ -20,7 +20,7 @@ import {
   PostgresDeploymentRepository,
   PostgresPlatformService,
 } from "./postgres.js";
-import { R2ArtifactStore } from "./r2.js";
+import { R2ArtifactStore, R2StepModuleStore } from "./r2.js";
 import { reviewDeploymentFiles } from "./async-security.js";
 import { PostgresSafetyService, SecurityReviewWorker } from "./safety.js";
 import { startApiServer } from "./server.js";
@@ -98,6 +98,12 @@ const deployments = new DeploymentService(
   artifacts,
   new PostgresDeploymentRepository(pool),
   safety,
+  new R2StepModuleStore({
+    accountId: environment.LOKI_R2_ACCOUNT_ID!,
+    bucket: environment.LOKI_R2_BUCKET!,
+    accessKeyId: environment.LOKI_R2_ACCESS_KEY_ID!,
+    secretAccessKey: environment.LOKI_R2_SECRET_ACCESS_KEY!,
+  }),
 );
 const securityWorker = new SecurityReviewWorker(pool, async (deploymentId) => {
   const result = await pool.query<{ files: string[]; manifest: { networkAllowlist?: string[] } }>(

@@ -137,6 +137,10 @@ export interface SynchronizedRoomHost {
   createRoom(input?: { visibility?: "public" | "private" | "unlisted"; modeLabel?: string }): Promise<JoinedRoom>;
   joinRoom(input: { inviteCode: string }): Promise<JoinedRoom>;
   joinPublicRoom?(input: { roomId: string }): Promise<JoinedRoom>;
+  matchmake?(
+    input: { minPlayers: number; maxPlayers: number; teamSize?: number },
+    options?: { signal?: AbortSignal },
+  ): Promise<JoinedRoom>;
   leaveRoom(roomId?: string): Promise<void>;
   reconnect(): Promise<void>;
   close?(): Promise<void>;
@@ -414,6 +418,17 @@ export class SynchronizedRoom<State, Action> {
       bootstrap: false,
       requirePublicRoomBrowser: true,
     });
+  }
+
+  /** Blind, single-region matchmaking. Cancel an in-flight search by aborting `options.signal`; the room stays "joining" until the search settles one way or the other. */
+  async matchmake(
+    input: { minPlayers: number; maxPlayers: number; teamSize?: number },
+    options?: { signal?: AbortSignal },
+  ): Promise<SynchronizedRoomSnapshot<State>> {
+    if (!this.#host.matchmake) {
+      throw new SynchronizedRoomError("invalid", "matchmaking is unsupported");
+    }
+    return this.#enter(() => this.#host.matchmake!(input, options), { bootstrap: false });
   }
 
   async dispatch(action: Action): Promise<SynchronizedRoomSnapshot<State>> {

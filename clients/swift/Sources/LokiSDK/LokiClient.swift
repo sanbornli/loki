@@ -87,6 +87,11 @@ public struct Presence: Codable, Equatable, Sendable {
 
 public struct LeaderboardRecord: Codable, Equatable, Sendable {
     public let playerId: String
+    // A game-owned, bounded label shown next to a score; nil when the
+    // submission carried none. Never inferred by Loki from the player's
+    // identity. Missing from older records; the synthesized decoder treats
+    // an absent key as nil.
+    public let displayName: String?
     public let score: Int64
     public let subscore: Int64
     public let rank: Int
@@ -306,10 +311,12 @@ public actor LokiClient {
     public func sendChat(roomId: String, sequence: Int64, channel: String, text: String) async throws {
         try await sendEnvelope(roomId, sequence, "chat", ["channel": .string(channel), "text": .string(text)])
     }
-    public func submitScore(roomId: String, sequence: Int64, leaderboardId: String, score: Int64, subscore: Int64 = 0) async throws {
-        try await sendEnvelope(roomId, sequence, "score_submit", [
+    public func submitScore(roomId: String, sequence: Int64, leaderboardId: String, score: Int64, subscore: Int64 = 0, displayName: String? = nil) async throws {
+        var fields: [String: JsonValue] = [
             "leaderboardId": .string(leaderboardId), "score": .number(score), "subscore": .number(subscore),
-        ])
+        ]
+        if let displayName { fields["displayName"] = .string(displayName) }
+        try await sendEnvelope(roomId, sequence, "score_submit", fields)
     }
     public func getPrivateLeaderboard(roomId: String, leaderboardId: String, limit: Int = 100) async throws -> [LeaderboardRecord] {
         try await call("leaderboards.private", [

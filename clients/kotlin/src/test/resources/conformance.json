@@ -11,6 +11,23 @@
     },
     "networkAllowlist": []
   },
+  "serverAuthorityManifest": {
+    "schemaVersion": 1,
+    "name": "Counter Party (server authority)",
+    "entrypoint": "index.html",
+    "multiplayer": {
+      "enabled": true,
+      "authority": "server",
+      "maxPlayers": 8,
+      "tickRate": 10,
+      "step": {
+        "abiVersion": 1,
+        "modulePath": "server/step.wasm",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "networkAllowlist": []
+  },
   "canonicalState": {
     "input": { "players": ["a", "b"], "score": { "b": 1, "a": 2 }, "tick": 7 },
     "json": "{\"players\":[\"a\",\"b\"],\"score\":{\"a\":2,\"b\":1},\"tick\":7}",

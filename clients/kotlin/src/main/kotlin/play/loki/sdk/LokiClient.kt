@@ -38,7 +38,16 @@ data class Room(val roomId: String, val roomKey: String?, val hostId: String?)
 data class InviteResolution(val projectId: String, val roomId: String, val inviteToken: String)
 data class MatchTicket(val ticketId: String, val status: String, val roomId: String?)
 data class Presence(val playerId: String, val sessionId: String, val joinedAt: Long, val team: Long?, val host: Boolean)
-data class LeaderboardRecord(val playerId: String, val score: Long, val subscore: Long, val rank: Long)
+// displayName is a game-owned, bounded label shown next to a score; null
+// when the submission carried none. Never inferred by Loki from the
+// player's identity.
+data class LeaderboardRecord(
+    val playerId: String,
+    val score: Long,
+    val subscore: Long,
+    val rank: Long,
+    val displayName: String? = null,
+)
 
 data class ServerEnvelope(
     val protocolVersion: Long,
@@ -263,15 +272,17 @@ class LokiClient(private val transport: LokiTransport) {
         leaderboardId: String,
         score: Long,
         subscore: Long = 0,
+        displayName: String? = null,
     ) = sendEnvelope(
         roomId,
         sequence,
         "score_submit",
-        mapOf(
-            "leaderboardId" to leaderboardId.jsonString(),
-            "score" to score.jsonNumber(),
-            "subscore" to subscore.jsonNumber(),
-        ),
+        buildMap {
+            put("leaderboardId", leaderboardId.jsonString())
+            put("score", score.jsonNumber())
+            put("subscore", subscore.jsonNumber())
+            if (displayName != null) put("displayName", displayName.jsonString())
+        },
     )
 
     suspend fun getPrivateLeaderboard(
@@ -294,6 +305,7 @@ class LokiClient(private val transport: LokiTransport) {
                 fields.long("score"),
                 fields.long("subscore"),
                 fields.long("rank"),
+                fields.optionalString("displayName"),
             )
         }
     }
