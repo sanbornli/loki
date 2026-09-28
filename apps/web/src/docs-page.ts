@@ -377,7 +377,7 @@ npx lokiplay@${v} ship`)}
                 "If present, all four subfields are required",
               ],
               ["<code>multiplayer.enabled</code>", "", "<code>true</code> or <code>false</code>"],
-              ["<code>multiplayer.authority</code>", "", "Must be <code>\"host\"</code>"],
+              ["<code>multiplayer.authority</code>", "", "<code>\"host\"</code> or <code>\"server\"</code>. <code>\"server\"</code> requires <code>step</code>"],
               ["<code>multiplayer.maxPlayers</code>", "", "Integer 1–16"],
               ["<code>multiplayer.tickRate</code>", "", "Integer 1–30"],
               [

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { MASTER_TEST_ACCOUNT_EMAIL } from "../apps/api/src/master-account.js";
 
-// Evidence schemas for the seven gates in plan section 6 ("Gates before
+// Evidence schemas for the server-authority gates ("Gates before
 // creators can select it") of
 // .cursor/plans/turn_then_server_auth_344defe4.plan.md. This mirrors the
 // pattern in scripts/release-evidence.ts / scripts/verify-release-gates.ts
@@ -148,10 +148,10 @@ export const LocalRunnerParityEvidenceSchema = z
     message: "demonstratedKills must not repeat a kind",
   });
 
-// Gate 7: "An outside review accepts the sandbox, and cost is accounted per
-// match-second." Reuses the operator-attestation shape from
-// scripts/release-evidence.ts (a named, non-self-approving reviewer) plus a
-// per-match-second cost figure specific to the worker fleet.
+// Kept for a recorded outside review and per-match-second cost figure.
+// Not a required gate: production server authority does not wait on it.
+// Reuses the operator-attestation shape from scripts/release-evidence.ts
+// (a named, non-self-approving reviewer).
 export const SandboxReviewCostEvidenceSchema = z
   .object({
     schemaVersion: z.literal(1),

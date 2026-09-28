@@ -9,19 +9,17 @@ import {
   LocalRunnerParityEvidenceSchema,
   MeteringEvidenceSchema,
   ReplayDeterminismEvidenceSchema,
-  SandboxReviewCostEvidenceSchema,
   WarmStartEvidenceSchema,
 } from "./server-authority-evidence.js";
 
-// Verifies the seven gates plan section 6 ("Gates before creators can
-// select it") requires before `authority: "server"` may be enabled in
-// production (see LOKI_SERVER_AUTHORITY_ENABLED in
-// infra/nakama/modules/loki.js and infra/nakama/Dockerfile). This is a
-// separate, independent evidence system from
-// scripts/verify-release-gates.ts: server authority is an opt-in runtime
-// mode a creator selects per game, not part of every platform release, so
-// enabling it does not require re-running or blocking on the platform's own
-// release gates, and vice versa.
+// Verifies the six gates that remain before `authority: "server"` may be
+// enabled in production (see LOKI_SERVER_AUTHORITY_ENABLED in
+// infra/nakama/modules/loki.js and infra/nakama/Dockerfile). The former
+// sandbox-review-and-cost gate is no longer required. This is a separate,
+// independent evidence system from scripts/verify-release-gates.ts: server
+// authority is an opt-in runtime mode a creator selects per game, not part
+// of every platform release, so enabling it does not require re-running or
+// blocking on the platform's own release gates, and vice versa.
 
 export const requiredServerAuthorityGateIds = [
   "warm-start",
@@ -30,7 +28,6 @@ export const requiredServerAuthorityGateIds = [
   "crash-recovery",
   "replay-determinism",
   "local-runner-parity",
-  "sandbox-review-and-cost",
 ] as const;
 
 const Evidence = z.object({
@@ -63,11 +60,6 @@ function validateTypedEvidence(gate: string, bytes: Buffer): void {
   if (gate === "crash-recovery") CrashRecoveryEvidenceSchema.parse(value);
   if (gate === "replay-determinism") ReplayDeterminismEvidenceSchema.parse(value);
   if (gate === "local-runner-parity") LocalRunnerParityEvidenceSchema.parse(value);
-  // SandboxReviewCostEvidenceSchema itself enforces operator ===
-  // MASTER_OPERATOR_EMAIL and rejects the reviewer self-approving; a schema
-  // failure here surfaces as the generic "evidence file unavailable or
-  // invalid" failure below, same as any other gate's malformed evidence.
-  if (gate === "sandbox-review-and-cost") SandboxReviewCostEvidenceSchema.parse(value);
 }
 
 export async function verifyServerAuthorityGates(

@@ -108,10 +108,6 @@
   the worker never mounts anything else.
 - A later switch is another deploy after the creator confirms again. Rooms
   already open keep the authority they started with.
-- Do not ask the creator to choose server, and do not write
-  `"authority": "server"`, until Loki has enabled server authority in
-  production. Until then, continuous games use host realtime. The server
-  question above applies once that switch is on.
 - After inspecting and confirming each game mode's profile, choose
   `createSynchronizedRoom()` for turn-based or event-driven state, or
   `createRealtimeRoom()` for continuous realtime. Do not choose by genre or

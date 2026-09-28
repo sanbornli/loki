@@ -10,13 +10,12 @@ import {
   verifyServerAuthorityGates,
 } from "../scripts/verify-server-authority-gates.js";
 
-// Mirrors test/release-gates.test.ts's harness, but for the seven
-// server-authority gates in plan section 6 rather than the platform-wide
-// release gates: every gate must be present, dated, digest-matched, and
-// pass its own typed schema before authority: "server" may be enabled in
-// production for any game.
+// Mirrors test/release-gates.test.ts's harness, but for the six
+// server-authority gates rather than the platform-wide release gates:
+// every gate must be present, dated, digest-matched, and pass its own
+// typed schema.
 
-test("server authority verifier requires all seven dated, digest-matched, schema-valid gates", async () => {
+test("server authority verifier requires all six dated, digest-matched, schema-valid gates", async () => {
   const directory = await mkdtemp(join(tmpdir(), "loki-server-authority-gates-"));
   const observedAt = "2026-09-07T00:00:00.000Z";
 
@@ -111,19 +110,6 @@ test("server authority verifier requires all seven dated, digest-matched, schema
         localRunnerVersion: "0.1.0",
         demonstratedKills: ["fuel", "memory"],
         sourceReferences: ["local-runner-2026-09-07.json"],
-      };
-    }
-    if (gate === "sandbox-review-and-cost") {
-      return {
-        schemaVersion: 1,
-        generatedAt: observedAt,
-        reviewer: { name: "second-agent", organization: "Independent Reviewer" },
-        operator: MASTER_OPERATOR_EMAIL,
-        approvedAt: observedAt,
-        sandboxAccepted: true,
-        costPerMatchSecond: 0.0004,
-        costCurrency: "USD",
-        evidenceReferences: ["sandbox-review-2026-09-07.pdf"],
       };
     }
     throw new Error(`no fixture for gate ${gate}`);

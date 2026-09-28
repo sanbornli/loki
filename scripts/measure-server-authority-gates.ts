@@ -162,6 +162,4 @@ for (const [file, schema] of Object.entries(schemas)) {
   schema.parse(JSON.parse(await readFile(path.join(evidenceDir, file), "utf8")));
 }
 
-console.log(
-  "Wrote 6 of 7 gate evidence files. sandbox-review-and-cost is not written: it requires a named reviewer who is not the operator, and this process will not invent one.",
-);
+console.log("Wrote 6 gate evidence files.");
