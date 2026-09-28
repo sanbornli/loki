@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 import { BillingService } from "../apps/api/src/billing.js";
+import { MASTER_TEST_ACCOUNT_EMAIL } from "../apps/api/src/master-account.js";
 import { PlatformService } from "../apps/api/src/platform.js";
 import { applyPlanToTenantConfig, effectivePlan } from "../apps/api/src/plans.js";
 import { renderCreatorPage } from "../apps/web/src/creator-page.js";
@@ -17,6 +18,35 @@ test("effective plan keeps paid access through the current period", () => {
   assert.equal(effectivePlan({ plan: "loki", status: "canceled", periodEnd: future }), "loki");
   assert.equal(effectivePlan({ plan: "pro", status: "canceled", periodEnd: past }), "free");
   assert.equal(effectivePlan({ plan: "loki", status: "active" }), "loki");
+});
+
+test("the master test account keeps Pro entitlements on a stored free plan", () => {
+  const platform = new PlatformService();
+  const master = platform.registerCreator(MASTER_TEST_ACCOUNT_EMAIL, "Master");
+  assert.equal(master.account.plan, "pro");
+  assert.equal(master.account.limits.serverAuthority, true);
+  assert.equal(master.account.limits.games, null);
+  platform.createProject(master.account.id, master.organization.id, {
+    name: "First",
+    slug: "master-first",
+  });
+  const second = platform.createOrganization(master.account.id, {
+    name: "Second",
+    slug: "master-second",
+  });
+  const project = platform.createProject(master.account.id, second.id, {
+    name: "Second",
+    slug: "master-second-game",
+  });
+  platform.assertManifestAllowed(project.id, {
+    multiplayer: { enabled: true, authority: "server", maxPlayers: 16 },
+  });
+  const activated = platform.setActiveDeployment(
+    master.account.id,
+    project.id,
+    crypto.randomUUID(),
+  );
+  assert.equal(activated.state, "unlisted");
 });
 
 test("free plan limits follow the owning account across organizations", () => {

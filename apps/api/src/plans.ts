@@ -1,3 +1,5 @@
+import { isMasterTestAccount } from "./master-account.js";
+
 export const PLAN_IDS = ["free", "loki", "pro"] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
 
@@ -83,6 +85,16 @@ export function effectivePlan(record: BillingRecord, now = Date.now()): PlanId {
   if (record.plan === "free" || record.status === "active") return record.plan;
   if (record.periodEnd && Date.parse(record.periodEnd) > now) return record.plan;
   return "free";
+}
+
+/** The master test account keeps Pro entitlements even when the stored plan is free. */
+export function entitledPlan(
+  email: string | undefined | null,
+  record: BillingRecord,
+  now = Date.now(),
+): PlanId {
+  if (isMasterTestAccount(email)) return "pro";
+  return effectivePlan(record, now);
 }
 
 export function limitsFor(plan: PlanId): PlanLimits {

@@ -27,7 +27,7 @@ import {
   assertServerAuthority,
   assertWithinCap,
   consumesPlayLink,
-  effectivePlan,
+  entitledPlan,
   isPlanId,
   isPlanStatus,
   limitsFor,
@@ -58,6 +58,7 @@ const iso = (value: Date | string): string =>
 
 type BillingRow = {
   id: string;
+  email: string;
   plan: string;
   plan_status: string;
   plan_period_end: Date | string | null;
@@ -74,7 +75,7 @@ const accountBilling = (row: BillingRow): {
     throw new Error("invalid account plan");
   }
   const periodEnd = row.plan_period_end ? iso(row.plan_period_end) : undefined;
-  const plan = effectivePlan({
+  const plan = entitledPlan(row.email, {
     plan: row.plan,
     status: row.plan_status,
     periodEnd,
@@ -140,7 +141,7 @@ async function lockOwnerBilling(
   organizationId: string,
 ): Promise<BillingRow> {
   const result = await client.query<BillingRow>(
-    `SELECT accounts.id, accounts.plan, accounts.plan_status, accounts.plan_period_end,
+    `SELECT accounts.id, accounts.email, accounts.plan, accounts.plan_status, accounts.plan_period_end,
             accounts.stripe_customer_id
        FROM organization_members
        JOIN accounts ON accounts.id = organization_members.account_id
@@ -805,7 +806,7 @@ export class PostgresPlatformService implements PlatformOperations {
     serverAuthority: boolean;
   }> {
     const result = await this.pool.query<BillingRow>(
-      `SELECT accounts.id, accounts.plan, accounts.plan_status, accounts.plan_period_end,
+      `SELECT accounts.id, accounts.email, accounts.plan, accounts.plan_status, accounts.plan_period_end,
               accounts.stripe_customer_id
          FROM projects
          JOIN organization_members

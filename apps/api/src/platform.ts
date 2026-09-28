@@ -16,7 +16,7 @@ import {
   assertServerAuthority,
   assertWithinCap,
   consumesPlayLink,
-  effectivePlan,
+  entitledPlan,
   limitsFor,
   roomQuotaForPlan,
   type BillingRecord,
@@ -282,7 +282,7 @@ export class PlatformService {
   ): Project {
     this.#requireMember(actorId, organizationId);
     const owner = this.#owner(organizationId);
-    const limits = limitsFor(effectivePlan(this.#billing(owner)));
+    const limits = limitsFor(this.#plan(owner));
     assertWithinCap(
       this.#ownedProjects(owner.id).length,
       limits.games,
@@ -426,7 +426,7 @@ export class PlatformService {
     this.#requireMember(actorId, project.organizationId);
     project.activeDeploymentId = deploymentId;
     if (project.state === "draft") {
-      const plan = effectivePlan(this.#billing(this.#owner(project.organizationId)));
+      const plan = this.#plan(this.#owner(project.organizationId));
       const next = activationState(plan);
       this.#assertTransitionAllowed(project, next);
       project.state = next;
@@ -534,7 +534,7 @@ export class PlatformService {
     serverAuthority: boolean;
   } {
     const project = this.#requireProject(projectId);
-    const plan = effectivePlan(this.#billing(this.#owner(project.organizationId)));
+    const plan = this.#plan(this.#owner(project.organizationId));
     const limits = limitsFor(plan);
     return {
       plan,
@@ -582,6 +582,10 @@ export class PlatformService {
     throw new Error("organization owner not found");
   }
 
+  #plan(account: StoredAccount): PlanId {
+    return entitledPlan(account.email, this.#billing(account));
+  }
+
   #billing(account: StoredAccount): BillingRecord {
     return {
       plan: account.plan,
@@ -598,7 +602,7 @@ export class PlatformService {
 
   #assertTransitionAllowed(project: Project, next: ProjectState): void {
     const owner = this.#owner(project.organizationId);
-    const plan = effectivePlan(this.#billing(owner));
+    const plan = this.#plan(owner);
     const limits = limitsFor(plan);
     if (next === "unlisted" || next === "published") assertPublicCatalog(plan);
     if (consumesPlayLink(project.state, next)) {
@@ -610,7 +614,7 @@ export class PlatformService {
   }
 
   #present(account: StoredAccount): Account {
-    const plan = effectivePlan(this.#billing(account));
+    const plan = this.#plan(account);
     return {
       id: account.id,
       email: account.email,

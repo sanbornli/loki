@@ -17,7 +17,7 @@ import type {
   Organization,
   Project,
 } from "./platform.js";
-import { isPlanId, isPlanStatus, limitsFor, effectivePlan } from "./plans.js";
+import { isPlanId, isPlanStatus, limitsFor, entitledPlan } from "./plans.js";
 
 export type MembershipRole = "owner" | "member";
 
@@ -178,7 +178,7 @@ const accountFromRow = (row: AccountRow): Account => {
     throw new Error("invalid account plan");
   }
   const planPeriodEnd = row.plan_period_end ? iso(row.plan_period_end) : undefined;
-  const plan = effectivePlan({
+  const plan = entitledPlan(row.email, {
     plan: row.plan,
     status: row.plan_status,
     periodEnd: planPeriodEnd,
