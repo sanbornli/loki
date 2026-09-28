@@ -40,6 +40,7 @@ export class RealtimeBus {
   modeLabel?: string;
   maxPlayers = 16;
   publicRoomBrowser = true;
+  serverTickRate?: number;
 
   join(transport: FakeRealtimeTransport, playerId: string, capable: boolean): JoinedRoom {
     const sessionId = crypto.randomUUID();
@@ -60,6 +61,9 @@ export class RealtimeBus {
       capabilities: {
         ...DEFAULT_RUNTIME_CAPABILITIES,
         public_room_browser: this.publicRoomBrowser,
+        ...(this.serverTickRate
+          ? { authority: "server" as const, tickRate: this.serverTickRate, realtime_webrtc: false }
+          : {}),
       },
     });
     this.#broadcastV1(

@@ -172,8 +172,33 @@ test("setInput coalesces to latest and resends held controls on an interval", as
   assert.deepEqual(hostRoom.inputsForTick(1).latest[guestId], { throttle: 10 });
 
   // The coalesced value flushes once the pacing interval elapses.
-  await sleep(60);
+  await sleep(150);
   assert.deepEqual(hostRoom.inputsForTick(2).latest[guestId], { throttle: 100 });
+});
+
+test("held-control refresh does not send a second input inside the same pace window", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ inputHz: 20 });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    inputHz: 20,
+    diagnostics: true,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  const started = performance.now();
+  while (performance.now() - started < 250) {
+    guestRoom.setInput({ throttle: 1 });
+    await sleep(8);
+  }
+  const transmitted = guestRoom.getSnapshot().diagnostics?.inputsTransmitted ?? 0;
+  // 20 Hz over a quarter second is about 5 sends. The refresh timer used to
+  // send again on the same interval, which landed near 40 Hz.
+  assert.ok(transmitted >= 4 && transmitted <= 8, `expected about 5 sends, got ${transmitted}`);
+  await hostRoom.leave().catch(() => undefined);
+  await guestRoom.leave().catch(() => undefined);
 });
 
 test("host local inputs bypass the network but enter the same tick input set", async () => {
@@ -1118,6 +1143,38 @@ test("a guest's high-extrapolation report reduces the host's adaptive target rat
   const diagnostics = hostRoom.getSnapshot().diagnostics;
   assert.ok((diagnostics?.currentTargetSnapshotHz ?? 12) < 12);
   assert.ok((diagnostics?.adaptiveRateReductions ?? 0) >= 1);
+});
+
+test("a server room clocks pictures by tickRate, not the local simulationHz", async () => {
+  const bus = new RealtimeBus();
+  bus.serverTickRate = 30;
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: 30 });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    diagnostics: true,
+    simulationHz: 60,
+    interpolate: (_from, to) => to,
+    extrapolate: (state) => state,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  let tick = 0;
+  for (let index = 0; index < 12; index += 1) {
+    tick += 1;
+    hostRoom.publishSnapshot({ positions: { host: tick } }, { simulationTick: tick });
+    await sleep(33);
+    guestRoom.getRenderState(performance.now());
+  }
+  const diagnostics = guestRoom.getSnapshot().diagnostics;
+  const rendered = diagnostics?.framesRendered ?? 0;
+  const held = diagnostics?.heldAuthoritativeFrames ?? 0;
+  assert.ok(rendered >= 8, `expected samples, got ${rendered}`);
+  assert.ok(held / rendered < 0.25, `server clock held ${held} of ${rendered} frames`);
+  assert.equal(guestRoom.getSnapshot().state?.positions.host, tick);
+  await hostRoom.leave().catch(() => undefined);
+  await guestRoom.leave().catch(() => undefined);
 });
 
 test("authoritative sampling counts a hold/freeze separately from extrapolation", async () => {

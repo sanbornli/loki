@@ -521,6 +521,8 @@ var runtimeCapabilities = function (state) {
     // WebRTC's host-star topology has no meaning without a player host;
     // server-authority rooms stay on the Nakama WebSocket only.
     realtime_webrtc: !state || state.authority !== "server",
+    authority: state && state.authority === "server" ? "server" : "host",
+    tickRate: state && state.tickRate ? state.tickRate : DEFAULT_TICK_RATE,
     realtimeProtocolVersion: REALTIME_PROTOCOL_VERSION,
     minimumProtocolVersion: PROTOCOL_VERSION,
     limits: {

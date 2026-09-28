@@ -525,6 +525,11 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
   readonly #options: RealtimeRoomOptions<State, Input>;
   readonly #listeners = new Set<(snapshot: RealtimeRoomSnapshot<State>) => void>();
   readonly #simulationHz: number;
+  // Set for server-authority rooms from the runtime's advertised tickRate.
+  // Authoritative sampling uses this period so a 60 Hz local prediction step
+  // is not mistaken for the server's tick. Host rooms leave it unset and
+  // keep counting simulationTick in simulationHz.
+  #serverTickHz?: number;
   // Mutable when adaptiveRate is enabled: the interval derived from
   // #currentSnapshotHz, which the AIMD controller adjusts between
   // #snapshotHzFloor and #snapshotHzCeiling. Fixed at the ceiling's
@@ -923,11 +928,19 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     const wait = this.#inputIntervalMs - elapsed;
     this.#inputSendTimer = setTimeout(() => {
       this.#inputSendTimer = undefined;
-      if (this.#latestInput === undefined) return;
-      if (this.#connection === "closed" || this.#connection === "failed") return;
-      void this.#sendLatestInput();
+      this.#flushLatestInput();
     }, wait);
     this.#inputSendTimer.unref?.();
+  }
+
+  // Shared by the coalesced flush and the held-control refresh. Both must
+  // honor the pace; a refresh that sends on its own interval doubles the
+  // rate and the runtime rejects the extras.
+  #flushLatestInput(): void {
+    if (this.#latestInput === undefined) return;
+    if (this.#connection === "closed" || this.#connection === "failed") return;
+    if (monotonicNow() - this.#lastInputSentAt < this.#inputIntervalMs) return;
+    void this.#sendLatestInput();
   }
 
   /** Bounded one-shot command retained until acknowledged by the host. */
@@ -1296,7 +1309,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     }
     this.#sampledSinceLastSnapshot = true;
     this.#diagnostics.framesRendered += 1;
-    const fixedStepMs = 1000 / this.#simulationHz;
+    const fixedStepMs = this.#authoritativeStepMs();
     const delayTicks = Math.max(0, Math.round(this.#interpolationDelayMs() / fixedStepMs));
     const renderClockTick = this.#renderClockTick(now, fixedStepMs);
     const targetTick = renderClockTick - delayTicks;
@@ -1384,10 +1397,14 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
    * race permanently ahead (runaway extrapolation) or fall permanently behind
    * (stalled interpolation).
    */
+  #authoritativeStepMs(): number {
+    return 1000 / (this.#serverTickHz ?? this.#simulationHz);
+  }
+
   #nudgeRenderClock(now: number): void {
     const latest = this.#latestSnapshot;
     if (!latest) return;
-    const fixedStepMs = 1000 / this.#simulationHz;
+    const fixedStepMs = this.#authoritativeStepMs();
     if (!this.#renderClockAnchor) {
       this.#renderClockAnchor = { now, tick: latest.simulationTick };
       this.#renderClockRate = 1;
@@ -1397,8 +1414,23 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     }
     const estimatedTick = this.#renderClockTick(now, fixedStepMs);
     const error = latest.simulationTick - estimatedTick;
+    const snapshotIntervalTicks = Math.max(
+      1,
+      Math.round(this.#effectiveSnapshotIntervalMs() / fixedStepMs),
+    );
+    const delayTicks = Math.max(0, Math.round(this.#interpolationDelayMs() / fixedStepMs));
+    const maxAhead = REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS * snapshotIntervalTicks;
+    // A clock this far from the pictures will only hold or stall. Snap back
+    // to the latest tick so the next sample sits one interpolation delay
+    // behind it, instead of nudging by 5% forever.
+    if (error < -(maxAhead + delayTicks) || error > delayTicks + maxAhead) {
+      this.#renderClockAnchor = { now, tick: latest.simulationTick };
+      this.#renderClockRate = 1;
+      this.#diagnostics.renderClockRate = 1;
+      this.#diagnostics.renderClockDriftTicks = 0;
+      return;
+    }
     this.#renderClockAnchor = { now, tick: estimatedTick };
-    const snapshotIntervalTicks = Math.max(1, Math.round(this.#effectiveSnapshotIntervalMs() / fixedStepMs));
     const correctionPerTick = clamp(
       error / snapshotIntervalTicks,
       -REALTIME_ROOM_MAX_CLOCK_NUDGE,
@@ -1701,7 +1733,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
       this.#previousSnapshot = this.#latestSnapshot;
       this.#latestSnapshot = { state: message.state as State, simulationTick: message.simulationTick };
       this.#nudgeRenderClock(receivedAt);
-      this.#hostId = message.hostId || this.#hostId;
+      if (typeof message.hostId === "string") this.#hostId = message.hostId;
       if (this.#playerId === message.hostId) {
         this.#diagnostics.snapshotsAcked += 1;
         this.#onSnapshotAccepted(message.hostSnapshotSequence, receivedAt);
@@ -1961,9 +1993,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
   #armInputResendTimer(): void {
     if (this.#latestInputTimer) return;
     this.#latestInputTimer = setInterval(() => {
-      if (this.#latestInput === undefined) return;
-      if (this.#connection !== "connected") return;
-      void this.#sendLatestInput();
+      this.#flushLatestInput();
     }, this.#inputIntervalMs);
     this.#latestInputTimer.unref?.();
   }
@@ -2299,6 +2329,9 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     }
     if (requirePublicRoomBrowser && capabilities.public_room_browser !== true) {
       throw new RealtimeRoomError("unsupported", "runtime does not advertise public_room_browser");
+    }
+    if (capabilities.authority === "server" && typeof capabilities.tickRate === "number") {
+      this.#serverTickHz = capabilities.tickRate;
     }
     if (
       capabilities.realtimeProtocolVersion !== undefined &&

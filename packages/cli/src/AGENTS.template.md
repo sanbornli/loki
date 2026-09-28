@@ -92,7 +92,10 @@
   what the update path does, then ask them to confirm server. Write
   `"authority": "server"` and `step`. Do not elect a player host. Server
   rooms are browser-only, run in Singapore, and end if the step fails; they
-  do not fall back to a player. That is fairness, not lower latency.
+  do not fall back to a player. That is fairness, not lower latency. The
+  viewer clock follows `tickRate`. Leave `simulationHz` as the local
+  prediction step. Do not set `simulationHz` equal to `tickRate` to unstick
+  presentation.
 - Before compiling `step`, change the state update so the next state depends
   only on the previous state and this tick's inputs. Drawing, sound, and
   asset loads stay in the browser. If the update reads the DOM, the clock,

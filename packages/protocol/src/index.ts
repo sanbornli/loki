@@ -152,6 +152,10 @@ export const RuntimeCapabilityBlockSchema = z
     // a runtime that omits or sets this false silently ignores signaling
     // opcodes and every realtime message stays on the Nakama WebSocket.
     realtime_webrtc: z.boolean().optional(),
+    // Server rooms advance simulationTick once per Nakama tickRate. The
+    // viewer clock must use that period, not the game's local simulationHz.
+    authority: z.enum(["host", "server"]).optional(),
+    tickRate: z.number().int().min(1).max(30).optional(),
     realtimeProtocolVersion: z.number().int().positive().optional(),
     limits: ProtocolLimitsSchema.optional(),
     minimumProtocolVersion: z.number().int().positive().optional(),
@@ -252,7 +256,7 @@ export const ServerEnvelopeSchema = z.discriminatedUnion("type", [
   z.object({
     ...EnvelopeBase,
     type: z.literal("snapshot"),
-    hostId: z.string().uuid(),
+    hostId: z.union([z.string().uuid(), z.literal("")]),
     state: z.unknown(),
     stateVersion: z.number().int().nonnegative().optional(),
     actionId: ActionIdSchema.optional(),
@@ -265,7 +269,7 @@ export const ServerEnvelopeSchema = z.discriminatedUnion("type", [
   z.object({
     ...EnvelopeBase,
     type: z.literal("state"),
-    hostId: z.string().uuid(),
+    hostId: z.union([z.string().uuid(), z.literal("")]),
     state: z.unknown(),
     stateVersion: z.number().int().nonnegative().optional(),
     actionId: ActionIdSchema.optional(),
@@ -462,7 +466,7 @@ export const RealtimeServerEnvelopeSchema = z.discriminatedUnion("type", [
   z.object({
     ...RealtimeEnvelopeBase,
     type: z.literal("realtime_snapshot"),
-    hostId: z.string().min(1).max(128),
+    hostId: z.string().max(128),
     authorityEpoch: z.number().int().nonnegative(),
     roundSequence: z.number().int().nonnegative(),
     simulationTick: RealtimeTickSchema,
