@@ -18,13 +18,13 @@ type JoinedRoom = {
 
 export const REALTIME_ROOM_MAX_MESSAGE_BYTES = 16_384;
 export const REALTIME_ROOM_DEFAULT_SNAPSHOT_HZ = 30;
-export const REALTIME_ROOM_MAX_SNAPSHOT_HZ = 30;
+export const REALTIME_ROOM_MAX_SNAPSHOT_HZ = 100;
 export const REALTIME_ROOM_MAX_INPUT_HZ = 20;
 export const REALTIME_ROOM_DEFAULT_IN_FLIGHT_SNAPSHOTS = 3;
-export const REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS = 8;
+// 250 ms of pictures at the 100 Hz ceiling. A lower snapshotHz uses fewer slots.
+export const REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS = 25;
 export const REALTIME_ROOM_IN_FLIGHT_BUDGET_MS = 250;
 export const REALTIME_ROOM_MAX_ORDERED_INPUTS = 32;
-export const REALTIME_ROOM_MIN_INTERPOLATION_DELAY_MS = 70;
 export const REALTIME_ROOM_DEFAULT_CORRECTION_MS = 280;
 export const REALTIME_ROOM_MAX_CATCHUP_STEPS = 2;
 export const REALTIME_ROOM_MAX_EXTRAPOLATION_INTERVALS = 2;
@@ -94,8 +94,13 @@ export const REALTIME_ROOM_SUSTAINED_BACKPRESSURE_MS = 500;
 // Buffer applied to the *measured* accepted snapshot interval (not the
 // configured one) when deriving the default interpolation delay, so
 // presentation adapts to reality instead of assuming the configured rate is
-// actually being delivered.
+// actually being delivered. This is the whole cushion: there is no fixed
+// millisecond floor on top of it.
 export const REALTIME_ROOM_INTERPOLATION_BUFFER_INTERVALS = 1.25;
+// Fraction of the remaining gap closed, per accepted snapshot, when the
+// required delay shrinks. A larger requirement is applied on that same
+// snapshot so one late picture raises the cushion before the next sample.
+const REALTIME_ROOM_INTERPOLATION_DELAY_EASE = 0.2;
 
 export type RealtimeRoomOutcome =
   | "rejected"
@@ -655,6 +660,9 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
   #lastSnapshotServerTime?: number;
   #smoothedSnapshotIntervalMs?: number;
   #snapshotJitterMs = 0;
+  // Delay actually used for presentation. Snaps up to the requirement and
+  // eases down, so the render target does not jump forward on one quiet gap.
+  #appliedInterpolationDelayMs?: number;
   #lastRuntimeSnapshotSequence?: number;
   // Whether getRenderState() has sampled the authoritative timeline since the
   // last accepted snapshot; if a new snapshot arrives while this is still
@@ -1161,6 +1169,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#lastSnapshotServerTime = undefined;
     this.#smoothedSnapshotIntervalMs = undefined;
     this.#snapshotJitterMs = 0;
+    this.#appliedInterpolationDelayMs = undefined;
     this.#lastRuntimeSnapshotSequence = undefined;
     this.#sampledSinceLastSnapshot = true;
     this.#lastPublishCallAt = undefined;
@@ -1445,22 +1454,40 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#diagnostics.renderClockDriftTicks = error;
   }
 
+  /** Buffer implied by the pictures and the round trip right now, before easing. Before any snapshot arrives this is the configured interval times the buffer factor. */
+  #requiredInterpolationDelayMs(): number {
+    return Math.max(
+      this.#effectiveSnapshotIntervalMs() * REALTIME_ROOM_INTERPOLATION_BUFFER_INTERVALS,
+      this.#smoothedRttMs / 2 + Math.max(this.#jitterMs, this.#snapshotJitterMs),
+    );
+  }
+
+  /**
+   * Raise the applied delay immediately when the requirement grows, and move
+   * it part of the way down only when `easeDown` is set (an accepted
+   * snapshot). Reads between snapshots must not shrink the cushion, or one
+   * quiet sample would jump the render target forward.
+   */
+  #followInterpolationDelay(easeDown: boolean): void {
+    if (this.#options.interpolationDelayMs !== undefined) return;
+    const required = this.#requiredInterpolationDelayMs();
+    const applied = this.#appliedInterpolationDelayMs;
+    if (applied === undefined || required >= applied) {
+      this.#appliedInterpolationDelayMs = required;
+      return;
+    }
+    if (!easeDown) return;
+    this.#appliedInterpolationDelayMs = applied + (required - applied) * REALTIME_ROOM_INTERPOLATION_DELAY_EASE;
+  }
+
   #interpolationDelayMs(): number {
     if (this.#options.interpolationDelayMs !== undefined) {
       return Math.max(0, this.#options.interpolationDelayMs);
     }
-    // Adapt to whichever signal implies the largest buffer is needed:
-    // ordered-input RTT jitter (useful before any snapshot has arrived),
-    // observed snapshot-arrival jitter (how uneven the feed is), or a
-    // buffer over the *measured* accepted-snapshot interval (not the
-    // configured target) so a room configured for e.g. 30 Hz but actually
-    // only delivering ~8 Hz buffers for the ~125ms reality instead of
-    // assuming the configured ~33ms is what's arriving.
-    return Math.max(
-      REALTIME_ROOM_MIN_INTERPOLATION_DELAY_MS,
-      this.#effectiveSnapshotIntervalMs() * REALTIME_ROOM_INTERPOLATION_BUFFER_INTERVALS,
-      this.#smoothedRttMs / 2 + Math.max(this.#jitterMs, this.#snapshotJitterMs),
-    );
+    if (this.#appliedInterpolationDelayMs === undefined) {
+      this.#appliedInterpolationDelayMs = this.#requiredInterpolationDelayMs();
+    }
+    return this.#appliedInterpolationDelayMs;
   }
 
   onConnection(listener: (event: ConnectionEvent) => void): () => void {
@@ -1687,6 +1714,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         this.#lastSnapshotServerTime = undefined;
         this.#smoothedSnapshotIntervalMs = undefined;
         this.#snapshotJitterMs = 0;
+        this.#appliedInterpolationDelayMs = undefined;
         this.#lastRuntimeSnapshotSequence = undefined;
         this.#sampledSinceLastSnapshot = true;
         this.#seenEffectIds.clear();
@@ -1732,6 +1760,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
       this.#lastSnapshotServerTime = message.serverTime;
       this.#previousSnapshot = this.#latestSnapshot;
       this.#latestSnapshot = { state: message.state as State, simulationTick: message.simulationTick };
+      this.#followInterpolationDelay(true);
       this.#nudgeRenderClock(receivedAt);
       if (typeof message.hostId === "string") this.#hostId = message.hostId;
       if (this.#playerId === message.hostId) {
@@ -1782,6 +1811,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         this.#lastSnapshotServerTime = undefined;
         this.#smoothedSnapshotIntervalMs = undefined;
         this.#snapshotJitterMs = 0;
+        this.#appliedInterpolationDelayMs = undefined;
         this.#lastRuntimeSnapshotSequence = message.runtimeSnapshotSequence;
         this.#sampledSinceLastSnapshot = true;
         this.#reconcile();
@@ -1875,6 +1905,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#smoothedRttMs = previous === 0 ? sampleMs : previous * 0.8 + sampleMs * 0.2;
     const deviation = Math.abs(sampleMs - this.#smoothedRttMs);
     this.#jitterMs = this.#jitterMs === 0 ? deviation : this.#jitterMs * 0.8 + deviation * 0.2;
+    this.#followInterpolationDelay(false);
   }
 
   #stepPrediction(input: Input): void {
@@ -2287,6 +2318,7 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#lastSnapshotServerTime = undefined;
     this.#smoothedSnapshotIntervalMs = undefined;
     this.#snapshotJitterMs = 0;
+    this.#appliedInterpolationDelayMs = undefined;
     this.#lastRuntimeSnapshotSequence = undefined;
     this.#sampledSinceLastSnapshot = true;
     this.#pendingSnapshot = undefined;

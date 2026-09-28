@@ -211,7 +211,7 @@ const created = await room.create();
 // or: await room.join({ inviteCode });
 
 // Host loop: publish the latest simulated state. `snapshotHz` (default 30,
-// also the runtime cap) is a ceiling, not a delivery guarantee — Loki
+// cap 100) is a ceiling, not a delivery guarantee — Loki
 // paces/coalesces calls, tracks each submission until it's accepted,
 // rejected, or times out, and never lets a dropped submission permanently
 // consume in-flight budget (see "Tuning defaults and diagnostics" below).
@@ -348,7 +348,7 @@ from the latest known state instead of a blank one.
 
 ### Tuning defaults and diagnostics
 
-`snapshotHz` (default and cap 30 Hz) is a ceiling, never a promise of
+`snapshotHz` (default 30 Hz, cap 100 Hz) is a ceiling, never a promise of
 delivery. `simulationHz` (default 60) is the game's own local step rate and
 is independent of it — a game commonly runs simulation at 60 Hz while
 publishing snapshots far less often. `inputHz` (default/cap 20) is the
@@ -415,10 +415,11 @@ the host's own send timestamps — host pacing), `lastSnapshotRelayIntervalMs`
 backpressure), and `lastSnapshotIntervalMs` (the wall-clock gap between
 snapshots as this client actually observed them arriving — the network).
 `snapshotArrivalJitterMs` is a smoothed measure of how much that arrival
-interval deviates from its own running average; Loki folds it into the
-default adaptive interpolation delay (raising delay temporarily when
-arrival is uneven, lowering it when stable) unless `interpolationDelayMs` is
-set explicitly. `snapshotSequenceGaps` counts missing `runtimeSnapshotSequence`
+interval deviates from its own running average. Loki folds that, together
+with 1.25 times the measured arrival interval, into the default interpolation
+delay. The delay rises on the same snapshot when arrivals get uneven, and
+eases down when they stay steady. There is no fixed minimum. An explicit
+`interpolationDelayMs` replaces that delay. `snapshotSequenceGaps` counts missing `runtimeSnapshotSequence`
 numbers between consecutive accepted snapshots, and
 `snapshotsCoalescedOnReceive` counts snapshots that were superseded by a
 newer one before the game ever called `getRenderState()` to sample them.

@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export const MAX_TICK_RATE = 30;
+// Host snapshot publish ceiling. Independent of MAX_TICK_RATE, which bounds
+// the server-authority room loop.
+export const MAX_REALTIME_SNAPSHOT_HZ = 100;
+export const MAX_REALTIME_IN_FLIGHT_SNAPSHOTS = 25;
 
 // A pinned WebAssembly step module for a `"server"`-authority room. The
 // module ABI is one export, `step`; it may import nothing (no WASI, clocks,
@@ -663,9 +667,9 @@ export type RealtimeClientEnvelope = z.infer<typeof RealtimeClientEnvelopeSchema
 export type RealtimeServerEnvelope = z.infer<typeof RealtimeServerEnvelopeSchema>;
 
 export const DEFAULT_REALTIME_LIMITS = {
-  maxRealtimeSnapshotHz: MAX_TICK_RATE,
+  maxRealtimeSnapshotHz: MAX_REALTIME_SNAPSHOT_HZ,
   maxRealtimeInputHz: 20,
-  maxRealtimeInFlightSnapshots: 8,
+  maxRealtimeInFlightSnapshots: MAX_REALTIME_IN_FLIGHT_SNAPSHOTS,
 } as const;
 
 export const PlayerSessionClaimsSchema = z

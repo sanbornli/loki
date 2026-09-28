@@ -387,7 +387,7 @@ npx lokiplay@${v} ship`)}
               ],
             ],
           )}
-          <p><code>tickRate</code> is a deployment-time room-loop hint. Do not copy a realtime <code>snapshotHz</code> into it. Realtime publish is a separate ceiling (default and cap 30 Hz) set on the room.</p>
+          <p><code>tickRate</code> is a deployment-time room-loop hint. Do not copy a realtime <code>snapshotHz</code> into it. Realtime publish is a separate ceiling (default 30 Hz, cap 100 Hz) set on the room.</p>
           <p><code>npx lokiplay init</code> and <code>connect</code> write this file if it is missing. Default <code>maxPlayers</code> is 8 and <code>tickRate</code> is 10.</p>
 `,
   },
@@ -547,7 +547,7 @@ function frame(now: number) {
 }`)}
           <p>Drive rendering from one game-owned <code>requestAnimationFrame</code> loop. Call <code>advanceFrame()</code> and <code>getRenderState()</code> at most once per frame. <code>setInput()</code> is safe every frame; the SDK paces the network send.</p>
           <h2>Rates</h2>
-          <p><code>snapshotHz</code> is a ceiling (default and cap 30), not a delivery guarantee. Start conservative with <code>adaptiveRate: true</code>. Do not copy <code>snapshotHz</code> into <code>game.json</code> <code>tickRate</code>.</p>
+          <p><code>snapshotHz</code> is a ceiling (default 30, cap 100), not a delivery guarantee. Start conservative with <code>adaptiveRate: true</code>. Do not copy <code>snapshotHz</code> into <code>game.json</code> <code>tickRate</code>.</p>
           <h2>Calibrate</h2>
           <p>Prefer <code>calibrateRealtimeRoom()</code> over guessing. It needs two distinct player identities — two isolated browser profiles or two real players, not two tabs of one signed-in account. Write only the returned <code>RealtimeProfile</code> into <code>createRealtimeRoom()</code>.</p>
           ${codeBlock(`import { calibrateRealtimeRoom } from "@lokiplay/sdk";

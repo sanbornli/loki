@@ -139,7 +139,7 @@
   (call each at most once per rendered frame). Keep authoritative
   snapshots compact and self-contained (no references to transient
   local-only state).
-- `snapshotHz` (default/cap 30) is a ceiling, not a delivery guarantee. Do
+- `snapshotHz` (default 30, cap 100) is a ceiling, not a delivery guarantee. Do
   not default to the highest rate. Start conservative — pass
   `adaptiveRate: true` with `initialSnapshotHz` around 12-15 and
   `minSnapshotHz` around 8, or an explicit low fixed `snapshotHz` — and

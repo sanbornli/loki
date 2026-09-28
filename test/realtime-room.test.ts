@@ -16,7 +16,7 @@ type RacerInput = { throttle: number } | { action: "boost" };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("host publishSnapshot at 60Hz coalesces to the default 30 Hz cap and bounds in-flight to 8", async () => {
+test("same-turn publishSnapshot calls stay within the in-flight bound", async () => {
   const bus = new RealtimeBus();
   const { client } = await connectedClient(bus);
   const room = client.createRealtimeRoom<RacerState, RacerInput>({});
@@ -33,7 +33,7 @@ test("host publishSnapshot at 60Hz coalesces to the default 30 Hz cap and bounds
   assert.ok((snapshot.diagnostics?.snapshotsSent ?? 0) <= REALTIME_ROOM_MAX_IN_FLIGHT_SNAPSHOTS);
 });
 
-test("snapshotHz 10 paces slower than the default 30 Hz cap and lowers in-flight headroom", async () => {
+test("snapshotHz 10 paces slower than the maximum snapshot rate and lowers in-flight headroom", async () => {
   const bus = new RealtimeBus();
   const { client } = await connectedClient(bus);
   const room = client.createRealtimeRoom<RacerState, RacerInput>({
@@ -1113,6 +1113,88 @@ test("guest presentation adapts interpolation delay toward the measured accepted
 
   const adaptedDelay = guestRoom.getSnapshot().interpolationDelayMs;
   assert.ok(adaptedDelay > initialDelay, `expected delay to grow past ${initialDelay}, got ${adaptedDelay}`);
+});
+
+test("snapshotHz above 100 is clamped to the snapshot ceiling", async () => {
+  const bus = new RealtimeBus();
+  const { client } = await connectedClient(bus);
+  const room = client.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: 200, diagnostics: true });
+  await room.create();
+  const snapshot = room.getSnapshot();
+  assert.equal(snapshot.diagnostics?.configuredMaxSnapshotHz, REALTIME_ROOM_MAX_SNAPSHOT_HZ);
+  assert.equal(snapshot.diagnostics?.currentTargetSnapshotHz, 100);
+});
+
+test("default interpolation delay is the configured snapshot interval times 1.25, not a fixed floor", async () => {
+  const fastBus = new RealtimeBus();
+  const { client: fastClient } = await connectedClient(fastBus);
+  const fastRoom = fastClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: 30 });
+  await fastRoom.create();
+  assert.ok(Math.abs(fastRoom.getSnapshot().interpolationDelayMs - (1000 / 30) * 1.25) < 0.01);
+
+  const slowBus = new RealtimeBus();
+  const { client: slowClient } = await connectedClient(slowBus);
+  const slowRoom = slowClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: 8 });
+  await slowRoom.create();
+  // Slower pictures need a larger cushion than the old 70ms floor.
+  assert.ok(Math.abs(slowRoom.getSnapshot().interpolationDelayMs - (1000 / 8) * 1.25) < 0.01);
+
+  const fixedBus = new RealtimeBus();
+  const { client: fixedClient } = await connectedClient(fixedBus);
+  const fixedRoom = fixedClient.createRealtimeRoom<RacerState, RacerInput>({ interpolationDelayMs: 0 });
+  await fixedRoom.create();
+  assert.equal(fixedRoom.getSnapshot().interpolationDelayMs, 0);
+});
+
+test("interpolation delay rises on an uneven snapshot and eases down without dropping the cushion", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: REALTIME_ROOM_MAX_SNAPSHOT_HZ });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({ diagnostics: true });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  let tick = 0;
+  const publish = (): void => {
+    tick += 1;
+    hostRoom.publishSnapshot({ positions: { self: tick } }, { simulationTick: tick });
+  };
+
+  publish();
+  for (let index = 0; index < 5; index += 1) {
+    await sleep(200);
+    publish();
+  }
+  const raised = guestRoom.getSnapshot().interpolationDelayMs;
+  assert.ok(raised > 100, `expected a large cushion after slow snapshots, got ${raised}`);
+
+  await sleep(30);
+  publish();
+  const afterOne = guestRoom.getSnapshot().interpolationDelayMs;
+  assert.ok(afterOne > raised * 0.8, `delay dropped too fast: ${raised} -> ${afterOne}`);
+
+  for (let index = 0; index < 25; index += 1) {
+    await sleep(25);
+    publish();
+  }
+  const eased = guestRoom.getSnapshot();
+  assert.ok(
+    eased.interpolationDelayMs < raised,
+    `expected delay to fall from ${raised}, got ${eased.interpolationDelayMs}`,
+  );
+  const measuredIntervalMs =
+    eased.diagnostics?.guestEffectiveSnapshotHz !== undefined
+      ? 1000 / eased.diagnostics.guestEffectiveSnapshotHz
+      : 1000 / 30;
+  const required = Math.max(
+    measuredIntervalMs * 1.25,
+    eased.rttMs / 2 + Math.max(eased.jitterMs, eased.diagnostics?.snapshotArrivalJitterMs ?? 0),
+  );
+  assert.ok(
+    eased.interpolationDelayMs + 0.05 >= required,
+    `delay ${eased.interpolationDelayMs} fell below the cushion ${required}`,
+  );
 });
 
 test("a guest's high-extrapolation report reduces the host's adaptive target rate", async () => {

@@ -55,8 +55,12 @@ var OP_WEBRTC_OFFER = 22;
 var OP_WEBRTC_ANSWER = 23;
 var OP_WEBRTC_ICE = 24;
 var REALTIME_INPUT_RATE_LIMIT = 20;
-var REALTIME_SNAPSHOT_RATE_LIMIT = 30;
-var REALTIME_MAX_IN_FLIGHT_SNAPSHOTS = 8;
+// Host snapshot publish ceiling. Independent of MAX_TICK_RATE, which is the
+// server-authority room loop.
+var REALTIME_SNAPSHOT_RATE_LIMIT = 100;
+// Advertised only. The SDK stops sending; Nakama does not reject on this count.
+// Matches 250 ms of pictures at REALTIME_SNAPSHOT_RATE_LIMIT.
+var REALTIME_MAX_IN_FLIGHT_SNAPSHOTS = 25;
 var REALTIME_SYNC_RATE_LIMIT = 5;
 var REALTIME_EFFECT_RATE_LIMIT = 30;
 // Guest reports are meant to be sent at roughly 1 Hz; allow a small burst
