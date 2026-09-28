@@ -428,13 +428,13 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(docsHome, /href="\/safety"/);
   assert.doesNotMatch(docsHome, /One plugin\. A playable URL/);
   assert.doesNotMatch(docsHome, /Install is not the finish/);
-  assert.match(docsHome, /@lokiplay\/sdk(?:@|&#64;)0\.4\.2/);
+  assert.match(docsHome, /@lokiplay\/sdk(?:@|&#64;)0\.4\.3/);
   assert.match(docsHome, /<!--email_off-->/);
   assert.doesNotMatch(docsHome, /@lokiplay\/sdk(?:@|&#64;)0\.3\.5/);
   assert.match(renderDocsPage(config, "/quickstart"), /createHostedLokiClient/);
   assert.match(
     renderDocsPage(config, "/quickstart"),
-    /LOKI_API_URL=https:\/\/api\.lokiplay\.cc npx lokiplay(?:@|&#64;)0\.4\.2 login/,
+    /LOKI_API_URL=https:\/\/api\.lokiplay\.cc npx lokiplay(?:@|&#64;)0\.4\.3 login/,
   );
   assert.match(renderDocsPage(config, "/realtime-rooms"), /calibrateRealtimeRoom/);
   assert.match(renderDocsPage(config, "/rooms"), /listPublicRooms/);
@@ -444,7 +444,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(renderDocsPage(config, "/overlay"), /does not list, create, or join public rooms/);
   assert.match(llmsTxt, /does not add a public lobby screen/);
   assert.match(renderDocsPage(config, "/agents"), /Do not report the integration complete/);
-  assert.match(renderDocsPage(config, "/native"), /cc\.lokiplay:loki-sdk:0\.4\.2/);
+  assert.match(renderDocsPage(config, "/native"), /cc\.lokiplay:loki-sdk:0\.4\.3/);
   assert.match(
     renderDocsPage(config, "/presence-chat-scores"),
     /An empty members list is incomplete, not everyone left/,
@@ -494,7 +494,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /text: agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.4\.2"/);
+  assert.match(creator, /"0\.4\.3"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);

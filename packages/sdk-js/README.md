@@ -4,7 +4,7 @@ JavaScript client SDK for authenticating players, joining Loki multiplayer
 rooms, sending actions and events, and subscribing to server messages.
 
 ```sh
-npm install @lokiplay/sdk@0.4.2
+npm install @lokiplay/sdk@0.4.3
 ```
 
 Use `FirstPartyTransport` for production. It defaults to
