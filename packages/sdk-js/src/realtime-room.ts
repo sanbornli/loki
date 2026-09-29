@@ -1454,11 +1454,18 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#diagnostics.renderClockDriftTicks = error;
   }
 
-  /** Buffer implied by the pictures and the round trip right now, before easing. Before any snapshot arrives this is the configured interval times the buffer factor. */
+  /**
+   * Cushion implied by the pictures themselves, before easing. The base is
+   * the arrival gap times the buffer factor. Uneven arrivals add their
+   * jitter on top. An ordered-command round trip is not part of this: one
+   * receipt through the server would otherwise hold the wait up for the
+   * rest of the round. Before any snapshot arrives the gap is the
+   * configured interval.
+   */
   #requiredInterpolationDelayMs(): number {
-    return Math.max(
-      this.#effectiveSnapshotIntervalMs() * REALTIME_ROOM_INTERPOLATION_BUFFER_INTERVALS,
-      this.#smoothedRttMs / 2 + Math.max(this.#jitterMs, this.#snapshotJitterMs),
+    return (
+      this.#effectiveSnapshotIntervalMs() * REALTIME_ROOM_INTERPOLATION_BUFFER_INTERVALS +
+      this.#snapshotJitterMs
     );
   }
 
@@ -1731,14 +1738,17 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
         this.#diagnostics.snapshotsCoalescedOnReceive += 1;
       }
       this.#sampledSinceLastSnapshot = false;
+      // Prefer the host's own picture number. A direct copy and its socket
+      // copy share that number and not the server's runtime counter.
+      const pictureSequence = message.hostSnapshotSequence ?? message.runtimeSnapshotSequence;
       if (
         this.#lastRuntimeSnapshotSequence !== undefined &&
-        message.runtimeSnapshotSequence > this.#lastRuntimeSnapshotSequence + 1
+        pictureSequence > this.#lastRuntimeSnapshotSequence + 1
       ) {
         this.#diagnostics.snapshotSequenceGaps +=
-          message.runtimeSnapshotSequence - this.#lastRuntimeSnapshotSequence - 1;
+          pictureSequence - this.#lastRuntimeSnapshotSequence - 1;
       }
-      this.#lastRuntimeSnapshotSequence = message.runtimeSnapshotSequence;
+      this.#lastRuntimeSnapshotSequence = pictureSequence;
       const receivedAt = monotonicNow();
       if (this.#lastSnapshotReceivedAt !== undefined) {
         const interval = receivedAt - this.#lastSnapshotReceivedAt;
@@ -1905,7 +1915,6 @@ export class RealtimeRoom<State, Input, Effect = unknown> {
     this.#smoothedRttMs = previous === 0 ? sampleMs : previous * 0.8 + sampleMs * 0.2;
     const deviation = Math.abs(sampleMs - this.#smoothedRttMs);
     this.#jitterMs = this.#jitterMs === 0 ? deviation : this.#jitterMs * 0.8 + deviation * 0.2;
-    this.#followInterpolationDelay(false);
   }
 
   #stepPrediction(input: Input): void {

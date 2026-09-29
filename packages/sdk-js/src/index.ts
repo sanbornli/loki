@@ -36,6 +36,7 @@ import {
 } from "../../protocol/src/index.js";
 import {
   WebrtcStar,
+  stampDirectLinkEnvelope,
   defaultPeerConnectionFactory,
   DEFAULT_STUN_SERVERS,
   type IceServerConfig,
@@ -652,7 +653,12 @@ export class LokiClient {
   #realtimeDedupeKey(message: RealtimeServerEnvelope): string | undefined {
     switch (message.type) {
       case "realtime_snapshot":
-        return `snapshot:${message.authorityEpoch}:${message.runtimeSnapshotSequence}`;
+        // Host pictures are numbered by hostSnapshotSequence on both the
+        // direct copy and the socket copy. The server's own
+        // runtimeSnapshotSequence is a different counter, so keying on it
+        // would deliver one moment twice. The round is part of the key
+        // because a new round starts the host number back at 1.
+        return `snapshot:${message.authorityEpoch}:${message.roundSequence}:${message.hostSnapshotSequence ?? message.runtimeSnapshotSequence}`;
       case "realtime_input":
         return `input:${message.senderId}:${message.inputSequence}:${message.delivery}`;
       case "realtime_effect":
@@ -1276,8 +1282,8 @@ export class FirstPartyTransport implements LokiTransport {
   // A data-channel frame is handed to the same generic listener pipeline
   // as a WebSocket message so LokiClient's existing parse/dedupe/dispatch
   // logic treats both delivery paths identically.
-  #handleStarMessage(_fromId: string, data: unknown): void {
-    notifyListeners(this.#listeners, data);
+  #handleStarMessage(fromId: string, data: unknown): void {
+    notifyListeners(this.#listeners, stampDirectLinkEnvelope(fromId, data));
   }
 
   // Additive diagnostics only; never used to decide routing (see

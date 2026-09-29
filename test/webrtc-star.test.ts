@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { RealtimeServerEnvelopeSchema } from "../packages/protocol/src/index.js";
 import {
   WebrtcStar,
+  stampDirectLinkEnvelope,
   type DataChannelLike,
   type IceCandidateLike,
   type PeerConnectionLike,
@@ -148,6 +150,81 @@ test("host answers an incoming offer and exposes the resulting channel via ondat
   peers[0]!.deliverIncomingChannel(incoming);
   incoming.open();
   assert.equal(star.isPeerConnected("guest"), true);
+});
+
+test("a direct-link input is stamped with the peer id, not an id the guest wrote", () => {
+  const guestId = "guest-player";
+  const clientEnvelope = {
+    protocolVersion: 2,
+    roomId: "room-1",
+    sequence: 4,
+    type: "realtime_input",
+    roundSequence: 1,
+    inputSequence: 3,
+    targetTick: 10,
+    delivery: "latest",
+    clientSendTime: 50,
+    payload: { throttle: 1 },
+    senderId: "someone-else",
+  };
+  const stamped = stampDirectLinkEnvelope(guestId, clientEnvelope, 1_700_000_000_000);
+  const parsed = RealtimeServerEnvelopeSchema.parse(stamped);
+  assert.equal(parsed.type, "realtime_input");
+  if (parsed.type !== "realtime_input") return;
+  assert.equal(parsed.senderId, guestId);
+  assert.equal(parsed.serverReceiveTime, 1_700_000_000_000);
+  assert.equal(parsed.payload && (parsed.payload as { throttle: number }).throttle, 1);
+});
+
+test("a direct-link guest report is stamped with the peer id", () => {
+  const stamped = stampDirectLinkEnvelope("guest-player", {
+    protocolVersion: 2,
+    roomId: "room-1",
+    sequence: 1,
+    type: "realtime_guest_report",
+    roundSequence: 1,
+    sequenceGaps: 0,
+    extrapolatedFrameRatio: 0,
+    senderId: "someone-else",
+  });
+  const parsed = RealtimeServerEnvelopeSchema.parse(stamped);
+  assert.equal(parsed.type, "realtime_guest_report");
+  if (parsed.type !== "realtime_guest_report") return;
+  assert.equal(parsed.senderId, "guest-player");
+});
+
+test("a direct-link picture is stamped with the host id and the host's own picture number", () => {
+  const stamped = stampDirectLinkEnvelope(
+    "host-player",
+    {
+      protocolVersion: 2,
+      roomId: "room-1",
+      sequence: 4,
+      type: "realtime_snapshot",
+      authorityEpoch: 0,
+      roundSequence: 1,
+      simulationTick: 10,
+      hostSnapshotSequence: 7,
+      hostSendTime: 50,
+      processedInputCursors: {},
+      state: { ball: 1 },
+      hostId: "someone-else",
+      runtimeSnapshotSequence: 99,
+    },
+    1_700_000_000_000,
+  );
+  const parsed = RealtimeServerEnvelopeSchema.parse(stamped);
+  assert.equal(parsed.type, "realtime_snapshot");
+  if (parsed.type !== "realtime_snapshot") return;
+  assert.equal(parsed.hostId, "host-player");
+  assert.equal(parsed.runtimeSnapshotSequence, 7);
+  assert.equal(parsed.hostSnapshotSequence, 7);
+  assert.equal(parsed.serverTime, 1_700_000_000_000);
+});
+
+test("a direct-link picture without a host picture number is left unchanged", () => {
+  const snapshot = { type: "realtime_snapshot", state: { ball: 1 } };
+  assert.equal(stampDirectLinkEnvelope("host-player", snapshot), snapshot);
 });
 
 test("delivered data-channel frames reach onMessage keyed by sender", async () => {

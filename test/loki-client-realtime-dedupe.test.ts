@@ -6,9 +6,11 @@ import {
   type JoinedRoom,
   type LokiTransport,
 } from "../packages/sdk-js/src/index.js";
+import { stampDirectLinkEnvelope } from "../packages/sdk-js/src/webrtc-star.js";
 import {
   PROTOCOL_VERSION,
   REALTIME_PROTOCOL_VERSION,
+  RealtimeServerEnvelopeSchema,
   type RealtimeServerEnvelope,
 } from "../packages/protocol/src/index.js";
 
@@ -147,4 +149,55 @@ test("a data-channel snapshot with a lower transport sequence is still delivered
     message: "fresh error",
   });
   assert.equal(delivered.length, 3, "a fresh error above the watermark is still delivered");
+});
+
+test("a direct picture and the socket copy of the same host picture number are delivered once", async () => {
+  const transport = new FakeTransport();
+  const client = new LokiClient({ projectId: crypto.randomUUID(), transport });
+  await client.authenticate("token");
+  await client.createRoom();
+
+  const delivered: RealtimeServerEnvelope[] = [];
+  client.onRealtimeMessage((message) => delivered.push(message));
+
+  const direct = RealtimeServerEnvelopeSchema.parse(
+    stampDirectLinkEnvelope(
+      "host-player",
+      {
+        protocolVersion: REALTIME_PROTOCOL_VERSION,
+        roomId: transport.roomId,
+        sequence: 1,
+        type: "realtime_snapshot",
+        authorityEpoch: 0,
+        roundSequence: 1,
+        simulationTick: 4,
+        hostSnapshotSequence: 7,
+        hostSendTime: 50,
+        processedInputCursors: {},
+        state: { tick: 4 },
+        hostId: "someone-else",
+      },
+      99,
+    ),
+  );
+  transport.deliver(direct);
+  transport.deliver({
+    ...base(transport, 2),
+    type: "realtime_snapshot",
+    hostId: "host-player",
+    authorityEpoch: 0,
+    roundSequence: 1,
+    simulationTick: 4,
+    runtimeSnapshotSequence: 3,
+    hostSnapshotSequence: 7,
+    hostSendTime: 50,
+    serverTime: 80,
+    processedInputCursors: {},
+    state: { tick: 4 },
+  });
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0]?.type, "realtime_snapshot");
+  if (delivered[0]?.type !== "realtime_snapshot") return;
+  assert.equal(delivered[0].hostId, "host-player");
+  assert.equal(delivered[0].hostSnapshotSequence, 7);
 });

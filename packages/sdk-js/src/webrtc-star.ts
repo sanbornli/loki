@@ -122,6 +122,38 @@ interface PeerEntry {
 
 const DATA_CHANNEL_LABEL = "loki-rt";
 
+/**
+ * A data-channel frame is the sender's own client envelope. Nakama never
+ * sees it, so it never stamps a player id, a receive time, or the labels on
+ * a picture. The open channel's peer id is that player. Always overwrite
+ * senderId and hostId so a peer cannot claim someone else's id. A picture's
+ * number is the host's own hostSnapshotSequence, which the socket copy also
+ * carries, so the guest treats the two copies as one picture.
+ */
+export function stampDirectLinkEnvelope(fromId: string, data: unknown, receivedAt = Date.now()): unknown {
+  if (!fromId || data === null || typeof data !== "object") return data;
+  const record = data as Record<string, unknown>;
+  if (record.type === "realtime_input") {
+    return { ...record, senderId: fromId, serverReceiveTime: receivedAt };
+  }
+  if (record.type === "realtime_guest_report") {
+    return { ...record, senderId: fromId };
+  }
+  if (record.type === "realtime_snapshot") {
+    const hostSnapshotSequence = record.hostSnapshotSequence;
+    if (typeof hostSnapshotSequence !== "number" || !Number.isInteger(hostSnapshotSequence) || hostSnapshotSequence < 0) {
+      return data;
+    }
+    return {
+      ...record,
+      hostId: fromId,
+      runtimeSnapshotSequence: hostSnapshotSequence,
+      serverTime: receivedAt,
+    };
+  }
+  return data;
+}
+
 /** Host-star WebRTC data-channel manager. One instance per joined realtime room; discard and recreate on leave/rejoin. */
 export class WebrtcStar {
   readonly #playerId: string;

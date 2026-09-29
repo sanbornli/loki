@@ -114,6 +114,40 @@ test("beginRound resets input/prediction state and publishes tick zero", async (
   assert.equal(snapshot.authoritativeTick, 0);
 });
 
+test("an ordered-command acknowledgement does not raise the picture wait", async () => {
+  const bus = new RealtimeBus();
+  const { client: hostClient } = await connectedClient(bus);
+  const { client: guestClient } = await connectedClient(bus);
+  const hostRoom = hostClient.createRealtimeRoom<RacerState, RacerInput>({ snapshotHz: 30 });
+  const created = await hostRoom.create();
+  const guestRoom = guestClient.createRealtimeRoom<RacerState, RacerInput>({
+    snapshotHz: 30,
+    diagnostics: true,
+  });
+  await guestRoom.join({ inviteCode: created.inviteCode });
+
+  const before = guestRoom.getSnapshot().interpolationDelayMs;
+  const sendPromise = guestRoom.sendInput({ action: "boost" });
+  await sleep(200);
+  hostRoom.inputsForTick(1);
+  hostRoom.publishSnapshot({ positions: { host: 1 } }, { simulationTick: 1 });
+  await sendPromise;
+  await sleep(40);
+  hostRoom.publishSnapshot({ positions: { host: 2 } }, { simulationTick: 2 });
+  await sleep(5);
+
+  const after = guestRoom.getSnapshot();
+  assert.ok(after.rttMs >= 150, `expected the receipt to be recorded, got ${after.rttMs}`);
+  assert.ok(
+    after.interpolationDelayMs < after.rttMs / 2,
+    `picture wait followed the receipt: delay ${after.interpolationDelayMs}, rtt ${after.rttMs}`,
+  );
+  assert.ok(
+    after.interpolationDelayMs + 0.05 >= before * 0.5,
+    `picture wait collapsed below the cushion: ${before} -> ${after.interpolationDelayMs}`,
+  );
+});
+
 test("guest ordered input is acknowledged via processedInputCursors and cleared from the pending queue", async () => {
   const bus = new RealtimeBus();
   const { client: hostClient } = await connectedClient(bus);
@@ -1187,10 +1221,8 @@ test("interpolation delay rises on an uneven snapshot and eases down without dro
     eased.diagnostics?.guestEffectiveSnapshotHz !== undefined
       ? 1000 / eased.diagnostics.guestEffectiveSnapshotHz
       : 1000 / 30;
-  const required = Math.max(
-    measuredIntervalMs * 1.25,
-    eased.rttMs / 2 + Math.max(eased.jitterMs, eased.diagnostics?.snapshotArrivalJitterMs ?? 0),
-  );
+  const required =
+    measuredIntervalMs * 1.25 + (eased.diagnostics?.snapshotArrivalJitterMs ?? 0);
   assert.ok(
     eased.interpolationDelayMs + 0.05 >= required,
     `delay ${eased.interpolationDelayMs} fell below the cushion ${required}`,
