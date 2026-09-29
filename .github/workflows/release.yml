@@ -88,6 +88,21 @@ jobs:
           publish_ws @lokiplay/ui-web @lokiplay/ui-web
           publish_ws @lokiplay/mcp @lokiplay/mcp
           publish_ws lokiplay lokiplay
+
+  # Separate from publish-npm so a slow registry propagation check cannot
+  # fail the publish job and skip github-release after the packages are
+  # already public and production has deployed.
+  verify-npm-registry:
+    needs: [publish-npm]
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
       - name: Verify public registry installation
         run: |
           version="${GITHUB_REF_NAME#v}"
