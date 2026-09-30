@@ -178,6 +178,18 @@ export const encodeMatchStateBytes = (message: unknown): Uint8Array =>
   textEncoder.encode(JSON.stringify(message));
 
 const payload = <T>(response: { payload?: object }): T => response.payload as T;
+
+// Nakama RPC bodies include ok/code. The list schema does not, and it
+// rejects any other key, so a raw body never reaches the game. Score submit
+// already keeps only `record`; listing has to do the same for its fields.
+function parseLeaderboardListResult(body: unknown): LeaderboardListResult {
+  const record = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  return LeaderboardListResultSchema.parse({
+    leaderboardId: record.leaderboardId,
+    records: record.records,
+    ...(typeof record.nextCursor === "string" ? { nextCursor: record.nextCursor } : {}),
+  });
+}
 export const requireLeaveRoomSuccess = (result: unknown): void => {
   const parsed =
     typeof result === "string"
@@ -784,7 +796,7 @@ export class LokiClient {
       limit: options.limit,
       cursor: options.cursor,
     });
-    return LeaderboardListResultSchema.parse(await this.#transport.listLeaderboard(parsed));
+    return parseLeaderboardListResult(await this.#transport.listLeaderboard(parsed));
   }
 
   /** Room-independent leaderboard write (works without joining a room). `displayName` is a game-owned label; Loki never infers one from the player's identity. */
@@ -1478,8 +1490,8 @@ export class FirstPartyTransport implements LokiTransport {
   }
 
   async listLeaderboard(input: LeaderboardListInput): Promise<LeaderboardListResult> {
-    return LeaderboardListResultSchema.parse(
-      payload<LeaderboardListResult>(
+    return parseLeaderboardListResult(
+      payload(
         await wrapLokiCall(() =>
           this.#client.rpc(this.#requireSession(), "loki_leaderboard_list", input),
         ),
