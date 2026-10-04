@@ -1621,12 +1621,16 @@ export class FirstPartyTransport implements LokiTransport {
 
   async sendRealtime(message: RealtimeClientEnvelope): Promise<void> {
     // Snapshots are always dual-delivered (WebSocket for persistence/host
-    // ACK, data channel as a faster additive copy); a guest's latest-wins
-    // input and its periodic guest report may go over the data channel
-    // exclusively when connected. Ordered inputs, sync/recovery requests,
-    // and effects always stay on the WebSocket, matching the star's own
-    // routing contract (see #trySendOverStar).
+    // ACK, data channel as a faster additive copy). An ordered tap is the
+    // same shape: the direct copy can reach the host first, and the socket
+    // copy still follows. The host ignores a repeat of the same input
+    // number. Latest-wins inputs and guest reports may go over the data
+    // channel exclusively when it is open. Sync/recovery and effects stay
+    // on the WebSocket (see #trySendOverStar).
     if (message.type === "realtime_snapshot") this.#star?.broadcastAsHost(message);
+    if (message.type === "realtime_input" && message.delivery === "ordered") {
+      this.#star?.sendToHost(message);
+    }
     if (this.#trySendOverStar(message)) return;
     const socket = await this.#connectSocket();
     const opCode =
@@ -1647,10 +1651,11 @@ export class FirstPartyTransport implements LokiTransport {
   }
 
   // Latest-wins inputs and guest reports may be delivered exclusively over
-  // the data channel when the star has an open connection to the host;
-  // returning false here always falls back to the (always-available)
-  // WebSocket path, which is also the only path for ordered inputs,
-  // sync/recovery, and effects.
+  // the data channel when the star has an open connection to the host.
+  // Returning false always continues on the WebSocket. Ordered taps are
+  // not exclusive: sendRealtime already queued a direct copy, and the
+  // socket copy still has to follow. Sync/recovery and effects are
+  // socket-only.
   #trySendOverStar(message: RealtimeClientEnvelope): boolean {
     if (!this.#star) return false;
     if (message.type === "realtime_input" && message.delivery === "latest") {

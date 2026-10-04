@@ -1,11 +1,10 @@
-// A minimal host-star WebRTC data-channel manager for RealtimeRoom's
-// replaceable (latest-wins) updates. Guests each hold one peer connection to
-// the current host; the host holds one per connected guest. Ordered inputs,
-// sync/recovery, effects, errors, and snapshot persistence/host-ACK always
-// stay on the Nakama WebSocket (see FirstPartyTransport); this module only
-// ever carries realtime_input (delivery "latest"), realtime_snapshot
+// A minimal host-star WebRTC data-channel manager. Guests each hold one peer
+// connection to the current host; the host holds one per connected guest.
+// This module carries realtime_input (latest-wins exclusively, and ordered
+// taps as a faster copy of the WebSocket send), realtime_snapshot
 // (host -> guests, in addition to the WebSocket copy), and
-// realtime_guest_report.
+// realtime_guest_report. Sync/recovery, effects, and errors stay on the
+// Nakama WebSocket (see FirstPartyTransport).
 //
 // This module never touches the DOM lib directly: RTCPeerConnection and its
 // related types are accessed through small structural interfaces so the

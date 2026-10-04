@@ -151,6 +151,56 @@ test("a data-channel snapshot with a lower transport sequence is still delivered
   assert.equal(delivered.length, 3, "a fresh error above the watermark is still delivered");
 });
 
+test("a direct ordered tap and the socket copy of the same input number are delivered once", async () => {
+  const transport = new FakeTransport();
+  const client = new LokiClient({ projectId: crypto.randomUUID(), transport });
+  await client.authenticate("token");
+  await client.createRoom();
+
+  const delivered: RealtimeServerEnvelope[] = [];
+  client.onRealtimeMessage((message) => delivered.push(message));
+
+  const guestId = "guest-player";
+  const direct = RealtimeServerEnvelopeSchema.parse(
+    stampDirectLinkEnvelope(
+      guestId,
+      {
+        protocolVersion: REALTIME_PROTOCOL_VERSION,
+        roomId: transport.roomId,
+        sequence: 1,
+        type: "realtime_input",
+        roundSequence: 1,
+        inputSequence: 4,
+        targetTick: 9,
+        delivery: "ordered",
+        clientSendTime: 50,
+        payload: { action: "punch" },
+        senderId: "someone-else",
+      },
+      99,
+    ),
+  );
+  transport.deliver(direct);
+  transport.deliver({
+    ...base(transport, 2),
+    type: "realtime_input",
+    senderId: guestId,
+    roundSequence: 1,
+    inputSequence: 4,
+    targetTick: 9,
+    delivery: "ordered",
+    clientSendTime: 50,
+    serverReceiveTime: 80,
+    payload: { action: "punch" },
+  });
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0]?.type, "realtime_input");
+  if (delivered[0]?.type !== "realtime_input") return;
+  assert.equal(delivered[0].senderId, guestId);
+  assert.equal(delivered[0].inputSequence, 4);
+  assert.equal(delivered[0].delivery, "ordered");
+});
+
 test("a direct picture and the socket copy of the same host picture number are delivered once", async () => {
   const transport = new FakeTransport();
   const client = new LokiClient({ projectId: crypto.randomUUID(), transport });
