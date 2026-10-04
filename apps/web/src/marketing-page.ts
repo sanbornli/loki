@@ -221,7 +221,7 @@ const homeMain = `
           <article class="feature-row feature-row-flip">
             <div class="feature-copy">
               <p class="card-index">02 / Multiplayer</p>
-              <h3 class="play-title">Play your game<br>with anyone,<br>anywhere.</h3>
+              <h3 class="play-title">Great games<br>are meant to be<br>played together.</h3>
               <p>Add real-time, synchronised online multiplayer, public rooms, private rooms, invites, matchmaking, and leaderboards without the trial and error of network infrastructure code.</p>
               <a class="card-link" href="${productSectionHref("multiplayer")}">See multiplayer →</a>
             </div>

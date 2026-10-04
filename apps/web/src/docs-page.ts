@@ -116,7 +116,7 @@ const pages: Record<
             {
               title: "How Loki works",
               href: "/concepts",
-              body: "Host authority, finished builds, and the Layer 1 / Layer 2 split.",
+              body: "Host or server authority, finished builds, and the same play link after every ship.",
             },
             {
               title: "Choose a room type",
@@ -174,9 +174,9 @@ const pages: Record<
             ],
           )}
           <h2>What is in Layer 1</h2>
-          <p>Private and unlisted hosting. Immutable releases. Host-authoritative rooms. Invites. Fill-N matchmaking. Presence. Lobby and match chat. Private leaderboards. Reconnect and host migration. JavaScript SDK. Native clients for synchronized rooms.</p>
+          <p>Private and unlisted hosting. Immutable releases on a stable play link. Host-authoritative rooms, and opt-in server authority when the build includes a pure step module. Invites, public rooms, and fill-N matchmaking. Presence. Lobby and match chat. Private leaderboards. Reconnect and host migration. JavaScript SDK. Native clients for synchronized rooms.</p>
           <h2>What is not in Layer 1</h2>
-          <p>A public catalog listing. Tips, ads, and payouts. Friends, parties, and public leaderboards. Ranked anti-cheat. Native clients in realtime rooms. Creator-authored server rules.</p>
+          <p>A public catalog listing. Tips, ads, and payouts. Friends, parties, and public leaderboards. Ranked anti-cheat. Native clients in realtime rooms. A creator-uploaded Node server. Server authority is a Loki-run step module, not your own backend.</p>
 `,
   },
   "/quickstart": {
@@ -256,12 +256,13 @@ await room.create();
 npx lokiplay@${v} ship`)}
           <p><code>ship</code> builds the project, copies <code>game.json</code> into the output, validates, uploads a zip, waits for security review, activates the release, and prints a playable URL. A blocked or quarantined build never becomes that URL.</p>
           <h2>8. Fine-tune, then play</h2>
-          <p>Open the playable URL. Invite with the 6-digit room code Loki issued. Then keep going: confirm seats and start conditions, fix the lobby, tune the reducer or realtime profile, and re-ship. Do not invent room keys.</p>
+          <p>Open the playable URL. Invite with the 6-digit room code Loki issued. Then keep going: confirm seats and start conditions, fix the lobby, tune the reducer or realtime profile, and ship again. Do not invent room keys.</p>
+          <p>The play link does not pick up those changes by itself. Local edits, including <code>game.json</code>, the lobby, and authority, stay off the live URL until <code>ship</code> activates a new release. The same link then serves that release. Reload the page after the ship.</p>
 `,
   },
   "/concepts": {
     title: "How Loki works — Loki docs",
-    description: "Host authority, finished builds, and the Layer 1 / Layer 2 split.",
+    description: "Host or server authority, finished builds, and a play link that updates only when you ship.",
     lede: "Loki does not compile your source, run a creator backend, or decide whether the game is complete. After install, you still have to make this title playable.",
     main: `
           <h2>You own the game</h2>
@@ -271,9 +272,10 @@ npx lokiplay@${v} ship`)}
           <h2>Finished builds, not servers</h2>
           <p>Upload <code>game.json</code>, <code>index.html</code>, and static assets. Do not upload source-only repos, <code>server.js</code>, secrets, creator ad tags, or localhost URLs.</p>
           <p>The live game runs in a sandboxed iframe on a Loki origin. Production multiplayer is available only from that hosted build.</p>
-          <h2>Host authority</h2>
-          <p>Every Layer 1 room elects a host. The host is a player client. Loki checks that the sender is the current host, sequences messages, and migrates host when that player is gone. Loki cannot prove the host simulated honestly.</p>
-          <p>Use this for casual and unranked play. Do not treat it as ranked anti-cheat or a server-authoritative competitive boundary.</p>
+          <h2>Authority</h2>
+          <p>One <code>game.json</code> has one <code>authority</code> for the project. <code>"host"</code> is the default. <code>"server"</code> is opt-in and needs a pinned <code>step</code> module. Rooms already open keep the authority they started with. Switching is another ship, after you mean to switch.</p>
+          <p><strong>Host.</strong> A player client is the host. Loki checks that the sender is the current host, sequences messages, and migrates host when that player is gone. Loki cannot prove the host simulated honestly. Use this for casual and unranked play, and for turn-based or event-driven games. It is not ranked anti-cheat.</p>
+          <p><strong>Server.</strong> Loki runs the match in a step module. No player is elected host. The module exports one function, <code>step</code>, and imports nothing. The next state may depend only on the previous state and that tick’s inputs. Drawing, sound, and asset loads stay in the browser. Server rooms are browser-only, run in Singapore, and end if the step fails. They do not fall back to a player host. That is a fairness boundary, not a latency upgrade.</p>
           <h2>Two room types</h2>
           ${table(
             ["Room", "When", "What Loki commits"],
@@ -339,9 +341,10 @@ npx lokiplay@${v} ship`)}
           )}
           <p><code>ship</code> waits, then activates only a ready release, then checks that the playable URL returns a Loki game page (<code>loki:init</code> in the shell).</p>
           <h2>Playable URL</h2>
-          <p>A successful ship prints a playable URL. Private play requires creator membership or a signed, expiring play invite. Unlisted play is capability-based. Projects are not enumerable. The public catalog is closed.</p>
+          <p>A successful ship prints a playable URL. Later ships keep that same link. Private play requires creator membership or a signed, expiring play invite. Unlisted play is capability-based. Projects are not enumerable. The public catalog is closed.</p>
           <h2>Activate and replace</h2>
-          <p>Each successful ship is a new immutable deployment. Activating it replaces the project’s live release. You cannot edit files on an old release in place.</p>
+          <p>Each successful ship is a new immutable deployment. Activating it replaces what the play link serves. You cannot edit files on an old release in place.</p>
+          <p>Ship again for any change you want players to see. Saving the repository, editing <code>game.json</code>, or changing authority does not update the play link. The link changes only when a new release is activated. Ask players to reload after that ship. Rooms already open keep the authority they started with.</p>
 `,
   },
   "/game-json": {
@@ -388,7 +391,8 @@ npx lokiplay@${v} ship`)}
             ],
           )}
           <p><code>tickRate</code> is a deployment-time room-loop hint. Do not copy a realtime <code>snapshotHz</code> into it. Realtime publish is a separate ceiling (default 30 Hz, cap 100 Hz) set on the room.</p>
-          <p><code>npx lokiplay init</code> and <code>connect</code> write this file if it is missing. Default <code>maxPlayers</code> is 8 and <code>tickRate</code> is 10.</p>
+          <p><code>npx lokiplay init</code> and <code>connect</code> write this file if it is missing. Default <code>maxPlayers</code> is 8 and <code>tickRate</code> is 10. Default <code>authority</code> is <code>"host"</code>. <code>"server"</code> is valid only with <code>step</code> (<code>abiVersion</code>, <code>modulePath</code>, <code>sha256</code>).</p>
+          <p>A new manifest does nothing to the live game until you ship. The play link keeps serving the last activated release.</p>
 `,
   },
   "/cli": {
@@ -412,7 +416,7 @@ npx lokiplay@${v} <command>`)}
           <h2><code>validate [directory]</code></h2>
           <p>Validates a <strong>build output</strong> directory: manifest, entrypoint, sandbox rules, no backend, no Nakama, no Socket.IO.</p>
           <h2><code>ship [directory] [--project &lt;uuid&gt;]</code></h2>
-          <p>The command agents and humans should use: authenticate, connect if needed, build, copy <code>game.json</code>, validate, upload, wait for review, activate, verify the playable URL.</p>
+          <p>The command agents and humans should use: authenticate, connect if needed, build, copy <code>game.json</code>, validate, upload, wait for review, activate, verify the playable URL. The play link updates only after this activation. A local save does not.</p>
           <h2><code>deploy [directory]</code></h2>
           <p>Uploads a zip of the given directory without the build / review / activate loop. Prefer <code>ship</code>.</p>
           <h2><code>status</code></h2>
@@ -458,7 +462,7 @@ npx lokiplay@${v} <command>`)}
             <li>Loading, waiting, reconnecting, and error UI, including a game-owned public lobby when discovery is enabled</li>
             <li><code>leave()</code> only from an explicit Leave / End Game control</li>
           </ul>
-          <p>Fine-tuning after install means confirming those fields for <em>this</em> title, not copying a chess lobby onto a racer.</p>
+          <p>Fine-tuning after install means confirming those fields for <em>this</em> title, not copying a chess lobby onto a racer. Players see the result on the play link only after the next <code>ship</code>.</p>
           <h2>What Loki does not supply</h2>
           <p>Physics, collision, rendering, interpolation math you did not provide, or competitive integrity. Overlay UI does not start a match.</p>
 `,
@@ -864,7 +868,7 @@ npx lokiplay@${v} ship`)}
               ["Protocol numbers", "Finite safe integers"],
             ],
           )}
-          <p>Free includes one game and two rooms. Loki is the paid plan. See <a href="https://lokiplay.cc/pricing">Pricing</a>.</p>
+          <p>Free is one game, two rooms at the same time, four players per room, and host authority only. Loki is 20 games, eight players per room, and both host and server authority. Loki Pro is unlimited games and links, also with both authority modes. See <a href="https://lokiplay.cc/pricing">Pricing</a>.</p>
           <p>Treat <code>PROJECT_SUSPENDED</code> as stop-the-line.</p>
 `,
   },
@@ -890,7 +894,7 @@ npx lokiplay@${v} ship`)}
           <ul>
             <li>Inspect the real modes. Do not infer seats or simulation type from the genre.</li>
             <li>Add a usable create/join flow. The overlay does not start a match.</li>
-            <li>Tune the reducer or <code>RealtimeProfile</code> against this game, then ship again.</li>
+            <li>Tune the reducer or <code>RealtimeProfile</code> against this game, then ship again. The play link keeps the previous release until that ship activates.</li>
             <li>Playtest reconnect, host migration, and phones before you claim they work.</li>
           </ul>
           <p>If a material field is ambiguous, stop and ask. See <a href="/agents">Agent rules</a> and <a href="/quickstart">Quickstart</a>.</p>
@@ -931,7 +935,7 @@ export function buildLlmsFull(agentsMarkdown: string): string {
 
 export const llmsTxt = `# Loki
 
-> Hosting and host-authoritative multiplayer for finished browser games.
+> Hosting and multiplayer for finished browser games. Host authority is the default. Server authority is opt-in.
 
 Loki hosts a scanned, sandboxed browser build and runs rooms on the same playable URL. Creators do not upload a backend.
 
@@ -961,7 +965,8 @@ Installing Loki is not a finished game. Each title still requires fine-tuning af
 - Public rooms: listPublicRooms() and joinPublic({ roomId }). create() stays invite-only unless visibility is "public". Loki does not add a public lobby screen; the game must build it. Do not make every room public.
 - createSynchronizedRoom() for turns/events; createRealtimeRoom() for continuous host simulation. Not both in one mode.
 - Calibrate realtime rooms. Do not copy snapshotHz into game.json tickRate.
-- Host authority is casual/unranked, not anti-cheat.
+- Host authority is casual/unranked, not anti-cheat. Server authority runs a pinned step module and does not elect a player host.
+- The play link serves the last activated release. Local edits, including game.json and authority, show up only after lokiplay ship.
 - Production multiplayer only from a Loki-hosted build.
 - Login: LOKI_API_URL=https://api.lokiplay.cc npx lokiplay@${v} login
 - No inline scripts, remote fonts, or forms.

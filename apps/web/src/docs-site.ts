@@ -115,7 +115,7 @@ export function docsEyebrow(path: DocsRoute): string {
 export const docsSafetyCopy = {
   eyebrow: "Safety note",
   title: "Install is not the finish.",
-  body: "Each game still requires fine-tuning after Loki is installed. The SDK, CLI, and overlay give you a host, rooms, and a playable URL. They do not invent the right player count, room type, lobby, reducer, realtime profile, or mobile layout for that title. Inspect the real modes, confirm the integration, playtest reconnect and phones, then ship again. Agents must not treat npm install or lokiplay ship as a complete game.",
+  body: "Each game still requires fine-tuning after Loki is installed. The SDK, CLI, and overlay give you a host, rooms, and a playable URL. They do not invent the right player count, room type, lobby, reducer, realtime profile, or mobile layout for that title. Inspect the real modes, confirm the integration, playtest reconnect and phones, then ship again. The play link keeps the last activated release until that ship. Agents must not treat npm install or lokiplay ship as a complete game.",
 };
 
 export const docsStyles = `
@@ -601,7 +601,7 @@ function footer(): string {
     <div class="docs-footer-grid">
       <div class="docs-footer-brand">
         <a class="brand" href="/" aria-label="Loki docs home">${brandMarkHtml()}<span>LOKI / Docs</span></a>
-        <p>Hosting and host-authoritative multiplayer for finished browser games. One SDK. One CLI. No invented backend.</p>
+        <p>Hosting and multiplayer for finished browser games. Host authority is the default. Server authority is opt-in. One SDK. One CLI. No invented backend.</p>
       </div>
       <div class="docs-footer-column"><h3>Start</h3><div class="docs-footer-links">
         <a href="/quickstart">Quickstart</a>
