@@ -12,6 +12,7 @@ import {
   RealtimeServerEnvelopeSchema,
   RealtimeSignalServerEnvelopeSchema,
   ServerEnvelopeSchema,
+  HOSTED_SDK_BUILD_MARKER,
   PROTOCOL_VERSION,
   REALTIME_PROTOCOL_VERSION,
   REALTIME_OPCODES,
@@ -354,6 +355,12 @@ export interface LokiClientOptions {
 }
 
 export class LokiClient {
+  /**
+   * Present in every build of the SDK, including a copy bundled into a game.
+   * `lokiplay validate` looks for it to warn that the game will not receive
+   * hosted SDK updates.
+   */
+  static readonly buildMarker: string = HOSTED_SDK_BUILD_MARKER;
   readonly #transport: LokiTransport;
   readonly #projectId: string;
   readonly #listeners = new Set<(message: ServerEnvelope) => void>();

@@ -29,7 +29,7 @@
     "lokiplay": "./dist/index.js"
   },
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../scripts/sync-agent-instructions.mjs && tsc -b --force && node -e \"require('node:fs').copyFileSync('src/AGENTS.template.md','dist/AGENTS.template.md')\" && node ../../scripts/rewrite-package-imports.mjs dist",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../scripts/sync-agent-instructions.mjs && tsc -b --force && node -e \"require('node:fs').copyFileSync('src/AGENTS.template.md','dist/AGENTS.template.md')\" && node ../../scripts/rewrite-package-imports.mjs dist && node ../../scripts/build-hosted-sdk.mjs --out dist/hosted-sdk.js",
     "prepublishOnly": "npm run build"
   },
   "engines": {

@@ -149,7 +149,7 @@ const pages: Record<
               ],
             ],
           )}
-          <p>Pin the exact published version. Current release: <strong>${v}</strong>.</p>
+          <p>Pin the exact published version for types and local development. Current release: <strong>${v}</strong>. In production Loki serves the SDK from the game host, so leave <code>@lokiplay/sdk</code> external in the production build.</p>
           ${codeBlock(`npm install @lokiplay/sdk@${v}`)}
           <h2>Surfaces</h2>
           ${table(
@@ -197,6 +197,7 @@ const pages: Record<
           <p>In the game repository, pin the published SDK. Keep the existing stack and UI.</p>
           ${codeBlock(`npm view @lokiplay/sdk@${v} version
 npm install @lokiplay/sdk@${v}`)}
+          <p>Import it as usual, but leave <code>@lokiplay/sdk</code> external in the production build (Vite: <code>build.rollupOptions.external: ["@lokiplay/sdk"]</code>) and ship an ES module entry. Loki serves the SDK from the game host at <code>/loki/sdk.js</code> and maps the import to it, so compatible networking fixes reach players on refresh without a rebuild. Do not import it from a Web Worker or cache it in a game service worker. Check the finished build with <code>npx lokiplay preview</code> before you ship.</p>
           <p>Optional overlay:</p>
           ${codeBlock(`npm install @lokiplay/ui-web@${v}`)}
           <p>Do not install <code>@loki/*</code>, unofficial packages named Loki, or <code>@heroiclabs/nakama-js</code>.</p>
@@ -783,6 +784,7 @@ const client = await createHostedLokiClient({
             <li>Let the SDK own lifecycle. Never leave on hide/offline.</li>
             <li><code>dispatch()</code> only while <code>connected</code>.</li>
             <li>CSP: no inline script, no remote fonts/CSS, no <code>&lt;form&gt;</code>.</li>
+            <li>Leave <code>@lokiplay/sdk</code> external in the production build; Loki serves it at <code>/loki/sdk.js</code>. Run <code>lokiplay preview</code> before <code>ship</code>.</li>
             <li><code>validate</code> before <code>ship</code>. Do not claim device testing you did not do.</li>
           </ol>
           <h2>Workflow</h2>

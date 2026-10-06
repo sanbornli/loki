@@ -2,6 +2,17 @@
 
 - Install and use `@lokiplay/sdk`; do not import Nakama APIs into game code.
 - Production multiplayer runs only from a Loki-hosted finished browser build.
+- Hosted SDK: install `@lokiplay/sdk` for types and local development and
+  import it as usual, but leave it external in the production build only
+  (Vite: `build.rollupOptions.external: ["@lokiplay/sdk"]`). In production
+  Loki serves the SDK from the game host at `/loki/sdk.js` and maps the
+  import to it, so production may run a newer compatible SDK than the pinned
+  package and networking fixes arrive on refresh. Ship an ES module entry
+  (`<script type="module">`); a classic single-file bundle cannot use the
+  import map. Do not import the SDK from a Web Worker, and do not register a
+  game service worker that intercepts or caches `/loki/sdk.js`. Run
+  `lokiplay preview` on the finished build before `lokiplay ship`; the
+  multiplayer session handshake only runs inside the Loki play page.
 - Upload `game.json`, `index.html`, and static assets. Do not upload source-only
   repositories, backend processes, secrets, creator ad scripts, or localhost
   dependencies.

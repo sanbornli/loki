@@ -12,3 +12,4 @@ dist/
 build/
 supabase/.temp/
 artifacts/*.json
+apps/web/hosted-sdk/candidate.js

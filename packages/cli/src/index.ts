@@ -14,8 +14,17 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer, type Server } from "node:http";
 import { zipSync } from "fflate";
-import { GameManifestSchema } from "../../protocol/src/index.js";
+import {
+  GameManifestSchema,
+  HOSTED_SDK_BUILD_MARKER,
+  HOSTED_SDK_PATH,
+  HOSTED_SDK_SUPPORT_PATH,
+  injectHostedSdkHtml,
+  parseHostedSdkBanner,
+  renderHostedSdkSupportScript,
+} from "../../protocol/src/index.js";
 
 // Single source of truth: packages/agent-instructions/templates/AGENTS.md.
 // This file is a synced copy (see scripts/sync-agent-instructions.mjs and
@@ -399,6 +408,7 @@ export async function validateBuildDirectory(directory: string): Promise<{
   const warnings: string[] = [];
   const hostingErrors: string[] = [];
   let multiplayerSdkDetected = !manifest.multiplayer?.enabled;
+  const bundledSdkFiles: string[] = [];
   for (const file of files) {
     if (/(^|\/)(server|backend)(\.|\/)/i.test(file)) {
       throw new Error(`backend source is not supported: ${file}`);
@@ -407,6 +417,12 @@ export async function validateBuildDirectory(directory: string): Promise<{
     const source = await readFile(path.join(directory, file), "utf8");
     if (/@lokiplay\/sdk|FirstPartyTransport|LokiClient/.test(source)) {
       multiplayerSdkDetected = true;
+    }
+    // A bare `import ... from "@lokiplay/sdk"` is the hosted shape. The build
+    // marker only appears when the SDK implementation itself is in the zip.
+    if (source.includes(HOSTED_SDK_BUILD_MARKER)) {
+      multiplayerSdkDetected = true;
+      bundledSdkFiles.push(file);
     }
     if (/@heroiclabs\/nakama-js|new\s+Client\s*\([^)]*(?:7350|nakama)/i.test(source)) {
       throw new Error(
@@ -430,12 +446,121 @@ export async function validateBuildDirectory(directory: string): Promise<{
   if (hostingErrors.length) {
     throw new Error(hostingErrors.join("\n"));
   }
+  if (bundledSdkFiles.length) {
+    warnings.push(
+      `${bundledSdkFiles[0]}: the Loki SDK is copied into this build, so it will not receive hosted SDK updates; leave @lokiplay/sdk external in the production build and run \`lokiplay preview\``,
+    );
+  }
   if (!multiplayerSdkDetected) {
     warnings.push(
-      "multiplayer build does not visibly include @lokiplay/sdk; verify the published SDK and FirstPartyTransport are bundled",
+      "multiplayer build does not visibly import @lokiplay/sdk; import it and leave it external in the production build (Loki serves it hosted)",
     );
   }
   return { files, warnings };
+}
+
+const PREVIEW_MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".wasm": "application/wasm",
+  ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+/**
+ * Serves a finished build the way Loki's game host does: the entrypoint gets
+ * the import map and support script, and /loki/sdk.js is the hosted SDK. An
+ * externalized build (bare `@lokiplay/sdk` import) only loads this way.
+ */
+export async function startPreviewServer(
+  directory: string,
+  options: { port?: number; sdkBundle?: Buffer | string; apiOrigin?: string } = {},
+): Promise<Server> {
+  const validation = await validateBuildDirectory(directory);
+  const manifest = GameManifestSchema.parse(
+    JSON.parse(await readFile(path.join(directory, "game.json"), "utf8")),
+  );
+  const sdkBundle =
+    options.sdkBundle ??
+    (await readFile(fileURLToPath(new URL("./hosted-sdk.js", import.meta.url))).catch(() => {
+      throw new Error(
+        "The hosted SDK bundle is missing from this install; reinstall lokiplay or run `npm run build` in packages/cli",
+      );
+    }));
+  const sdkSource = Buffer.isBuffer(sdkBundle) ? sdkBundle : Buffer.from(sdkBundle, "utf8");
+  const sdkVersion = parseHostedSdkBanner(sdkSource.subarray(0, 200).toString("utf8"))?.version ?? "unknown";
+  const supportSource = renderHostedSdkSupportScript({
+    apiOrigin: options.apiOrigin ?? process.env.LOKI_API_URL ?? "https://api.lokiplay.cc",
+    sdkVersion,
+  });
+  const files = new Set(validation.files);
+  const server = createServer((request, response) => {
+    void (async () => {
+      const send = (status: number, type: string, body: Buffer | string): void => {
+        response.writeHead(status, {
+          "content-type": type,
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        response.end(body);
+      };
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        send(405, "text/plain; charset=utf-8", "method not allowed");
+        return;
+      }
+      let pathname: string;
+      try {
+        pathname = decodeURIComponent(new URL(request.url ?? "/", "http://preview.local").pathname);
+      } catch {
+        send(400, "text/plain; charset=utf-8", "bad request");
+        return;
+      }
+      if (pathname === HOSTED_SDK_PATH) {
+        send(200, PREVIEW_MIME_TYPES[".js"]!, sdkSource);
+        return;
+      }
+      if (pathname === HOSTED_SDK_SUPPORT_PATH) {
+        send(200, PREVIEW_MIME_TYPES[".js"]!, supportSource);
+        return;
+      }
+      const file = pathname === "/" ? manifest.entrypoint : pathname.replace(/^\/+/, "");
+      if (
+        !files.has(file) ||
+        file.split("/").includes("..") ||
+        file.startsWith(".loki/") ||
+        file === "AGENTS.md"
+      ) {
+        send(404, "text/plain; charset=utf-8", "not found");
+        return;
+      }
+      const bytes = await readFile(path.join(directory, file));
+      const type = PREVIEW_MIME_TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream";
+      send(
+        200,
+        type,
+        file === manifest.entrypoint
+          ? injectHostedSdkHtml(bytes.toString("utf8"))
+          : bytes,
+      );
+    })().catch(() => {
+      if (!response.headersSent) response.writeHead(500);
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(options.port ?? 4173, "127.0.0.1", () => resolve());
+  });
+  return server;
 }
 
 export async function archiveBuild(directory: string): Promise<Uint8Array> {
@@ -482,12 +607,14 @@ interface ParsedArguments {
   command?: string;
   directory: string;
   projectId?: string;
+  port?: number;
 }
 
 function parseArguments(argv: string[]): ParsedArguments {
   const command = argv[0];
   let directory: string | undefined;
   let projectId: string | undefined;
+  let port: number | undefined;
   const positional: string[] = [];
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index]!;
@@ -507,6 +634,15 @@ function parseArguments(argv: string[]): ParsedArguments {
         if (directory) throw new Error("--dir may only be specified once");
         directory = value;
       }
+      continue;
+    }
+    if (argument === "--port" || argument.startsWith("--port=")) {
+      const raw = argument === "--port" ? argv[++index] : argument.slice("--port=".length);
+      const value = Number(raw);
+      if (!raw || !Number.isInteger(value) || value < 0 || value > 65_535) {
+        throw new Error("--port requires a port number");
+      }
+      port = value;
       continue;
     }
     if (argument.startsWith("--project=")) {
@@ -531,6 +667,7 @@ function parseArguments(argv: string[]): ParsedArguments {
     command,
     directory: path.resolve(directory ?? positional[0] ?? "."),
     projectId,
+    port,
   };
 }
 
@@ -894,7 +1031,7 @@ async function ship(directory: string, requestedProjectId?: string): Promise<voi
 }
 
 async function main(argv: string[]): Promise<void> {
-  const { command, directory, projectId } = parseArguments(argv);
+  const { command, directory, projectId, port } = parseArguments(argv);
   if (command === "login") {
     const endpoint = process.env.LOKI_API_URL;
     if (!endpoint) throw new Error("LOKI_API_URL is required");
@@ -966,6 +1103,15 @@ async function main(argv: string[]): Promise<void> {
     for (const warning of result.warnings) console.warn(`Warning: ${warning}`);
     return;
   }
+  if (command === "preview") {
+    const server = await startPreviewServer(directory, { port });
+    const address = server.address();
+    const listening = typeof address === "object" && address ? address.port : port;
+    console.log(`Previewing ${directory} at http://127.0.0.1:${listening}/`);
+    console.log("Loki's hosted SDK is served at /loki/sdk.js; the multiplayer session handshake only runs inside the Loki play page.");
+    console.log("Press Ctrl+C to stop.");
+    return;
+  }
   if (command === "deploy") {
     const session = await readCliSession();
     const endpoint = process.env.LOKI_API_URL ?? session?.endpoint;
@@ -1021,7 +1167,7 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   throw new Error(
-    "usage: lokiplay <login|init|connect|validate|ship|deploy|status> [directory] [--project <uuid>]",
+    "usage: lokiplay <login|init|connect|validate|preview|ship|deploy|status> [directory] [--project <uuid>] [--port <number>]",
   );
 }
 

@@ -15,6 +15,8 @@ RUN npm ci
 
 COPY apps apps
 COPY packages packages
+COPY scripts/build-hosted-sdk.mjs scripts/build-hosted-sdk.mjs
+RUN node scripts/build-hosted-sdk.mjs
 
 ENV NODE_ENV=production
 

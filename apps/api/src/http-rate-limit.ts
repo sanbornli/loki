@@ -12,6 +12,7 @@ const exact: Record<string, RateLimitRule> = {
   "GET:/v1/github/callback": { limit: 30, window: 60 },
   "POST:/v1/github/callback": { limit: 30, window: 60 },
   "POST:/v1/reports": { limit: 30, window: 60 },
+  "POST:/v1/runtime-reports": { limit: 30, window: 60 },
 };
 
 export function clientAddress(

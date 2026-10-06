@@ -20,6 +20,7 @@ import type { GuestResumeSigner, HostingAuthorization } from "./hosting-auth.js"
 import { clientAddress, rateLimitFor } from "./http-rate-limit.js";
 import { ServiceError, type SafetyOperations } from "./safety.js";
 import { assertPriceKey, type BillingService } from "./billing.js";
+import { RuntimeReportSchema } from "../../../packages/protocol/src/index.js";
 
 export interface ApiDependencies {
   platform: PlatformOperations;
@@ -537,6 +538,23 @@ export function createApiHandler(dependencies: ApiDependencies) {
           ...deployment,
           playableUrl: await dependencies.playableUrl?.(deployment.projectId),
         });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/v1/runtime-reports") {
+        // Sent by the hosted-SDK support script with sendBeacon (text/plain).
+        // Unauthenticated, not stored: validated, then written to the log.
+        let report;
+        try {
+          report = RuntimeReportSchema.parse(
+            JSON.parse((await readBody(request, 2 * 1024)).toString("utf8")),
+          );
+        } catch {
+          json(response, 400, { error: "invalid runtime report" });
+          return;
+        }
+        dependencies.log?.({ type: "runtime-report", ...report });
+        response.writeHead(204);
+        response.end();
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/reports") {

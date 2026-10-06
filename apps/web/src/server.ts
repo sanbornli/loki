@@ -25,6 +25,18 @@ import {
 } from "./player.js";
 import { renderPlayerPlatformPage } from "./player-platform-page.js";
 import type { ProductPageConfig } from "./product-theme.js";
+import {
+  HOSTED_SDK_PATH,
+  HOSTED_SDK_SUPPORT_PATH,
+  injectHostedSdkHtml,
+  renderHostedSdkSupportScript,
+} from "../../../packages/protocol/src/index.js";
+import {
+  contentEtag,
+  selectHostedSdk,
+  withImportMapCsp,
+  type HostedSdkConfig,
+} from "./hosted-sdk.js";
 
 const staticImageAssets: Record<string, { file: string; type: string }> = {
   "/assets/loki-vibecoded-game-montage.png": {
@@ -84,6 +96,11 @@ export interface WebDependencies {
   ): Promise<string | undefined | void>;
   gameOrigin(projectId: string): string;
   productConfig?: ProductPageConfig;
+  /**
+   * When set, the game host serves the hosted SDK at /loki/sdk.js and the
+   * entrypoint HTML gets an import map pointing @lokiplay/sdk at it.
+   */
+  hostedSdk?: HostedSdkConfig;
   readiness?(): Promise<Record<string, boolean>>;
   log?(record: Record<string, unknown>): void;
 }
@@ -133,6 +150,25 @@ function requestHostname(request: IncomingMessage): string {
     request.headers.host ??
     "";
   return host.replace(/:\d+$/, "").replace(/\.$/, "").toLowerCase();
+}
+
+const UUID_LABEL = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The project id when this request is for `{projectId}.{game domain}`. */
+function gameHostProjectId(
+  request: IncomingMessage,
+  dependencies: WebDependencies,
+): string | undefined {
+  const hostname = requestHostname(request);
+  const label = hostname.split(".")[0] ?? "";
+  if (!UUID_LABEL.test(label)) return undefined;
+  try {
+    return new URL(dependencies.gameOrigin(label)).hostname.toLowerCase() === hostname
+      ? label.toLowerCase()
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function createWebHandler(dependencies: WebDependencies) {
@@ -326,6 +362,59 @@ export function createWebHandler(dependencies: WebDependencies) {
         return;
       }
 
+      if (
+        request.method === "GET" &&
+        dependencies.hostedSdk &&
+        (url.pathname === HOSTED_SDK_PATH || url.pathname === HOSTED_SDK_SUPPORT_PATH)
+      ) {
+        const projectId = gameHostProjectId(request, dependencies);
+        if (!projectId) {
+          fail(response, 404, "not found");
+          return;
+        }
+        const { bundle, generation } = selectHostedSdk(dependencies.hostedSdk, projectId);
+        const body =
+          url.pathname === HOSTED_SDK_PATH
+            ? bundle.source
+            : Buffer.from(
+                renderHostedSdkSupportScript({
+                  apiOrigin:
+                    dependencies.productConfig?.apiOrigin ?? "https://api.lokiplay.cc",
+                  sdkVersion: bundle.version,
+                }),
+                "utf8",
+              );
+        const etag = contentEtag(body);
+        const notModified = request.headers["if-none-match"] === etag;
+        dependencies.log?.({
+          type: "hosted-sdk",
+          projectId,
+          path: url.pathname,
+          generation,
+          version: bundle.version,
+          status: notModified ? 304 : 200,
+        });
+        const headers = {
+          "cache-control": "no-cache",
+          vary: "Host",
+          etag,
+          "x-loki-sdk-version": bundle.version,
+          "x-loki-sdk-generation": generation,
+          "x-content-type-options": "nosniff",
+        };
+        if (notModified) {
+          response.writeHead(304, headers);
+          response.end();
+          return;
+        }
+        response.writeHead(200, {
+          ...headers,
+          "content-type": "text/javascript; charset=utf-8",
+        });
+        response.end(body);
+        return;
+      }
+
       const release = url.pathname.match(
         /^\/games\/([0-9a-f-]{36})\/releases\/([0-9a-f-]{36})\/(.+)$/i,
       );
@@ -359,16 +448,28 @@ export function createWebHandler(dependencies: WebDependencies) {
           fail(response, 404, "asset not found");
           return;
         }
+        const securityHeaders = gameSecurityHeaders(
+          deployment.manifest,
+          dependencies.gameOrigin(projectId!),
+        );
+        let body = Buffer.from(bytes);
+        let etag = `"${deployment.contentHash}"`;
+        if (dependencies.hostedSdk && file === deployment.manifest.entrypoint) {
+          // Only the entrypoint changes: the import map and support script go
+          // in, and this response's script-src gains the map's hash.
+          body = Buffer.from(injectHostedSdkHtml(body.toString("utf8")), "utf8");
+          securityHeaders["content-security-policy"] = withImportMapCsp(
+            securityHeaders["content-security-policy"]!,
+          );
+          etag = `"${deployment.contentHash}-${contentEtag(body).slice(1, 17)}"`;
+        }
         response.writeHead(200, {
-          ...gameSecurityHeaders(
-            deployment.manifest,
-            dependencies.gameOrigin(projectId!),
-          ),
+          ...securityHeaders,
           "content-type":
             mimeTypes[path.posix.extname(file).toLowerCase()] ??
             "application/octet-stream",
           "cache-control": "public, max-age=31536000, immutable",
-          etag: `"${deployment.contentHash}"`,
+          etag,
           ...(playInvite
             ? {
                 "set-cookie":
@@ -376,7 +477,7 @@ export function createWebHandler(dependencies: WebDependencies) {
               }
             : {}),
         });
-        response.end(Buffer.from(bytes));
+        response.end(body);
         return;
       }
       fail(response, 404, "not found");

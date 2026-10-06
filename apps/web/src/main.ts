@@ -5,6 +5,7 @@ import { PlayInviteSigner, PostgresHostingAuthorization } from "../../api/src/ho
 import { R2ReadOnlyArtifactStore } from "../../api/src/r2.js";
 import { SupabaseAuthVerifier } from "../../api/src/supabase-auth.js";
 import { SessionTokenService } from "../../api/src/tokens.js";
+import { loadHostedSdkConfig } from "./hosted-sdk.js";
 import { startWebServer } from "./server.js";
 
 const environment = z
@@ -20,6 +21,9 @@ const environment = z
     LOKI_R2_READ_ACCESS_KEY_ID: z.string().min(16),
     LOKI_R2_READ_SECRET_ACCESS_KEY: z.string().min(16),
     LOKI_PLAY_INVITE_KEY: z.string().min(43),
+    // Hosted SDK rollout: unset both for stable everywhere (the rollback state).
+    LOKI_HOSTED_SDK_SERVE: z.enum(["stable", "candidate"]).optional(),
+    LOKI_HOSTED_SDK_CANARY_PROJECT_IDS: z.string().optional(),
   })
   .parse(process.env);
 
@@ -30,6 +34,11 @@ const pool = new Pool({
   connectionTimeoutMillis: 10_000,
 });
 await pool.query("SELECT 1");
+
+const hostedSdk = await loadHostedSdkConfig({
+  serve: environment.LOKI_HOSTED_SDK_SERVE,
+  canaryProjectIds: environment.LOKI_HOSTED_SDK_CANARY_PROJECT_IDS,
+});
 
 const platform = new PostgresPlatformService(pool, new SessionTokenService());
 const deployments = new PostgresDeploymentRepository(pool);
@@ -69,6 +78,7 @@ const server = startWebServer(
     gameOrigin(projectId) {
       return `https://${projectId}.${environment.LOKI_GAME_BASE_DOMAIN}`;
     },
+    hostedSdk,
     productConfig: {
       apiOrigin: environment.LOKI_PUBLIC_API_ORIGIN,
       supabaseUrl: environment.SUPABASE_URL,

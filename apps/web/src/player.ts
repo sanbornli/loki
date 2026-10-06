@@ -229,6 +229,33 @@ export function renderPlayerShell(input: {
       );
     };
 
+    // The game's hosted-SDK support script reports an unsupported browser or a
+    // failed runtime download. Show it now instead of waiting out the timeout.
+    const gameOrigin = ${JSON.stringify(new URL(input.gameOrigin).origin)};
+    const showRuntimeProblem = (message) => {
+      stopHandshake();
+      bridgePort = undefined;
+      status.hidden = false;
+      status.textContent = message + " ";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => {
+        status.textContent = "Connecting…";
+        frame.src = frame.src;
+      });
+      status.append(retry);
+    };
+    window.addEventListener("message", (event) => {
+      if (event.source !== frame.contentWindow || event.origin !== gameOrigin) return;
+      const type = event.data && event.data.type;
+      if (type === "loki:browser-unsupported") {
+        showRuntimeProblem("This browser can't run this game. Update Safari, Chrome, or Firefox.");
+      } else if (type === "loki:runtime-unavailable") {
+        showRuntimeProblem("Loki runtime unavailable.");
+      }
+    });
+
     frame.addEventListener("load", () => {
       status.textContent = "Connecting…";
       offerBridge();

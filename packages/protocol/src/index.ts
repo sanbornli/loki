@@ -831,3 +831,5 @@ export function canonicalJson(value: unknown): string {
 export function stateHash(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
+
+export * from "./hosted-sdk.js";
