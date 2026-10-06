@@ -2609,7 +2609,7 @@ export const marketingStyles = `
 .party-flow {
   position: relative;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto 1fr;
   gap: 0.9rem;
   padding: 0.9rem;
   overflow: hidden;
@@ -2628,7 +2628,6 @@ export const marketingStyles = `
   pointer-events: none;
 }
 
-.party-command,
 .party-step,
 .party-room {
   position: relative;
@@ -2637,13 +2636,6 @@ export const marketingStyles = `
   background: #10100d;
 }
 
-.party-command {
-  display: grid;
-  gap: 0.45rem;
-  padding: 0.9rem 1rem;
-}
-
-.party-command span,
 .party-badge,
 .party-link,
 .party-step b,
@@ -2655,28 +2647,9 @@ export const marketingStyles = `
   text-transform: uppercase;
 }
 
-.party-command span,
 .party-step b,
 .party-badge {
   color: var(--amber);
-}
-
-.party-command code {
-  display: block;
-  width: 0;
-  max-width: max-content;
-  overflow: hidden;
-  border-right: 1px solid var(--amber);
-  color: var(--paper);
-  font-family: var(--mono);
-  font-size: clamp(0.68rem, 1vw, 0.9rem);
-  white-space: nowrap;
-  animation: party-type 10s steps(48, end) -2s infinite;
-}
-
-.party-command code::before {
-  color: var(--amber);
-  content: "$ ";
 }
 
 .party-steps {
@@ -2849,11 +2822,6 @@ export const marketingStyles = `
   background: #10100d;
   color: var(--amber-bright);
   animation: party-link 10s linear infinite;
-}
-
-@keyframes party-type {
-  0%, 8% { width: 0; }
-  28%, 100% { width: 100%; }
 }
 
 @keyframes party-step {
@@ -3038,6 +3006,15 @@ export const marketingStyles = `
   padding: 0.5rem 0;
   overflow: visible;
   background: transparent;
+}
+
+.feature-row:not(.feature-row-flip) .feature-stage.scene-phone {
+  container-type: inline-size;
+  justify-items: end;
+}
+
+.feature-row:not(.feature-row-flip) .share-phone {
+  margin-right: calc(3.15 * 12.2cqi - 6rem);
 }
 
 .dist-montage {
@@ -5038,7 +5015,6 @@ export const marketingStyles = `
   .editorial-stack,
   .room-pair,
   .party-flow,
-  .party-command,
   .party-steps,
   .party-room,
   .dist-montage,
@@ -5048,6 +5024,14 @@ export const marketingStyles = `
     width: 100%;
     min-width: 0;
     max-width: 100%;
+  }
+
+  .feature-row:not(.feature-row-flip) .feature-stage.scene-phone {
+    justify-items: center;
+  }
+
+  .feature-row:not(.feature-row-flip) .share-phone {
+    margin-right: 0;
   }
 
   .share-phone {
@@ -5344,7 +5328,7 @@ function footer(path: string): string {
       <div class="footer-grid">
         <div class="footer-brand">
           <a class="brand" href="/" aria-label="Loki home">${brandMarkHtml()}<span>LOKI</span></a>
-          <p>Everything your vibe-coded game needs to go from local prototype to a game people can play.</p>
+          <p>Gaming Infrastructure for the Agentic Future</p>
         </div>
         <div class="footer-column"><h3>Product</h3><div class="footer-links">
           ${productSections

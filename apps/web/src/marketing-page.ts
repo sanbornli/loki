@@ -136,11 +136,7 @@ const homeMain = `
             <p>Give your game hosting, a shareable game link, real-time online multiplayer and game publishing without managing multiple different services (and paying all of them).</p>
             <a class="card-link" href="https://docs.lokiplay.cc/sdk">See the SDK →</a>
           </div>
-          <div class="editorial-grid editorial-stack party-flow" aria-label="Prompt-to-party timeline">
-            <div class="party-command" aria-hidden="true">
-              <span>Prompt</span>
-              <code>make this game playable with friends tonight</code>
-            </div>
+          <div class="editorial-grid editorial-stack party-flow" aria-label="Install-to-party timeline">
             <ol class="party-steps" aria-hidden="true">
               <li class="party-step party-step-install"><b>01</b><span>Install</span><em>@lokiplay/sdk</em></li>
               <li class="party-step party-step-deploy"><b>02</b><span>Deploy</span><em>secure URL</em></li>
