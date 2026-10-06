@@ -5329,6 +5329,11 @@ function header(path: string): string {
         <a href="/pricing"${currentAttr(path, "/pricing")}>Pricing</a>
         <a href="https://docs.lokiplay.cc/">Docs ↗</a>
       </div>
+    </details>
+    <div class="marketing-actions">
+      <a class="button button-quiet" href="https://app.lokiplay.cc/login">Creator Log in</a>
+      <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started</a>
+    </div>
   </header>`;
 }
 
