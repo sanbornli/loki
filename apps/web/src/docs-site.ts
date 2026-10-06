@@ -28,6 +28,7 @@ export const docsRoutes = [
   "/mcp",
   "/errors",
   "/limits",
+  "/changelog",
   "/safety",
 ] as const;
 
@@ -99,6 +100,7 @@ const navGroups: Array<{ label: string; items: Array<{ href: DocsRoute; label: s
       items: [
         { href: "/errors", label: "Errors" },
         { href: "/limits", label: "Limits" },
+        { href: "/changelog", label: "Changelog" },
         { href: "/safety", label: "Safety note" },
       ],
     },
@@ -612,6 +614,7 @@ function footer(): string {
         <a href="/sdk">JavaScript SDK</a>
         <a href="/cli">CLI</a>
         <a href="/mcp">MCP</a>
+        <a href="/changelog">Changelog</a>
         <a href="/safety">Safety note</a>
         <a href="/llms.txt">llms.txt</a>
       </div></div>

@@ -139,7 +139,10 @@ export function renderDevicePage(
           method: "POST",
           headers: {
             authorization: "Bearer " + accessToken,
-            "content-type": "application/json"
+            "content-type": "application/json",
+            "x-loki-terms-version": productConfig.termsVersion || "",
+            "x-loki-privacy-version": productConfig.privacyVersion || "",
+            "x-loki-aup-version": productConfig.aupVersion || ""
           },
           body: JSON.stringify({ userCode: document.getElementById("device-code").value })
         });

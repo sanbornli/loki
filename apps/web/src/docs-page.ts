@@ -149,7 +149,7 @@ const pages: Record<
               ],
             ],
           )}
-          <p>Pin the exact published version for types and local development. Current release: <strong>${v}</strong>. In production Loki serves the SDK from the game host, so leave <code>@lokiplay/sdk</code> external in the production build.</p>
+          <p>Pin the exact published version for types and local development. Current release: <strong>${v}</strong>. In production Loki serves the SDK from the game host, so leave <code>@lokiplay/sdk</code> external in the production build. What changed in each release is on the <a href="/changelog">changelog</a>.</p>
           ${codeBlock(`npm install @lokiplay/sdk@${v}`)}
           <h2>Surfaces</h2>
           ${table(
@@ -874,6 +874,41 @@ npx lokiplay@${v} ship`)}
           <p>Treat <code>PROJECT_SUSPENDED</code> as stop-the-line.</p>
 `,
   },
+  "/changelog": {
+    title: "Changelog — Loki docs",
+    description: "What each Loki release changed for creators and players.",
+    lede: "Newest first. These notes say what a creator or a player gets. They are not a list of internal files.",
+    aside: aside([
+      {
+        label: "Current",
+        body: `${v}. After one ship, browser networking updates arrive on refresh.`,
+      },
+      {
+        label: "Older games",
+        body: "A game that still copied the SDK into its build keeps that copy until it ships again.",
+      },
+    ]),
+    main: `
+          <h2>0.5.0</h2>
+          <p>Loki now serves the browser networking from the game's own address. A new game installs the package once, ships once, and later networking fixes arrive the next time a player opens the game. The creator does not install a new package or ship again for those fixes.</p>
+          <p>An existing game keeps the copy it already shipped. It switches only after one rebuild that leaves the package out of the finished build, then one ship.</p>
+          <p>The package number still matters for trying the game on your own computer, for the command-line tool, and for Swift, Kotlin, and Unity. It also matters again if Loki changes a call on purpose.</p>
+          <h2>0.4.7</h2>
+          <p>A tap such as punch, kick, jump, or Ready can travel on the direct link between players and still go through Singapore. The host uses the first copy and ignores the repeat. Leaderboard replies that include extra server fields are accepted, so a valid board no longer shows as unavailable.</p>
+          <h2>0.4.6</h2>
+          <p>Pictures sent on the direct link now count, including the player they came from. The guest waits for the gap between pictures before drawing. A faster link no longer adds a second wait based on the trip to Singapore.</p>
+          <h2>0.4.5</h2>
+          <p>The host can send pictures more often. The usual rate stays 30 per second, and the ceiling is 100. The rate starts lower and climbs when the connection stays clean.</p>
+          <h2>0.4.4</h2>
+          <p>Matches run by Loki's server no longer stall because the viewer's clock and the server's clock disagreed. Held controls are no longer sent faster than the match can use them.</p>
+          <h2>0.4.3</h2>
+          <p>Server authority is available for games that opt in. A continuous match can run on Loki's server instead of on a player's computer. The free plan still cannot use it.</p>
+          <h2>0.4.2</h2>
+          <p>The game agent asks whether the match should run on a player's computer or on Loki's server, and the creator can switch later. Plans are on the account: Free, Loki, and Loki Pro.</p>
+          <h2>0.4.1</h2>
+          <p>The last open seat in a public room is held so two people cannot take it at the same time.</p>
+`,
+  },
   "/safety": {
     title: "Safety note — Loki docs",
     description:
@@ -955,6 +990,7 @@ Installing Loki is not a finished game. Each title still requires fine-tuning af
 - Quickstart: https://docs.lokiplay.cc/quickstart
 - Agents: https://docs.lokiplay.cc/agents
 - Safety: https://docs.lokiplay.cc/safety
+- Changelog: https://docs.lokiplay.cc/changelog
 - MCP: https://docs.lokiplay.cc/mcp
 - App: https://app.lokiplay.cc/
 - Play: https://play.lokiplay.cc/

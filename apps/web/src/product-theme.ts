@@ -2,6 +2,9 @@ export interface ProductPageConfig {
   apiOrigin: string;
   supabaseUrl: string;
   supabaseAnonKey: string;
+  termsVersion?: string;
+  privacyVersion?: string;
+  aupVersion?: string;
 }
 
 export interface ProductPageInput {

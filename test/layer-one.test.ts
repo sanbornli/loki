@@ -360,7 +360,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.doesNotMatch(marketing, />Start building</);
   assert.match(marketing, /href="\/product#hosting"/);
   assert.match(marketing, /href="\/product#multiplayer"/);
-  assert.match(marketing, /href="\/product#distribution"/);
+  assert.doesNotMatch(marketing, /href="\/product#distribution"/);
   assert.match(marketing, /href="\/product#agents"/);
   assert.match(marketing, /href="\/pricing"/);
   assert.match(marketing, /href="\/about"/);
@@ -376,21 +376,32 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.doesNotMatch(marketing, /href="\/cookies"/);
   assert.doesNotMatch(marketing, /href="\/monetization"/);
   const terms = renderMarketingPage(config, "/terms");
-  assert.match(terms, /Placeholder text/);
+  assert.match(terms, /terms-2026-10-07/);
+  assert.match(terms, /Reveflo Technologies Limited/);
+  assert.doesNotMatch(terms, /On this page/);
+  assert.doesNotMatch(terms, /Registered office:/);
+  assert.doesNotMatch(terms, /Placeholder text/);
   assert.match(terms, /Terms of Service/);
+  const privacy = renderMarketingPage(config, "/privacy");
+  assert.match(privacy, /privacy-2026-10-07/);
+  assert.doesNotMatch(privacy, /Placeholder text/);
+  const aup = renderMarketingPage(config, "/aup");
+  assert.match(aup, /aup-2026-10-07/);
+  assert.match(aup, /pornography/);
+  assert.doesNotMatch(aup, /Placeholder text/);
   const product = renderMarketingPage(config, "/product");
   assert.match(product, /From side project/);
   assert.match(product, /to Global Game/);
   assert.match(product, /in a single prompt/);
   assert.match(product, /id="hosting"/);
   assert.match(product, /id="multiplayer"/);
-  assert.match(product, /id="distribution"/);
+  assert.doesNotMatch(product, /id="distribution"/);
   assert.match(product, /id="agents"/);
   assert.doesNotMatch(product, /id="sdk"/);
   assert.doesNotMatch(product, /And much more/);
   assert.match(product, /A home for every Game./);
   assert.match(product, /Instant live multiplayer without the manual setup/);
-  assert.match(product, /Launch your game to the world through Loki/);
+  assert.doesNotMatch(product, /Launch your game to the world through Loki/);
   assert.match(product, /Built for the Agentic AI Era/);
   assert.doesNotMatch(product, /One protocol\. Four clients/);
   assert.match(renderMarketingPage(config, "/hosting"), /A home for every Game./);
@@ -461,6 +472,10 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
     renderDocsPage(config, "/sdk"),
     /Clients --> JavaScript SDK/,
   );
+  assert.match(renderDocsPage(config, "/changelog"), /Reference --> Changelog/);
+  assert.match(renderDocsPage(config, "/changelog"), /<h2>0\.5\.0<\/h2>/);
+  assert.match(renderDocsPage(config, "/changelog"), /<h2>0\.4\.1<\/h2>/);
+  assert.match(docsHome, /href="\/changelog"/);
   assert.doesNotMatch(
     renderDocsPage(config, "/multiplayer"),
     /Choose by state, not genre/,

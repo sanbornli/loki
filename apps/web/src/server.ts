@@ -79,6 +79,30 @@ const staticImageAssets: Record<string, { file: string; type: string }> = {
     file: "./assets/marketing/loki-world-network.webp",
     type: "image/webp",
   },
+  "/assets/loki-mp-public-rooms.jpg": {
+    file: "./assets/marketing/loki-mp-public-rooms.jpg",
+    type: "image/jpeg",
+  },
+  "/assets/loki-mp-private-rooms.jpg": {
+    file: "./assets/marketing/loki-mp-private-rooms.jpg",
+    type: "image/jpeg",
+  },
+  "/assets/loki-mp-matchmaking.jpg": {
+    file: "./assets/marketing/loki-mp-matchmaking.jpg",
+    type: "image/jpeg",
+  },
+  "/assets/loki-mp-leaderboard.jpg": {
+    file: "./assets/marketing/loki-mp-leaderboard.jpg",
+    type: "image/jpeg",
+  },
+  "/assets/loki-mp-network.jpg": {
+    file: "./assets/marketing/loki-mp-network.jpg",
+    type: "image/jpeg",
+  },
+  "/assets/loki-hosting-pool.jpg": {
+    file: "./assets/marketing/loki-hosting-pool.jpg",
+    type: "image/jpeg",
+  },
 };
 
 export interface WebDependencies {

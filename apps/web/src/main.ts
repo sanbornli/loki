@@ -21,6 +21,9 @@ const environment = z
     LOKI_R2_READ_ACCESS_KEY_ID: z.string().min(16),
     LOKI_R2_READ_SECRET_ACCESS_KEY: z.string().min(16),
     LOKI_PLAY_INVITE_KEY: z.string().min(43),
+    LOKI_TERMS_VERSION: z.string().min(1),
+    LOKI_PRIVACY_VERSION: z.string().min(1),
+    LOKI_AUP_VERSION: z.string().min(1),
     // Hosted SDK rollout: unset both for stable everywhere (the rollback state).
     LOKI_HOSTED_SDK_SERVE: z.enum(["stable", "candidate"]).optional(),
     LOKI_HOSTED_SDK_CANARY_PROJECT_IDS: z.string().optional(),
@@ -83,6 +86,9 @@ const server = startWebServer(
       apiOrigin: environment.LOKI_PUBLIC_API_ORIGIN,
       supabaseUrl: environment.SUPABASE_URL,
       supabaseAnonKey: environment.SUPABASE_ANON_KEY,
+      termsVersion: environment.LOKI_TERMS_VERSION,
+      privacyVersion: environment.LOKI_PRIVACY_VERSION,
+      aupVersion: environment.LOKI_AUP_VERSION,
     },
     async readiness() {
       const checks = { postgres: false, r2: false };

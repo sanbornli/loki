@@ -162,6 +162,34 @@ body.creator-dashboard .page-shell {
   width: 100%;
 }
 
+.auth-divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  height: 1px;
+  background: var(--line);
+  content: "";
+}
+
+.oauth-actions {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.oauth-actions .button {
+  width: 100%;
+}
+
 .dashboard-shell {
   display: grid;
   grid-template-columns: 15.5rem minmax(0, 1fr);
@@ -1082,6 +1110,11 @@ const pageBody = `
             <button class="text-button" id="resend-button" type="button">Resend confirmation</button>
           </div>
         </form>
+        <div class="auth-divider"><span>or</span></div>
+        <div class="oauth-actions">
+          <button class="button" id="oauth-google" type="button">Continue with Google</button>
+          <button class="button" id="oauth-github" type="button">Continue with GitHub</button>
+        </div>
       </section>
       </div>
     </section>
@@ -1281,6 +1314,7 @@ const pageBody = `
 
 const creatorScript = String.raw`
     const TOKEN_KEY = "loki.creator.access-token";
+    const OAUTH_VERIFIER_KEY = "loki.creator.oauth-verifier";
     const allowedTransitions = {
       draft: ["private"],
       private: ["draft", "unlisted"],
@@ -1373,7 +1407,10 @@ const creatorScript = String.raw`
       const fallback = "Request failed (" + response.status + ").";
       try {
         const data = await response.json();
-        return text(data && (data.error || data.message || data.msg), fallback);
+        return text(
+          data && (data.error_description || data.msg || data.message || data.error),
+          fallback
+        );
       } catch {
         return fallback;
       }
@@ -1384,6 +1421,11 @@ const creatorScript = String.raw`
       const options = Object.assign({}, init || {});
       const headers = new Headers(options.headers || {});
       headers.set("authorization", "Bearer " + state.token);
+      if (productConfig.termsVersion && productConfig.privacyVersion && productConfig.aupVersion) {
+        headers.set("x-loki-terms-version", productConfig.termsVersion);
+        headers.set("x-loki-privacy-version", productConfig.privacyVersion);
+        headers.set("x-loki-aup-version", productConfig.aupVersion);
+      }
       if (options.body && !(options.body instanceof Blob) && !headers.has("content-type")) {
         headers.set("content-type", "application/json");
       }
@@ -1541,7 +1583,9 @@ const creatorScript = String.raw`
         setGlobalStatus("", false);
       } catch (error) {
         if (!state.token) return;
-        setGlobalStatus(error instanceof Error ? error.message : "Could not load the workspace.", false);
+        const message = error instanceof Error ? error.message : "Could not load the workspace.";
+        if (dashboardView.hidden) showNotice(byId("auth-notice"), message, "error");
+        setGlobalStatus(message, false);
         globalStatus.dataset.tone = "error";
       }
     }
@@ -2376,7 +2420,7 @@ const creatorScript = String.raw`
       showNotice(notice, state.authMode === "signup" ? "Creating your account…" : "Signing in…", "");
       try {
         const signup = state.authMode === "signup";
-        const redirectTo = new URL("/creator", window.location.origin).toString();
+        const redirectTo = creatorReturnUrl();
         const result = await supabase(
           signup
             ? "/auth/v1/signup?redirect_to=" + encodeURIComponent(redirectTo)
@@ -2423,6 +2467,79 @@ const creatorScript = String.raw`
       }
     });
 
+    function base64Url(bytes) {
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+    }
+
+    async function oauthChallenge(verifier) {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+      return base64Url(new Uint8Array(digest));
+    }
+
+    function creatorReturnUrl() {
+      return new URL("/creator", window.location.origin).toString();
+    }
+
+    async function startOAuth(provider, button) {
+      button.disabled = true;
+      try {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        const verifier = base64Url(bytes);
+        sessionStorage.setItem(OAUTH_VERIFIER_KEY, verifier);
+        const url = new URL("/auth/v1/authorize", productConfig.supabaseUrl);
+        url.searchParams.set("provider", provider);
+        url.searchParams.set("redirect_to", creatorReturnUrl());
+        url.searchParams.set("code_challenge", await oauthChallenge(verifier));
+        url.searchParams.set("code_challenge_method", "s256");
+        url.searchParams.set("apikey", productConfig.supabaseAnonKey);
+        if (provider === "github") url.searchParams.set("scopes", "user:email");
+        window.location.assign(url.toString());
+      } catch (error) {
+        sessionStorage.removeItem(OAUTH_VERIFIER_KEY);
+        showNotice(
+          byId("auth-notice"),
+          error instanceof Error ? error.message : "Could not start sign-in.",
+          "error"
+        );
+        button.disabled = false;
+      }
+    }
+
+    byId("oauth-google").addEventListener("click", () => {
+      startOAuth("google", byId("oauth-google"));
+    });
+    byId("oauth-github").addEventListener("click", () => {
+      startOAuth("github", byId("oauth-github"));
+    });
+
+    async function finishRedirectSignIn() {
+      const search = new URLSearchParams(window.location.search);
+      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const error = search.get("error_description") || hash.get("error_description") || search.get("error") || hash.get("error");
+      const code = search.get("code");
+      const token = hash.get("access_token");
+      if (!error && !code && !token) return;
+      history.replaceState(null, "", window.location.pathname);
+      if (error) throw new Error(error);
+      if (code) {
+        const verifier = sessionStorage.getItem(OAUTH_VERIFIER_KEY) || "";
+        sessionStorage.removeItem(OAUTH_VERIFIER_KEY);
+        if (!verifier) throw new Error("Sign-in could not be completed. Try again.");
+        const result = await supabase("/auth/v1/token?grant_type=pkce", {
+          method: "POST",
+          body: JSON.stringify({ auth_code: code, code_verifier: verifier })
+        });
+        const accessToken = text(result && result.access_token, "");
+        if (!accessToken) throw new Error("Sign-in did not return a session.");
+        writeToken(accessToken);
+        return;
+      }
+      writeToken(token);
+    }
+
     byId("resend-button").addEventListener("click", async () => {
       const button = byId("resend-button");
       const notice = byId("auth-notice");
@@ -2435,7 +2552,7 @@ const creatorScript = String.raw`
       button.disabled = true;
       showNotice(notice, "Requesting a new confirmation email…", "");
       try {
-        const redirectTo = new URL("/creator", window.location.origin).toString();
+        const redirectTo = creatorReturnUrl();
         await supabase(
           "/auth/v1/resend?redirect_to=" + encodeURIComponent(redirectTo),
           {
@@ -2545,13 +2662,24 @@ const creatorScript = String.raw`
       setAuthMode("signup");
     }
 
-    if (state.token) {
-      loadOverview();
-    } else {
+    finishRedirectSignIn().then(() => {
+      if (state.token) {
+        loadOverview();
+      } else {
+        authView.hidden = false;
+        dashboardView.hidden = true;
+      }
+      syncAuthLayout();
+    }).catch((error) => {
       authView.hidden = false;
       dashboardView.hidden = true;
-    }
-    syncAuthLayout();
+      syncAuthLayout();
+      showNotice(
+        byId("auth-notice"),
+        error instanceof Error ? error.message : "Sign-in could not be completed.",
+        "error"
+      );
+    });
 `;
 
 export function renderCreatorPage(config: ProductPageConfig): string {

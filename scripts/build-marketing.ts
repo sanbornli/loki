@@ -81,6 +81,12 @@ await Promise.all([
     "loki-game-montage.webp",
     "loki-world-network.mp4",
     "loki-world-network.webp",
+    "loki-hosting-pool.jpg",
+    "loki-mp-public-rooms.jpg",
+    "loki-mp-private-rooms.jpg",
+    "loki-mp-matchmaking.jpg",
+    "loki-mp-leaderboard.jpg",
+    "loki-mp-network.jpg",
   ].map((fileName) =>
     copyFile(
       resolve(repositoryRoot, "apps/web/src/assets/marketing", fileName),

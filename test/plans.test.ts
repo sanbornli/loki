@@ -244,4 +244,8 @@ test("creator dashboard shows the account plan and billing actions", () => {
   assert.match(page, /Loki Pro \$15\/month, billed annually/);
   assert.match(page, /\/v1\/billing\/checkout/);
   assert.match(page, /\/v1\/billing\/portal/);
+  assert.match(page, /Continue with Google/);
+  assert.match(page, /Continue with GitHub/);
+  assert.match(page, /grant_type=pkce/);
+  assert.match(page, /x-loki-terms-version/);
 });

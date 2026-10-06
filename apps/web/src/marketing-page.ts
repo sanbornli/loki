@@ -6,6 +6,7 @@ import {
   renderMarketingSite,
   type MarketingRoute,
 } from "./marketing-site.js";
+import { aupMain, privacyMain, termsMain } from "./legal-copy.js";
 import type { ProductPageConfig } from "./product-theme.js";
 
 export {
@@ -90,7 +91,7 @@ function pricingPlans(): string {
             <ul class="pricing-features">
               <li>20 games</li>
               <li>8 players per room</li>
-              <li>Priority listing in the public catalog</li>
+              <li>Unlisted play links</li>
               <li>Host and server authoritative</li>
             </ul>
             <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Loki</a>
@@ -103,7 +104,7 @@ function pricingPlans(): string {
               <li>Unlimited games</li>
               <li>Unlimited links</li>
               <li>8 players per room</li>
-              <li>Priority listing in the public catalog</li>
+              <li>Unlisted play links</li>
               <li>Host and server authoritative</li>
             </ul>
             <a class="button" href="https://app.lokiplay.cc/signup">Get Loki Pro</a>
@@ -287,10 +288,9 @@ const homeMain = `
           </article>
           <article class="feature-row">
             <div class="feature-copy">
-              <p class="card-index">03 / Publishing</p>
-              <h3>Start earning from Day One.</h3>
+              <p class="card-index">03 / Earn <span class="button button-primary soon-tag">Coming soon</span></p>
+              <h3 class="play-title">Start earning<br>from Day One.</h3>
               <p>Skip waiting for weeks to get published. Earn from every link opened with your game, today.</p>
-              <a class="card-link" href="${productSectionHref("distribution")}">See distribution →</a>
             </div>
             <div class="feature-stage scene-board" aria-label="Battleship listed live on play.lokiplay.cc, with opens and creator share">
               <div class="live-listing">
@@ -365,58 +365,6 @@ ${agentMarquee()}
       </div>
     </section>
 
-    <section class="marketing-section" id="games" aria-labelledby="games-title">
-      <div class="marketing-section-inner">
-        <div class="split-heading games-heading">
-          <p class="eyebrow">Built on Loki / Ready to play</p>
-          <h2 id="games-title">Small games. Real players.</h2>
-        </div>
-        <div class="editorial-grid">
-          <article class="editorial-card game-card">
-            <div class="game-art game-art-ship" aria-hidden="true">
-              <span class="mini-ship mini-ship-h"></span>
-              <span class="mini-ship mini-ship-v"></span>
-              <span class="mini-hit"></span>
-              <span class="mini-splash"></span>
-            </div>
-            <div class="game-copy">
-              <p class="card-index">Versus / 2 players</p>
-              <h3>Battleship</h3>
-              <p class="muted">Take shots in the same room. One grid, two captains.</p>
-            </div>
-          </article>
-          <article class="editorial-card game-card">
-            <div class="game-art game-art-pool" aria-hidden="true">
-              <span class="pocket pocket-tl"></span>
-              <span class="pocket pocket-tr"></span>
-              <span class="pocket pocket-bl"></span>
-              <span class="pocket pocket-br"></span>
-              <i class="ball ball-cue"></i>
-              <i class="ball ball-one"></i>
-              <i class="ball ball-eight"></i>
-            </div>
-            <div class="game-copy">
-              <p class="card-index">Versus / 2 players</p>
-              <h3>Pool</h3>
-              <p class="muted">Alternate shots on a shared table. Host state, no custom server.</p>
-            </div>
-          </article>
-          <article class="editorial-card game-card">
-            <div class="game-art game-art-chess" aria-hidden="true">
-              <span class="chess-piece chess-king">♔</span>
-              <span class="chess-piece chess-queen">♕</span>
-              <span class="chess-piece chess-pawn">♙</span>
-              <span class="chess-piece chess-knight">♞</span>
-            </div>
-            <div class="game-copy">
-              <p class="card-index">Versus / 2 players</p>
-              <h3>Chess</h3>
-              <p class="muted">Live turns across a room. Reconnect without losing the board.</p>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
     <section class="pricing-plans pricing-home" aria-labelledby="home-pricing">
       <h2 class="pricing-home-title" id="home-pricing">Pricing</h2>
 ${pricingPlans()}
@@ -426,37 +374,14 @@ ${closingBand()}
 `;
 
 const hostingPanel = `
-        <figure class="host-laptop" aria-label="Pool playing in a browser at play.lokiplay.cc/pool">
-          <div class="host-lid">
-            <div class="host-browser">
-              <div class="host-chrome">
-                <span class="host-lights" aria-hidden="true"><i></i><i></i><i></i></span>
-                <span class="host-url">play.lokiplay.cc/pool</span>
-              </div>
-              <div class="host-table" aria-hidden="true">
-                <span class="pocket pocket-tl"></span>
-                <span class="pocket pocket-tr"></span>
-                <span class="pocket pocket-bl"></span>
-                <span class="pocket pocket-br"></span>
-                <i class="ball ball-cue"></i>
-                <i class="ball ball-one"></i>
-                <i class="ball ball-eight"></i>
-                <i class="host-cue"></i>
-              </div>
-            </div>
-          </div>
-          <div class="host-base"><span></span></div>
+        <figure class="host-laptop">
+          <img class="host-image" src="/assets/loki-hosting-pool.jpg" width="1152" height="864" alt="A live Pool game running in a browser at play.lokiplay.cc/pool, with a copied link and a player joining" loading="lazy">
         </figure>`;
 
 const multiplayerPanel = `
         <figure class="world-net-frame" aria-label="Players around the world connected through a network">
           <video class="world-net" autoplay muted loop playsinline poster="/assets/loki-world-network.webp" src="/assets/loki-world-network.mp4"></video>
         </figure>`;
-
-const distributionPanel = `
-        <div class="grok-montage" aria-label="A montage of vibe-coded games: racing, shooting, and chess.">
-          <video class="dist-montage" autoplay muted loop playsinline poster="/assets/loki-game-montage.webp" src="/assets/loki-game-montage.mp4"></video>
-        </div>`;
 
 const agentsPanel = `
         <div class="docs-panel" aria-label="Agent documentation">
@@ -513,63 +438,33 @@ const productMain = `
         <article class="mp-card" id="public-rooms">
           <h2>Public Rooms</h2>
           <p>Open a game and let anyone looking for a match hop in. Players find a room that's already going and join from the lobby.</p>
-          <div class="mp-scene" aria-hidden="true">
-            <div class="mp-row is-open"><i>B</i><span><strong>Battleship - Game 1</strong><em>Open · 2 spots</em></span><b>Join</b></div>
-            <div class="mp-row"><i>B</i><span><strong>Battleship - Game 2</strong><em>Open · 1 spot</em></span><b>Join</b></div>
-          </div>
+          <div class="mp-scene mp-shot"><img src="/assets/loki-mp-public-rooms.jpg" width="1024" height="768" alt="Public rooms screen listing four open games with Join buttons" loading="lazy"></div>
         </article>
         <article class="mp-card" id="private-rooms">
           <h2>Private Rooms</h2>
           <p>Keep the game to the people you choose. Send a code or a link, and only those players get in.</p>
-          <div class="mp-scene" aria-hidden="true">
-            <p class="mp-code"><span>Room code</span><strong>482917</strong><b>Copy</b></p>
-          </div>
+          <div class="mp-scene mp-shot"><img src="/assets/loki-mp-private-rooms.jpg" width="1024" height="768" alt="Private room screen showing the room code 482917 and a Copy button" loading="lazy"></div>
         </article>
         <article class="mp-card" id="matchmaking">
           <h2>Matchmaking</h2>
           <p>Players who want a game get one. Loki pairs people who are ready and puts them straight into a match.</p>
-          <div class="mp-scene mp-scene-match" aria-hidden="true">
-            <b>Match found</b>
-            <div class="mp-pair"><i>M</i><span></span><i>L</i></div>
-          </div>
+          <div class="mp-scene mp-shot"><img src="/assets/loki-mp-matchmaking.jpg" width="1024" height="768" alt="Match found screen pairing You with Adam" loading="lazy"></div>
         </article>
         <article class="mp-card" id="leaderboard">
           <h2>Leaderboard</h2>
           <p>Every win has a place on the board. Players see who's ahead and come back to take the top spot.</p>
-          <div class="mp-scene" aria-hidden="true">
-            <ol class="mp-ranks">
-              <li><b>1</b><span>Maya</span><em>12 wins</em></li>
-              <li><b>2</b><span>Leo</span><em>9 wins</em></li>
-              <li class="is-you"><b>3</b><span>You</span><em>7 wins</em></li>
-            </ol>
-          </div>
+          <div class="mp-scene mp-shot"><img src="/assets/loki-mp-leaderboard.jpg" width="1024" height="768" alt="Leaderboard screen ranking Adam, Eve and You" loading="lazy"></div>
         </article>
         <article class="mp-card mp-card-wide" id="network">
           <h2>Network</h2>
           <p>Your players can be anywhere and still share one game. If someone steps away, they can come back to the match they left.</p>
-          <div class="mp-scene mp-scene-net" aria-hidden="true">
-            <span><i>Y</i>You</span>
-            <em></em>
-            <span><i>M</i>Maya</span>
-            <em></em>
-            <span class="is-back"><i>L</i>Leo<small>Back in</small></span>
-          </div>
+          <div class="mp-scene mp-shot"><img src="/assets/loki-mp-network.jpg" width="1024" height="768" alt="Room screen showing You, Adam and Eve connected, with Eve back in" loading="lazy"></div>
         </article>
       </div>
     </section>
-    <section class="grok-stage grok-stage-stack" data-active="distribution" aria-label="Distribution and agents">
+    <section class="grok-stage grok-stage-stack" data-active="agents" aria-label="Agents">
       <div class="grok-stage-grid">
         <div class="grok-features">
-          <article class="grok-feature is-centered" id="distribution">
-            <h2>Launch your game to the world through Loki.</h2>
-            <p>Loki Play is the live platform where finished games are listed and played. Players find your game there and open it in the browser, and you earn a share of creator revenue as they play.</p>
-            <ul class="grok-checks">
-              <li>Players browse live games at play.lokiplay.cc.</li>
-              <li>Loki lists your game to the live platform for free</li>
-              <li>Earn creator revenue share whenever players play your game.</li>
-            </ul>
-            <div class="grok-inline-panel">${distributionPanel}</div>
-          </article>
           <article class="grok-feature is-centered" id="agents">
             <h2>Built for the Agentic AI Era.</h2>
             <p>Seamless integration with your development setup in Cursor, Claude Code, Codex and similar agentic tools. Loki gives them one prompt, one package and one protocol. Just leave it to your Agent.</p>
@@ -684,7 +579,8 @@ ${pricingPlans()}
             <tr><td>Games</td><td>1</td><td>20</td><td>Unlimited</td></tr>
             <tr><td>Play links</td><td>1</td><td>20</td><td>Unlimited</td></tr>
             <tr><td>Players per room</td><td>4</td><td>8</td><td>8</td></tr>
-            <tr><td>Public catalog</td><td>—</td><td>Priority listing</td><td>Priority listing</td></tr>
+            <tr><td>Public catalog</td><td>Closed</td><td>Closed</td><td>Closed</td></tr>
+            <tr><td>Unlisted play links</td><td>—</td><td>Yes</td><td>Yes</td></tr>
             <tr><td>Authority</td><td>Host</td><td>Host and server</td><td>Host and server</td></tr>
           </tbody>
         </table>
@@ -787,114 +683,6 @@ const contactMain = `
     </section>
 `;
 
-function legalMain(
-  kicker: string,
-  title: string,
-  intro: string,
-  articles: { heading: string; body: string }[],
-): string {
-  return `
-    <article class="legal-page">
-      <p class="eyebrow">${kicker}</p>
-      <h1>${title}</h1>
-      <p class="lede">${intro}</p>
-      <p class="legal-banner">Placeholder text. This draft is not in force. Final language will be supplied by counsel before launch and will replace every section on this page.</p>
-      ${articles
-        .map(
-          (article) => `
-      <section class="legal-article">
-        <h2>${article.heading}</h2>
-        <p>${article.body}</p>
-      </section>`,
-        )
-        .join("")}
-    </article>`;
-}
-
-const termsMain = legalMain(
-  "Legal / Terms",
-  "Terms of Service",
-  "These terms will govern use of Loki hosting, multiplayer, and related sites.",
-  [
-    {
-      heading: "1. Placeholder agreement",
-      body: "Placeholder text. Describe the binding agreement between Loki Play and the people who create or play games on the service. Do not treat this sentence as an offer or contract.",
-    },
-    {
-      heading: "2. Accounts and access",
-      body: "Placeholder text. Cover account eligibility, credential handling, device authorization, and what happens when an account is suspended.",
-    },
-    {
-      heading: "3. Acceptable use",
-      body: "Placeholder text. Point to the Acceptable Use Policy and state that violating it can end access to hosting or rooms.",
-    },
-    {
-      heading: "4. Hosted games",
-      body: "Placeholder text. Explain that creators license Loki to host immutable builds, and that Loki may refuse or remove a release that fails safety review.",
-    },
-    {
-      heading: "5. Contact",
-      body: "Placeholder text. Replace with the official legal notice address once it exists.",
-    },
-  ],
-);
-
-const privacyMain = legalMain(
-  "Legal / Privacy",
-  "Privacy Policy",
-  "This policy will explain what Loki collects, why, and how long it is kept.",
-  [
-    {
-      heading: "1. Placeholder scope",
-      body: "Placeholder text. List the sites and services this policy covers, including app.lokiplay.cc, play.lokiplay.cc, and the API.",
-    },
-    {
-      heading: "2. Data we will describe",
-      body: "Placeholder text. Account email, session tokens, device-authorization codes, play invites, telemetry needed to run rooms, and operator audit logs.",
-    },
-    {
-      heading: "3. Processors",
-      body: "Placeholder text. Name auth, hosting, storage, and multiplayer processors once counsel has approved the list.",
-    },
-    {
-      heading: "4. Rights and requests",
-      body: "Placeholder text. Access, deletion, and export requests will go through the published contact channel.",
-    },
-    {
-      heading: "5. Changes",
-      body: "Placeholder text. Describe how material changes will be announced before they take effect.",
-    },
-  ],
-);
-
-const aupMain = legalMain(
-  "Legal / Acceptable Use",
-  "Acceptable Use Policy",
-  "This policy will set the lines for games, rooms, and accounts on Loki.",
-  [
-    {
-      heading: "1. Placeholder purpose",
-      body: "Placeholder text. State that Loki is for playable games and that the platform may remove content or shut rooms that cross these rules.",
-    },
-    {
-      heading: "2. Prohibited material",
-      body: "Placeholder text. Illegal content, exploitation, malware, and attempts to escape the game sandbox will be listed in the final policy.",
-    },
-    {
-      heading: "3. Multiplayer conduct",
-      body: "Placeholder text. Harassment, spam, and abuse of invites, chat, or matchmaking will have specific remedies.",
-    },
-    {
-      heading: "4. Enforcement",
-      body: "Placeholder text. Describe warnings, suspension, and the operator kill switch in language counsel approves.",
-    },
-    {
-      heading: "5. Reports",
-      body: "Placeholder text. Replace with the public reporting path before launch.",
-    },
-  ],
-);
-
 const pages: Record<
   MarketingRoute,
   { title: string; description: string; main: string }
@@ -964,17 +752,20 @@ const pages: Record<
   },
   "/terms": {
     title: "Terms of Service — Loki",
-    description: "Placeholder terms of service for Loki Play.",
+    description:
+      "Terms of Service for Loki, operated by Reveflo Technologies Limited.",
     main: termsMain,
   },
   "/privacy": {
     title: "Privacy Policy — Loki",
-    description: "Placeholder privacy policy for Loki Play.",
+    description:
+      "Privacy Policy for Loki, operated by Reveflo Technologies Limited.",
     main: privacyMain,
   },
   "/aup": {
     title: "Acceptable Use Policy — Loki",
-    description: "Placeholder acceptable use policy for Loki Play.",
+    description:
+      "Acceptable Use Policy for Loki, operated by Reveflo Technologies Limited.",
     main: aupMain,
   },
 };

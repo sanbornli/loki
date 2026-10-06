@@ -16,11 +16,6 @@ export const productSections = [
     description: "Rooms, invites, and shared state without a server project.",
   },
   {
-    id: "distribution",
-    label: "Distribution",
-    description: "Private while you build. Public when you are ready.",
-  },
-  {
     id: "agents",
     label: "Agent SDK",
     description: "One source of truth for coding agents.",
@@ -1303,6 +1298,26 @@ export const marketingStyles = `
   line-height: 1.35;
 }
 
+.mp-scene.mp-shot {
+  display: block;
+  padding: 0;
+  overflow: visible;
+  border-radius: 0;
+  background: transparent;
+}
+
+.mp-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 0;
+}
+
+.mp-card-wide .mp-shot img {
+  max-width: 34rem;
+  margin: 0 auto;
+}
+
 .mp-card > p {
   max-width: 38rem;
   margin: 0.45rem 0 0;
@@ -1567,101 +1582,11 @@ export const marketingStyles = `
   color: #1c1a16;
 }
 
-.host-lid {
-  padding: 0.55rem 0.55rem 0.7rem;
-  border-radius: 1.05rem 1.05rem 0.35rem 0.35rem;
-  background: #e4dfd6;
-  box-shadow: 0 0 0 1px #8d877c, 0 22px 48px rgba(0, 0, 0, 0.35);
-}
-
-.host-browser {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  aspect-ratio: 16 / 10.5;
-  border-radius: 0.55rem;
-  background: #10281c;
-}
-
-.host-chrome {
-  display: grid;
-  flex: none;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.7rem;
-  align-items: center;
-  padding: 0.55rem 0.7rem;
-  background: #ece7df;
-}
-
-.host-lights { display: flex; gap: 0.32rem; }
-.host-lights i { width: 0.55rem; height: 0.55rem; border-radius: 50%; }
-.host-lights i:nth-child(1) { background: #e15b4a; }
-.host-lights i:nth-child(2) { background: #e2b23a; }
-.host-lights i:nth-child(3) { background: #59b36a; }
-
-.host-url {
+.host-image {
   display: block;
-  padding: 0.42rem 0.85rem;
-  border-radius: 999px;
-  background: #fff;
-  color: #1c1a16;
-  font-family: var(--mono);
-  font-size: clamp(0.95rem, 2vw, 1.2rem);
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.host-table {
-  position: relative;
-  flex: 1;
-  margin: 0.75rem;
-  border-radius: 0.35rem;
-  background: radial-gradient(ellipse at center, #1f6b45 0 72%, #0e2a1c 74% 100%);
-  box-shadow: inset 0 0 0 0.42rem #c8b48a;
-}
-
-.host-table .pocket,
-.host-table .ball {
-  width: 1.35rem;
-  height: 1.35rem;
-}
-
-.host-table .pocket-tl { top: 0.55rem; left: 0.55rem; }
-.host-table .pocket-tr { top: 0.55rem; right: 0.55rem; }
-.host-table .pocket-bl { bottom: 0.55rem; left: 0.55rem; }
-.host-table .pocket-br { bottom: 0.55rem; right: 0.55rem; }
-
-.host-cue {
-  position: absolute;
-  top: 34%;
-  left: 4%;
-  width: 28%;
-  height: 0.28rem;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #f4efe3, #c47a12 18%, #8a5a28);
-  transform: rotate(18deg);
-  transform-origin: right center;
-}
-
-.host-base {
-  position: relative;
-  height: 0.85rem;
-  margin: 0 8%;
-  border-radius: 0 0 0.85rem 0.85rem;
-  background: linear-gradient(#6a655e, #3e3b36);
-}
-
-.host-base span {
-  position: absolute;
-  top: 0;
-  left: 18%;
-  width: 64%;
-  height: 0.28rem;
-  border-radius: 0 0 0.35rem 0.35rem;
-  background: #2a2824;
+  mix-blend-mode: lighten;
+  width: 100%;
+  height: auto;
 }
 
 .world-net-frame {
@@ -1676,7 +1601,7 @@ export const marketingStyles = `
   object-position: center;
   border-radius: 1.15rem;
   background: #0c0b09;
-  box-shadow: 0 0 0 1px #2c2a26, 0 22px 48px rgba(0, 0, 0, 0.38);
+  box-shadow: none;
 }
 
 .grok-section-intro {
@@ -2255,7 +2180,7 @@ export const marketingStyles = `
 }
 
 .ide-file-new {
-  opacity: 0;
+    opacity: 0;
   animation: ide-file 14s linear infinite;
 }
 
@@ -2309,7 +2234,7 @@ export const marketingStyles = `
 .tok-s { color: #1f6b58; }
 
 .ide-added {
-  opacity: 0;
+    opacity: 0;
   background: rgba(240, 167, 46, 0.16);
   animation: ide-added 14s linear infinite;
 }
@@ -2669,6 +2594,8 @@ export const marketingStyles = `
 
 .feature-row,
 .feature-row-flip {
+  position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: clamp(2rem, 6vw, 5rem);
@@ -3001,14 +2928,21 @@ export const marketingStyles = `
   container-type: inline-size;
 }
 
-.feature-row-flip .feature-copy h3.play-title {
+.feature-row:not(.feature-row-flip) .feature-copy:has(h3.play-title) {
+  container-type: inline-size;
+}
+
+.feature-copy h3.play-title {
   width: max-content;
   max-width: 100%;
+  font-size: min(var(--section-title-size), 12.2cqi);
+  white-space: nowrap;
+}
+
+.feature-row-flip .feature-copy h3.play-title {
   margin-right: 0;
   margin-left: auto;
-  font-size: min(var(--section-title-size), 12.2cqi);
   text-align: right;
-  white-space: nowrap;
 }
 
 .feature-row-flip .feature-stage,
@@ -3054,9 +2988,32 @@ export const marketingStyles = `
   margin-bottom: 1.4rem;
 }
 
+.feature-copy {
+  isolation: isolate;
+}
+
+.feature-copy h3 {
+  color: var(--paper);
+}
+
+.feature-copy > p:not(.card-index) {
+  color: var(--muted);
+}
+
 .feature-copy .feature-list {
   max-width: 28rem;
   font-size: 0.95rem;
+}
+
+.card-index .soon-tag {
+  display: inline-flex;
+  min-height: 0;
+  margin-left: 0.55rem;
+  padding: 0.16rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.67rem;
+  line-height: 1.4;
+  vertical-align: 0.05em;
 }
 
 .feature-stage {
@@ -4802,9 +4759,11 @@ export const marketingStyles = `
 }
 
 .legal-page {
-  width: min(100% - var(--page-inset), 46rem);
+  width: min(100% - var(--page-inset), var(--page-max));
   margin: 0 auto;
-  padding: clamp(3rem, 7vw, 5.5rem) 0 6rem;
+  padding: clamp(2.5rem, 6vw, 4.5rem) 0 6rem;
+  color: var(--paper);
+  text-align: left;
 }
 
 .legal-banner,
@@ -4818,33 +4777,86 @@ export const marketingStyles = `
 }
 
 .legal-page h1 {
-  max-width: 16ch;
-  margin: 0 0 0.8rem;
-  font-size: clamp(2.4rem, 5vw, 4.2rem);
-  letter-spacing: -0.06em;
-  line-height: 0.95;
+  max-width: none;
+  margin: 0 0 0.35rem;
+  color: var(--paper);
+  font-size: 1.5rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
 }
 
-.legal-page .lede {
-  margin-top: 0;
+.legal-updated {
+  margin: 0.35rem 0 0.75rem;
+  color: var(--paper);
+  font-size: 0.8125rem;
+  line-height: 1.35;
 }
 
 .legal-article {
-  margin-top: 2.4rem;
-  padding-top: 1.6rem;
-}
-
-.legal-article h2 {
-  margin: 0 0 0.8rem;
-  font-size: 1.15rem;
-  font-weight: 620;
-  letter-spacing: -0.03em;
-}
-
-.legal-article p {
   margin: 0;
-  color: var(--muted);
-  line-height: 1.7;
+  padding: 0;
+}
+
+.legal-page h2,
+.legal-page h3 {
+  color: var(--paper);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  scroll-margin-top: calc(var(--header-height) + 1rem);
+}
+
+.legal-page h2 {
+  margin: 1.35rem 0 0.45rem;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.legal-page h3 {
+  margin: 1.1rem 0 0.35rem;
+  font-size: 0.875rem;
+  line-height: 1.3;
+}
+
+.legal-meta p,
+.legal-article p {
+  margin: 0.45rem 0;
+  color: var(--paper);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.legal-table-wrap {
+  overflow-x: auto;
+  margin: 1.25rem 0;
+}
+
+.legal-article table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+}
+
+.legal-article th,
+.legal-article td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.28rem 0.75rem 0.28rem 0;
+  text-align: left;
+  vertical-align: top;
+  color: var(--paper);
+}
+
+.legal-article th {
+  font-weight: 500;
+}
+
+.legal-meta a,
+.legal-article a {
+  color: var(--paper);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--paper) 20%, transparent);
+  padding-bottom: 1px;
 }
 
 .contact-grid {
@@ -4967,8 +4979,6 @@ export const marketingStyles = `
   .pricing-card,
   .pricing-custom,
   .pricing-custom-copy,
-  .legal-page,
-  .legal-article,
   .game-copy,
   .editorial-card,
   .capability-card,
@@ -5008,7 +5018,8 @@ export const marketingStyles = `
     margin-left: auto;
   }
 
-  .feature-row-flip .feature-copy h3.play-title {
+  .feature-row-flip .feature-copy h3.play-title,
+  .feature-row:not(.feature-row-flip) .feature-copy h3.play-title {
     width: auto;
     margin-right: auto;
     margin-left: auto;
@@ -5295,7 +5306,6 @@ function header(path: string): string {
             .join("")}
         </div>
       </div>
-      <a href="/examples"${currentAttr(path, "/examples")}>Examples</a>
       <a href="/pricing"${currentAttr(path, "/pricing")}>Pricing</a>
       <a href="https://docs.lokiplay.cc/">Docs ↗</a>
     </nav>
@@ -5316,15 +5326,9 @@ function header(path: string): string {
             </div>
           </details>
         </div>
-        <a href="/examples"${currentAttr(path, "/examples")}>Examples</a>
         <a href="/pricing"${currentAttr(path, "/pricing")}>Pricing</a>
         <a href="https://docs.lokiplay.cc/">Docs ↗</a>
       </div>
-    </details>
-    <div class="marketing-actions">
-      <a class="button button-quiet" href="https://app.lokiplay.cc/login">Creator Log in</a>
-      <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started</a>
-    </div>
   </header>`;
 }
 
@@ -5344,12 +5348,10 @@ function footer(path: string): string {
                 `<a href="${productSectionHref(section.id)}"${currentAttr(path, `/${section.id}`)}>${section.label}</a>`,
             )
             .join("")}
-          <a href="/examples"${currentAttr(path, "/examples")}>Examples</a>
           <a href="/pricing"${currentAttr(path, "/pricing")}>Pricing</a>
         </div></div>
         <div class="footer-column"><h3>Developers</h3><div class="footer-links">
           <a href="https://docs.lokiplay.cc/">Docs</a>
-          <a href="https://docs.lokiplay.cc/quickstart">Quickstart</a>
           <a href="https://docs.lokiplay.cc/sdk">SDK docs</a>
           <a href="https://docs.lokiplay.cc/mcp">MCP</a>
         </div></div>
