@@ -384,10 +384,12 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(terms, /Terms of Service/);
   const privacy = renderMarketingPage(config, "/privacy");
   assert.match(privacy, /privacy-2026-10-07/);
+  assert.doesNotMatch(privacy, /Registered office:/);
   assert.doesNotMatch(privacy, /Placeholder text/);
   const aup = renderMarketingPage(config, "/aup");
   assert.match(aup, /aup-2026-10-07/);
   assert.match(aup, /pornography/);
+  assert.doesNotMatch(aup, /Registered office:/);
   assert.doesNotMatch(aup, /Placeholder text/);
   const product = renderMarketingPage(config, "/product");
   assert.match(product, /From side project/);

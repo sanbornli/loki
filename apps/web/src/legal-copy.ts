@@ -230,10 +230,6 @@ export const privacyMain = `
       <p class="legal-updated">Last updated: 7 October 2026</p>
       <section class="legal-article">
         <h2 id="introduction">Introduction</h2>
-        <p>Loki</p>
-        <p>Reveflo Technologies Limited</p>
-        <p>Company number: 74466581</p>
-        <p>Registered office: The Chelsea, 69 Jervois Street, Sheung Wan, Hong Kong</p>
         <p>Effective date: 1 September 2026</p>
         <p>Version: privacy-2026-10-07</p>
         <p>This policy explains how Reveflo Technologies Limited, a company incorporated in Hong Kong, handles personal data for Loki. We are a data user under the Personal Data (Privacy) Ordinance (Cap. 486) (“PDPO”).</p>
@@ -555,10 +551,6 @@ export const aupMain = `
       <p class="legal-updated">Last updated: 7 October 2026</p>
       <section class="legal-article">
         <h2 id="introduction">Introduction</h2>
-        <p>Loki</p>
-        <p>Reveflo Technologies Limited</p>
-        <p>Company number: 74466581</p>
-        <p>Registered office: The Chelsea, 69 Jervois Street, Sheung Wan, Hong Kong</p>
         <p>Effective date: 1 September 2026</p>
         <p>Version: aup-2026-10-07</p>
         <p>This Acceptable Use Policy is part of the Terms of Service. It applies to uploads, play, chat, leaderboards, SDKs, APIs, the command-line tool, GitHub connections, step modules, and guest access.</p>
