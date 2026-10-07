@@ -23,7 +23,6 @@ export const docsRoutes = [
   "/overlay",
   "/hosted-session",
   "/mobile",
-  "/native",
   "/agents",
   "/mcp",
   "/errors",
@@ -85,7 +84,6 @@ const navGroups: Array<{ label: string; items: Array<{ href: DocsRoute; label: s
         { href: "/overlay", label: "Overlay" },
         { href: "/hosted-session", label: "Hosted session" },
         { href: "/mobile", label: "Mobile" },
-        { href: "/native", label: "Native SDKs" },
       ],
     },
     {

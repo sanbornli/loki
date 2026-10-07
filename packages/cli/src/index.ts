@@ -1030,8 +1030,58 @@ async function ship(directory: string, requestedProjectId?: string): Promise<voi
   console.log(`Playable URL: ${playableUrl}`);
 }
 
+export const WEB_ONLY_MESSAGE =
+  "Loki hosts finished web JavaScript games. Support for Unity, Godot, iOS, and Android are coming soon.";
+
+/**
+ * Names the engine or platform when a folder is a native or engine project
+ * root, which Loki cannot host yet. Returns undefined for anything else.
+ */
+export async function detectUnsupportedProject(
+  directory: string,
+): Promise<string | undefined> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    return undefined;
+  }
+  const has = (name: string) => names.includes(name);
+  if (has("project.godot")) return "Godot";
+  if (has("Assets") && has("ProjectSettings")) return "Unity";
+  if (names.some((name) => /\.(?:csproj|sln)$/i.test(name))) return "Unity";
+  if (
+    has("Package.swift") ||
+    names.some((name) => /\.(?:xcodeproj|xcworkspace)$/i.test(name))
+  ) {
+    return "iOS";
+  }
+  if (
+    has("build.gradle") ||
+    has("build.gradle.kts") ||
+    has("settings.gradle") ||
+    has("settings.gradle.kts") ||
+    has("AndroidManifest.xml")
+  ) {
+    return "Android";
+  }
+  return undefined;
+}
+
+async function assertWebProject(directory: string): Promise<void> {
+  const engine = await detectUnsupportedProject(directory);
+  if (engine) {
+    throw new Error(
+      `${WEB_ONLY_MESSAGE} This folder looks like a ${engine} project, so nothing was changed.`,
+    );
+  }
+}
+
 async function main(argv: string[]): Promise<void> {
   const { command, directory, projectId, port } = parseArguments(argv);
+  if (command === "init" || command === "connect" || command === "ship") {
+    await assertWebProject(directory);
+  }
   if (command === "login") {
     const endpoint = process.env.LOKI_API_URL;
     if (!endpoint) throw new Error("LOKI_API_URL is required");

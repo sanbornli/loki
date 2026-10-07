@@ -25,6 +25,7 @@ import { renderCreatorPage } from "../apps/web/src/creator-page.js";
 import { renderDevicePage } from "../apps/web/src/device-page.js";
 import {
   docsRoutes,
+  isDocsRoute,
   llmsTxt,
   renderDocsPage,
 } from "../apps/web/src/docs-page.js";
@@ -457,7 +458,8 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(renderDocsPage(config, "/overlay"), /does not list, create, or join public rooms/);
   assert.match(llmsTxt, /does not add a public lobby screen/);
   assert.match(renderDocsPage(config, "/agents"), /Do not report the integration complete/);
-  assert.match(renderDocsPage(config, "/native"), /cc\.lokiplay:loki-sdk:0\.5\.0/);
+  assert.equal(isDocsRoute("/native"), false);
+  assert.doesNotMatch(docsHome, /Native SDKs/);
   assert.match(
     renderDocsPage(config, "/presence-chat-scores"),
     /An empty members list is incomplete, not everyone left/,

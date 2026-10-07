@@ -5,7 +5,7 @@ import { GameManifestSchema } from "../../../packages/protocol/src/index.js";
 import { BillingService } from "./billing.js";
 import { applyPlanToTenantConfig } from "./plans.js";
 import { PostgresCliDeviceAuthorizationService } from "./cli-device-auth.js";
-import { loadProviderEnvironment } from "./config.js";
+import { loadProviderEnvironment, type ProviderEnvironment } from "./config.js";
 import { DashboardService } from "./dashboard.js";
 import { PostgresDeploymentDedupService } from "./deployment-dedup.js";
 import { DeploymentService } from "./deployments.js";
@@ -28,6 +28,7 @@ import { PostgresSafetyService, SecurityReviewWorker } from "./safety.js";
 import { startApiServer } from "./server.js";
 import { SupabaseAuthVerifier } from "./supabase-auth.js";
 import { SessionTokenService } from "./tokens.js";
+import { mergeVendorRates, VendorUsageService } from "./vendor-usage.js";
 
 const environment = loadProviderEnvironment(process.env);
 
@@ -65,7 +66,90 @@ const hostingAuth = new PostgresHostingAuthorization(
   new PlayInviteSigner(playInviteKey),
 );
 const guestResume = new GuestResumeSigner(playInviteKey);
-const dashboard = new DashboardService(pool);
+const nakamaDatabase = environment.NAKAMA_DATABASE_URL
+  ? new Pool({
+      connectionString: environment.NAKAMA_DATABASE_URL,
+      max: 1,
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 10_000,
+    })
+  : undefined;
+nakamaDatabase?.on("error", () => {});
+const vendorRates = (() => {
+  if (!environment.LOKI_VENDOR_RATES_JSON) return undefined;
+  try {
+    return mergeVendorRates(JSON.parse(environment.LOKI_VENDOR_RATES_JSON));
+  } catch {
+    throw new Error("LOKI_VENDOR_RATES_JSON is not valid JSON");
+  }
+})();
+function supabaseUsageSources(environment: ProviderEnvironment): {
+  orgSlug: string;
+  projectRef?: string;
+  label: string;
+}[] {
+  const orgSlug = environment.LOKI_SUPABASE_ORG_SLUG!;
+  const sources: { orgSlug: string; projectRef?: string; label: string }[] = [];
+  if (environment.LOKI_SUPABASE_PLATFORM_PROJECT_REF) {
+    sources.push({
+      orgSlug,
+      projectRef: environment.LOKI_SUPABASE_PLATFORM_PROJECT_REF,
+      label: "Platform",
+    });
+  }
+  if (environment.LOKI_SUPABASE_NAKAMA_PROJECT_REF) {
+    sources.push({
+      orgSlug: environment.LOKI_SUPABASE_NAKAMA_ORG_SLUG ?? orgSlug,
+      projectRef: environment.LOKI_SUPABASE_NAKAMA_PROJECT_REF,
+      label: "Nakama",
+    });
+  }
+  if (sources.length === 0) sources.push({ orgSlug, label: "Supabase" });
+  return sources;
+}
+
+const vendorUsage = new VendorUsageService({
+  railway:
+    environment.LOKI_RAILWAY_API_TOKEN && environment.LOKI_RAILWAY_PROJECT_ID
+      ? {
+          token: environment.LOKI_RAILWAY_API_TOKEN,
+          projectId: environment.LOKI_RAILWAY_PROJECT_ID,
+        }
+      : undefined,
+  cloudflare:
+    environment.LOKI_CLOUDFLARE_API_TOKEN &&
+    environment.LOKI_R2_ACCOUNT_ID &&
+    environment.LOKI_R2_BUCKET
+      ? {
+          token: environment.LOKI_CLOUDFLARE_API_TOKEN,
+          accountId: environment.LOKI_R2_ACCOUNT_ID,
+          bucket: environment.LOKI_R2_BUCKET,
+          zoneId: environment.LOKI_CLOUDFLARE_ZONE_ID,
+          zoneName: environment.LOKI_GAME_BASE_DOMAIN,
+        }
+      : undefined,
+  supabaseUsage:
+    environment.SUPABASE_ACCESS_TOKEN && environment.LOKI_SUPABASE_ORG_SLUG
+      ? {
+          token: environment.SUPABASE_ACCESS_TOKEN,
+          sources: supabaseUsageSources(environment),
+        }
+      : undefined,
+  nakama:
+    environment.LOKI_NAKAMA_CONSOLE_ORIGIN &&
+    environment.NAKAMA_CONSOLE_USERNAME &&
+    environment.NAKAMA_CONSOLE_PASSWORD
+      ? {
+          origin: environment.LOKI_NAKAMA_CONSOLE_ORIGIN,
+          username: environment.NAKAMA_CONSOLE_USERNAME,
+          password: environment.NAKAMA_CONSOLE_PASSWORD,
+        }
+      : undefined,
+  platformDatabase: pool,
+  nakamaDatabase,
+  rates: vendorRates,
+});
+const dashboard = new DashboardService(pool, vendorUsage);
 const deploymentDedup = new PostgresDeploymentDedupService(pool);
 const githubConnections = new PostgresGitHubConnectionService(pool);
 const githubApp = environment.LOKI_GITHUB_APP_SLUG
@@ -297,6 +381,7 @@ const shutdown = async (): Promise<void> => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
   await pool.end();
+  await nakamaDatabase?.end();
   await observability.shutdown();
 };
 

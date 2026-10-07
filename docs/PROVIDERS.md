@@ -146,6 +146,52 @@ already passes both through to Nakama's runtime env only when both are set.
 Cloudflare Access is an optional extra boundary for staging and the operator
 console. It is not creator/player identity.
 
+## Operator vendor usage
+
+The operator console's Limits page reads what each vendor is charging this
+month. Every variable below is optional on the `api` service; a vendor without
+its variables is shown as "Not connected" and the rest still load.
+
+- Railway: `LOKI_RAILWAY_API_TOKEN` (an account or workspace token) and
+  `LOKI_RAILWAY_PROJECT_ID`. The same token reads the workspace plan. Hobby
+  is $5 per month and Pro is $20, and that fee is a usage credit: Railway
+  charges the greater of the fee and usage, so the Limits page does not add
+  it on top of the usage estimate.
+- Cloudflare R2: `LOKI_CLOUDFLARE_API_TOKEN` with Account Analytics: Read and
+  Zone Analytics: Read. The account and bucket come from
+  `LOKI_R2_ACCOUNT_ID` and `LOKI_R2_BUCKET`. R2 has no monthly subscription.
+- Cloudflare proxy and DNS: the same token, plus `LOKI_CLOUDFLARE_ZONE_ID`.
+  The zone name comes from `LOKI_GAME_BASE_DOMAIN`. This reads requests and
+  bandwidth for `*.lokiplay.cc` (play, the API, and each game) and the zone's
+  DNS queries. The marketing site on the zone apex is not included. The zone
+  plan and its monthly price are read from the zone itself. Bandwidth and
+  DNS are included on the standard Cloudflare plans, so those prices stay
+  $0 until `cdnPerGb` or `dnsPerMillionQueries` is set in
+  `LOKI_VENDOR_RATES_JSON`.
+- Supabase: database size and sign-ins are read from the platform database
+  (`SUPABASE_DATABASE_URL`) and the Nakama database
+  (`NAKAMA_DATABASE_URL`). Egress bytes are not available: the dashboard
+  usage API rejects an account token, and the Management API does not return
+  byte totals yet. When it does, read them with a token that has analytics
+  read. `SUPABASE_ACCESS_TOKEN` and `LOKI_SUPABASE_ORG_SLUG` are optional and
+  only read the organization plan (`GET /v1/organizations/{slug}`). Published
+  subscription fees are Free $0, Pro $25, and Team $599 per organization.
+  Compute for each project is billed on top of that and is not included.
+  `LOKI_SUPABASE_PLATFORM_PROJECT_REF` and
+  `LOKI_SUPABASE_NAKAMA_PROJECT_REF` name the two databases; add
+  `LOKI_SUPABASE_NAKAMA_ORG_SLUG` when Nakama is in a different organization.
+- Nakama: `LOKI_NAKAMA_CONSOLE_ORIGIN` (the console port, 7351, over Railway
+  private networking), `NAKAMA_CONSOLE_USERNAME`, `NAKAMA_CONSOLE_PASSWORD`.
+  Nakama has no subscription of its own.
+- `LOKI_VENDOR_RATES_JSON` (optional) overrides the list prices used for the
+  usage estimates, for example
+  `{"supabase":{"fixedMonthlyUsdPerProject":25},"railway":{"fixedMonthlyUsd":20}}`.
+  Leave the subscription fees out of this object. The Limits page reads those
+  from each provider and shows them separately.
+
+Dollar figures are estimates at list prices. Reconcile them with each vendor's
+invoice before using them for pricing decisions.
+
 ## Coturn (WebRTC TURN relay)
 
 WebRTC's host-star data channel is STUN-only by default: a guest that cannot

@@ -94,7 +94,7 @@ const pages: Record<
     title: "Loki docs",
     description:
       "Host a finished browser game, add rooms, and ship a playable URL with one SDK and one CLI.",
-    lede: "Loki hosts the finished browser build, scans it, isolates it, and runs rooms on the same playable URL. You keep the game. You still fine-tune that game after the package lands.",
+    lede: "Loki hosts finished web JavaScript games. Support for Unity, Godot, iOS, and Android are coming soon. Loki hosts the finished browser build, scans it, isolates it, and runs rooms on the same playable URL. You keep the game. You still fine-tune that game after the package lands.",
     aside: aside([
       {
         label: "Humans",
@@ -174,7 +174,7 @@ const pages: Record<
             ],
           )}
           <h2>What is in Layer 1</h2>
-          <p>Private and unlisted hosting. Immutable releases on a stable play link. Host-authoritative rooms, and opt-in server authority when the build includes a pure step module. Invites, public rooms, and fill-N matchmaking. Presence. Lobby and match chat. Private leaderboards. Reconnect and host migration. JavaScript SDK. Native clients for synchronized rooms.</p>
+          <p>Private and unlisted hosting. Immutable releases on a stable play link. Host-authoritative rooms, and opt-in server authority when the build includes a pure step module. Invites, public rooms, and fill-N matchmaking. Presence. Lobby and match chat. Private leaderboards. Reconnect and host migration. JavaScript SDK.</p>
           <h2>What is not in Layer 1</h2>
           <p>A public catalog listing. Tips, ads, and payouts. Friends, parties, and public leaderboards. Ranked anti-cheat. Native clients in realtime rooms. A creator-uploaded Node server. Server authority is a Loki-run step module, not your own backend.</p>
 `,
@@ -728,39 +728,6 @@ const client = await createHostedLokiClient({
           </ul>
 `,
   },
-  "/native": {
-    title: "Native SDKs — Loki docs",
-    description: "Swift, Kotlin, and Unity speak protocol v1 synchronized rooms.",
-    lede: `Native packages exist at ${v} for host-authoritative synchronized play. They cannot join realtime rooms yet.`,
-    main: `
-          ${table(
-            ["Client", "Install", "Status"],
-            [
-              [
-                "JavaScript",
-                `<code>@lokiplay/sdk@${v}</code>`,
-                "Production. Synchronized and realtime.",
-              ],
-              [
-                "Swift",
-                `SPM <code>https://github.com/sanbornli/loki.git</code> version <code>${v}</code>, product <code>LokiSDK</code>`,
-                "Synchronized rooms. Notify lifecycle with <code>notifyLifecycle(visible:online:)</code>.",
-              ],
-              [
-                "Kotlin",
-                `<code>cc.lokiplay:loki-sdk:${v}</code>`,
-                "Synchronized rooms. Notify lifecycle with <code>notifyLifecycle(visible, online)</code>.",
-              ],
-              [
-                "Unity",
-                `<code>https://github.com/sanbornli/loki.git?path=/clients/unity#v${v}</code>`,
-                "Synchronized rooms. Notify lifecycle with <code>NotifyLifecycle(visible, online)</code>.",
-              ],
-            ],
-          )}
-          <p>Native wrappers match the JavaScript synchronized API: create, join, dispatch, leave, reconnect, close. Do not offer <code>createRealtimeRoom()</code> on a cross-client mode. Do not talk to Nakama directly.</p>
-`,
-  },
   "/agents": {
     title: "Agent integration — Loki docs",
     description: "Canonical rules. No invented servers. Fine-tune after install.",
@@ -1009,7 +976,7 @@ Installing Loki is not a finished game. Each title still requires fine-tuning af
 - Login: LOKI_API_URL=https://api.lokiplay.cc npx lokiplay@${v} login
 - No inline scripts, remote fonts, or forms.
 - Layer 2 public catalog is closed.
-- Native Swift/Kotlin/Unity ${v} clients support synchronized rooms only.
+- Loki hosts finished web JavaScript games only. Support for Unity, Godot, iOS, and Android are coming soon. Do not install Loki into a native or engine project.
 
 ## Full docs
 https://docs.lokiplay.cc/llms-full.txt

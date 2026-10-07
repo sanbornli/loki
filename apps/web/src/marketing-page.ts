@@ -121,6 +121,7 @@ const homeMain = `
           <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started</a>
           <a class="button" href="#workflow">See how it works</a>
         </div>
+        <p class="platform-note">Loki hosts finished web JavaScript games. Support for Unity, Godot, iOS, and Android are coming soon.</p>
       </div>
       <figure class="game-stage hero-montage" aria-label="A montage of vibe-coded games: racing, shooting, and chess.">
         <video class="dist-montage" autoplay muted loop playsinline poster="/assets/loki-game-montage.webp" src="/assets/loki-game-montage.mp4"></video>
@@ -365,6 +366,38 @@ ${agentMarquee()}
 ${pricingPlans()}
     </section>
 
+    <section class="home-faq" aria-labelledby="faq-title">
+      <div class="home-faq-inner">
+        <h2 id="faq-title">FAQs</h2>
+        <div class="faq-list">
+          <details class="faq-item" open>
+            <summary>What is Loki?</summary>
+            <p>Loki is infrastructure created for AI agent-built games. It provides these games with instant hosting, game-sharing and online multiplayer so you don't need to wire together multiple services and spend time back and forth configuring them.</p>
+          </details>
+          <details class="faq-item">
+            <summary>How does an agent add Loki?</summary>
+            <p>Log in to Loki. Create a project and paste the provided prompt into Cursor, Claude Code, Codex, or a similar agent. The agent installs the SDK, follows the Loki rules, and ships the build automatically. You only need to do this once.</p>
+          </details>
+          <details class="faq-item">
+            <summary>What do players get?</summary>
+            <p>A stable play link that they can immediately use to play your game, and multiplayer service so they can play with each other wherever they are. Later releases ship to the same destination, so you can keep updating the game without sending players a new link each time.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Can friends play a game that is still rough?</summary>
+            <p>Yes. The free plan includes private hosting, so friends can play while the game is still a draft. You choose when it is ready for more.</p>
+          </details>
+          <details class="faq-item">
+            <summary>What is host authority, and what is server authority?</summary>
+            <p>Host authority runs the match on a player's computer. That is the default on every plan. Server authority is on Loki and Loki Pro: you ship a pure step module, and Loki runs that step for the room.</p>
+          </details>
+          <details class="faq-item">
+            <summary>How much does Loki cost?</summary>
+            <p>Loki is free to start on the free plan, which includes one game, two rooms at the same time, and four players per room.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
 ${closingBand()}
 `;
 
@@ -469,6 +502,21 @@ const productMain = `
               <li>Validate and deploy your game all within your existing setup. No separate application needed.</li>
             </ul>
             <div class="grok-inline-panel">${agentsPanel}</div>
+          </article>
+        </div>
+      </div>
+    </section>
+    <section class="grok-stage grok-stage-stack" data-active="platforms" aria-label="Platforms">
+      <div class="grok-stage-grid">
+        <div class="grok-features">
+          <article class="grok-feature is-centered" id="platforms">
+            <h2>Built for web JavaScript games today.</h2>
+            <p>Loki hosts finished web JavaScript games. Support for Unity, Godot, iOS, and Android are coming soon. If your game is built with one of those, hold off on installing until it is supported.</p>
+            <ul class="grok-checks">
+              <li>Ship a finished browser build: HTML, JavaScript, and the assets it loads.</li>
+              <li>Rooms, invites, and shared state come from the JavaScript SDK.</li>
+              <li>Unity, Godot, iOS, and Android support is on the way.</li>
+            </ul>
           </article>
         </div>
       </div>
@@ -594,50 +642,19 @@ const aboutMain = `
     <section class="page-hero" aria-labelledby="page-title">
       <div class="page-hero-inner">
         <div>
-          <p class="eyebrow">Company / About</p>
-          <h1 class="display" id="page-title">Games need players, not another backend.</h1>
-          <p class="lede">Loki exists because vibe-coded games die at localhost. Hosting, rooms, chat, leaderboards, and discovery were five separate chores. They should be one plugin.</p>
+          <p class="eyebrow">About</p>
+          <h1 class="display" id="page-title">Built so agents can ship a game people play.</h1>
+          <p class="lede">Loki is an agent-friendly product for game creators. Hosting and multiplayer live in one place, so an agent can add both with ease.</p>
         </div>
       </div>
     </section>
-    <section class="marketing-section" aria-labelledby="about-problem">
-      <div class="marketing-section-inner two-col">
-        <div>
-          <p class="eyebrow">The gap</p>
-          <h2 id="about-problem">Agents write servers. Players never arrive.</h2>
-          <p class="lede">A coding agent asked for multiplayer will invent a disposable server and hardcode localhost. Vercel hosts files. Colyseus hosts rooms. itch.io hosts discovery. None of them is the whole path.</p>
-        </div>
-        <ul class="plain-list">
-          <li>Loki hosts the playable game</li>
-          <li>Loki runs the rooms</li>
-          <li>Loki can list the game when you ask</li>
-          <li>Creators do not upload a Node server</li>
-        </ul>
-      </div>
-    </section>
-    <section class="marketing-section" aria-labelledby="principles-title">
-      <div class="marketing-section-inner">
-        <div class="split-heading">
-          <p class="eyebrow">How we decide</p>
-          <h2 id="principles-title">A short set of rules.</h2>
-        </div>
-        <div class="editorial-grid">
-          <article class="editorial-card">
-            <p class="card-index">01</p>
-            <h3>Layer 1 is open to drafts.</h3>
-            <p>Private deploy does not require a polished game. Friends can play while it is still ugly.</p>
-          </article>
-          <article class="editorial-card">
-            <p class="card-index">02</p>
-            <h3>Layer 2 is optional.</h3>
-            <p>Public listing is reviewed. You opt in. Technical fitness is Loki’s problem; completeness is yours.</p>
-          </article>
-          <article class="editorial-card">
-            <p class="card-index">03</p>
-            <h3>Production play stays here.</h3>
-            <p>The live URL is a Loki URL. Agents integrate Loki instead of inventing another backend.</p>
-          </article>
-        </div>
+    <section class="marketing-section" aria-labelledby="vision-title">
+      <div class="marketing-section-inner about-vision">
+        <p class="eyebrow">The vision</p>
+        <h2 id="vision-title">From a local prototype to a game with friends in it.</h2>
+        <p>Games are being written in conversation now. The creator directs. The agent writes. Loki is the product that agent can actually use: one SDK, one play link, and rooms that open when the prompt asks for them.</p>
+        <p>Hosting and multiplayer belong in the same step. Paste the project prompt into the agent you already use. It installs Loki, ships the build, and hands back a link. Players open it. Friends join the room. The match stays in sync. You stay in the editor.</p>
+        <p>That is the vision. A game should be able to leave localhost tonight, because the path was made for agents and for the people directing them.</p>
       </div>
     </section>
 ${closingBand()}
@@ -647,31 +664,9 @@ const contactMain = `
     <section class="page-hero" aria-labelledby="page-title">
       <div class="page-hero-inner">
         <div>
-          <p class="eyebrow">Company / Contact</p>
-          <h1 class="display" id="page-title">Talk to us before launch.</h1>
-          <p class="lede">This page is a placeholder. Final contact details, hours, and intake instructions will be published before launch.</p>
-        </div>
-      </div>
-    </section>
-    <section class="marketing-section" aria-labelledby="contact-grid-title">
-      <div class="marketing-section-inner">
-        <h2 class="sr-only" id="contact-grid-title">Contact placeholder</h2>
-        <p class="placeholder-card">Placeholder text. Replace this entire block with the public contact channel, response-time expectations, and any press or legal inbox before launch.</p>
-        <div class="contact-grid">
-          <article class="editorial-card">
-            <p class="card-index">What this page will cover</p>
-            <h3>Product, press, and trust.</h3>
-            <p>Expect separate paths for creator support, partnership questions, and legal notices. None of those addresses are public on this draft page.</p>
-          </article>
-          <article class="editorial-card editorial-card-raised">
-            <p class="card-index">Until then</p>
-            <h3>Use the product surfaces.</h3>
-            <p>Create a project at app.lokiplay.cc or browse games at play.lokiplay.cc. Documentation will live at docs.lokiplay.cc.</p>
-            <div class="page-actions">
-              <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Started</a>
-              <a class="button" href="/about">About Loki</a>
-            </div>
-          </article>
+          <p class="eyebrow">Contact</p>
+          <h1 class="display" id="page-title">Contact</h1>
+          <p class="lede"><a class="contact-email" href="mailto:contact@lokiplay.cc">contact@lokiplay.cc</a></p>
         </div>
       </div>
     </section>
@@ -720,7 +715,7 @@ const pages: Record<
   "/sdk": {
     title: "SDK — Loki",
     description:
-      "The Loki SDK for JavaScript, with Unity, Swift, and Kotlin on the same protocol.",
+      "The Loki SDK for web JavaScript games. Support for Unity, Godot, iOS, and Android are coming soon.",
     main: productMain,
   },
   "/examples": {
@@ -736,12 +731,12 @@ const pages: Record<
   "/about": {
     title: "About — Loki",
     description:
-      "Loki is the hosting, multiplayer, and distribution plugin for vibe-coded games.",
+      "Loki is an agent-friendly product for game creators to add hosting and multiplayer.",
     main: aboutMain,
   },
   "/contact": {
     title: "Contact — Loki",
-    description: "Placeholder contact page for Loki Play. Final details before launch.",
+    description: "Contact Loki at contact@lokiplay.cc.",
     main: contactMain,
   },
   "/terms": {
@@ -770,6 +765,19 @@ const productAliasToSection: Partial<Record<MarketingRoute, string>> = {
   "/distribution": "distribution",
   "/agents": "agents",
 };
+
+function faqScript(path: MarketingRoute): string {
+  if (path !== "/") return "";
+  return `
+    const faqs = [...document.querySelectorAll(".faq-item")];
+    for (const item of faqs) {
+      item.addEventListener("toggle", () => {
+        if (!item.open) return;
+        for (const other of faqs) if (other !== item) other.open = false;
+      });
+    }
+  `;
+}
 
 function productScrollScript(path: MarketingRoute): string {
   if (path !== "/product" && path !== "/sdk" && !(path in productAliasToSection)) return "";
@@ -819,6 +827,6 @@ export function renderMarketingPage(
     title: page.title,
     description: page.description,
     main: page.main,
-    moduleScript: productScrollScript(route),
+    moduleScript: `${productScrollScript(route)}\n${faqScript(route)}`,
   });
 }

@@ -1,7 +1,7 @@
 {
   "name": "lokiplay",
   "version": "0.5.0",
-  "description": "Command-line tools for Loki game projects and deployments.",
+  "description": "Command-line tools for Loki game projects and deployments. Loki hosts finished web JavaScript games. Support for Unity, Godot, iOS, and Android are coming soon.",
   "license": "MIT",
   "repository": {
     "type": "git",

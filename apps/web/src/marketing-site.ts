@@ -20,6 +20,11 @@ export const productSections = [
     label: "Agent SDK",
     description: "One source of truth for coding agents.",
   },
+  {
+    id: "platforms",
+    label: "Platforms",
+    description: "Web JavaScript games today. More engines coming soon.",
+  },
 ] as const;
 
 export const productSectionIds = productSections.map((section) => section.id);
@@ -365,6 +370,14 @@ export const marketingStyles = `
 .marketing-hero .hero-actions {
   margin-right: auto;
   margin-left: auto;
+}
+
+.platform-note {
+  max-width: 40rem;
+  margin: 1.25rem auto 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
 }
 
 .marketing-hero .game-stage {
@@ -4620,6 +4633,101 @@ export const marketingStyles = `
   text-align: center;
 }
 
+.about-vision {
+  max-width: 44rem;
+}
+
+.about-vision h2 {
+  max-width: 16ch;
+  margin: 0.4rem 0 1.25rem;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  font-weight: 560;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+
+.about-vision p:not(.eyebrow) {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+
+.contact-email {
+  color: var(--paper);
+  font-size: clamp(1.4rem, 2.5vw, 2rem);
+  letter-spacing: -0.03em;
+  text-decoration: none;
+}
+
+.contact-email:hover {
+  color: var(--amber-bright);
+}
+
+.home-faq {
+  padding: clamp(3rem, 7vw, 6rem) 0 clamp(2rem, 5vw, 4rem);
+}
+
+.home-faq-inner {
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.7fr) minmax(0, 1.5fr);
+  gap: clamp(2rem, 6vw, 5rem);
+  align-items: start;
+  width: min(100% - var(--page-inset), var(--page-max));
+  margin: 0 auto;
+}
+
+.home-faq h2 {
+  margin: 0;
+  color: var(--paper);
+  font-size: clamp(3.2rem, 6vw, 5.4rem);
+  font-weight: 560;
+  letter-spacing: -0.05em;
+  line-height: 0.95;
+}
+
+.faq-item {
+  border-bottom: 1px solid var(--line);
+}
+
+.faq-item summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.15rem 0;
+  color: var(--paper);
+  font-size: 1.05rem;
+  line-height: 1.35;
+  list-style: none;
+  cursor: pointer;
+}
+
+.faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-item summary::after {
+  flex: none;
+  color: var(--muted);
+  font-size: 1.35rem;
+  font-weight: 400;
+  line-height: 1;
+  content: "+";
+}
+
+.faq-item[open] summary::after {
+  content: "×";
+}
+
+.faq-item p {
+  max-width: 40rem;
+  margin: 0 0 1.2rem;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
 .pricing-card {
   display: flex;
   flex-direction: column;
@@ -5151,6 +5259,18 @@ export const marketingStyles = `
 
   .footer-brand {
     grid-column: 1 / -1;
+  }
+
+  .home-faq-inner {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+
+  .about-vision h2 {
+    max-width: none;
+    margin-right: auto;
+    margin-left: auto;
+    text-align: center;
   }
 }
 

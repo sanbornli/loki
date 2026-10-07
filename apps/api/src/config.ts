@@ -40,6 +40,22 @@ const ProviderEnvironmentSchema = z
     NAKAMA_SESSION_ENCRYPTION_KEY: optionalSecret,
     NAKAMA_REFRESH_ENCRYPTION_KEY: optionalSecret,
 
+    LOKI_NAKAMA_CONSOLE_ORIGIN: optionalUrl,
+    NAKAMA_CONSOLE_USERNAME: z.string().min(1).optional(),
+    NAKAMA_CONSOLE_PASSWORD: optionalSecret,
+
+    LOKI_RAILWAY_API_TOKEN: optionalSecret,
+    LOKI_RAILWAY_PROJECT_ID: z.string().min(1).optional(),
+    LOKI_CLOUDFLARE_API_TOKEN: optionalSecret,
+    LOKI_CLOUDFLARE_ZONE_ID: z.string().min(1).optional(),
+    SUPABASE_ACCESS_TOKEN: optionalSecret,
+    LOKI_SUPABASE_ORG_SLUG: z.string().min(1).optional(),
+    LOKI_SUPABASE_NAKAMA_ORG_SLUG: z.string().min(1).optional(),
+    LOKI_SUPABASE_PLATFORM_PROJECT_REF: z.string().regex(/^[a-z0-9]{20}$/).optional(),
+    LOKI_SUPABASE_NAKAMA_PROJECT_REF: z.string().regex(/^[a-z0-9]{20}$/).optional(),
+    /** Partial JSON override of the vendor list prices used for cost estimates. */
+    LOKI_VENDOR_RATES_JSON: z.string().optional(),
+
     SENTRY_DSN: optionalUrl,
     SENTRY_ENVIRONMENT: z.string().default("local"),
     SENTRY_RELEASE: z.string().optional(),

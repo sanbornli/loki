@@ -137,12 +137,24 @@ export interface HostingAuthorization {
     projectId: string,
     expiresInSeconds?: number,
   ): Promise<{ token: string; expiresAt: number }>;
+  /**
+   * Lets a platform admin open any playable project, including private ones,
+   * so games can be reviewed before they are shared. Issues a short-lived
+   * invite and records who opened what. Suspended or play-disabled projects
+   * are refused.
+   */
+  createOperatorInvite(
+    actorId: string,
+    projectId: string,
+  ): Promise<{ token: string; expiresAt: number }>;
   authorizeRequest(
     request: IncomingMessage,
     projectId: string,
     actorId?: string,
   ): Promise<string | undefined>;
 }
+
+export const OPERATOR_INVITE_SECONDS = 15 * 60;
 
 export class PostgresHostingAuthorization implements HostingAuthorization {
   constructor(
@@ -176,6 +188,54 @@ export class PostgresHostingAuthorization implements HostingAuthorization {
        (id, project_id, created_by, token_hash, expires_at)
        VALUES ($1, $2, $3, $4, to_timestamp($5))`,
       [id, projectId, actorId, createHash("sha256").update(token).digest(), expiresAt],
+    );
+    return { token, expiresAt };
+  }
+
+  async createOperatorInvite(
+    actorId: string,
+    projectId: string,
+  ): Promise<{ token: string; expiresAt: number }> {
+    const admin = await this.pool.query(
+      `SELECT 1 FROM accounts
+        WHERE id = $1 AND platform_role = 'admin' AND suspended_at IS NULL`,
+      [actorId],
+    );
+    if (!admin.rowCount) throw new ServiceError("ADMIN_REQUIRED", "admin required", 403);
+    const target = await this.pool.query<{ organization_id: string; state: string }>(
+      `SELECT projects.organization_id, projects.state
+         FROM projects
+         JOIN deployments ON deployments.id = projects.active_deployment_id
+        CROSS JOIN platform_controls
+        WHERE projects.id = $1
+          AND projects.state <> 'suspended'
+          AND projects.play_disabled_at IS NULL
+          AND platform_controls.play_disabled_at IS NULL
+          AND deployments.status IN ('ready', 'ready_with_warnings')`,
+      [projectId],
+    );
+    const project = target.rows[0];
+    if (!project) throw new ServiceError("PLAY_UNAVAILABLE", "play unavailable", 404);
+    const id = randomUUID();
+    const expiresAt = Math.floor(Date.now() / 1000) + OPERATOR_INVITE_SECONDS;
+    const token = this.signer.issue({ id, projectId, expiresAt });
+    await this.pool.query(
+      `INSERT INTO play_invites
+       (id, project_id, created_by, token_hash, expires_at)
+       VALUES ($1, $2, $3, $4, to_timestamp($5))`,
+      [id, projectId, actorId, createHash("sha256").update(token).digest(), expiresAt],
+    );
+    await this.pool.query(
+      `INSERT INTO audit_records
+         (actor_id, organization_id, project_id, action, detail)
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [
+        actorId,
+        project.organization_id,
+        projectId,
+        "project.operator_play_opened",
+        JSON.stringify({ state: project.state, expiresAt }),
+      ],
     );
     return { token, expiresAt };
   }

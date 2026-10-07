@@ -722,6 +722,47 @@ export function createApiHandler(dependencies: ApiDependencies) {
         json(response, 200, await dependencies.dashboard.operatorProjects(actorId));
         return;
       }
+      if (request.method === "GET" && url.pathname === "/v1/operator/usage") {
+        if (!dependencies.dashboard) throw new Error("operator console unavailable");
+        const actorId = await dependencies.authenticateCreator(request);
+        json(response, 200, await dependencies.dashboard.operatorUsage(actorId));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/v1/operator/vendor-usage") {
+        if (!dependencies.dashboard) throw new Error("operator console unavailable");
+        const actorId = await dependencies.authenticateCreator(request);
+        json(
+          response,
+          200,
+          await dependencies.dashboard.operatorVendorUsage(
+            actorId,
+            url.searchParams.get("refresh") === "1",
+          ),
+        );
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/v1/operator/costs") {
+        if (!dependencies.dashboard) throw new Error("operator console unavailable");
+        const actorId = await dependencies.authenticateCreator(request);
+        json(response, 200, await dependencies.dashboard.operatorCosts(actorId));
+        return;
+      }
+      const operatorPlayMatch = url.pathname.match(
+        /^\/v1\/operator\/projects\/([0-9a-f-]{36})\/play-invite$/i,
+      );
+      if (request.method === "POST" && operatorPlayMatch) {
+        if (!dependencies.hostingAuth) throw new Error("play invites unavailable");
+        const actorId = await dependencies.authenticateCreator(request);
+        json(
+          response,
+          201,
+          await dependencies.hostingAuth.createOperatorInvite(
+            actorId,
+            operatorPlayMatch[1]!,
+          ),
+        );
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/v1/operator/audit") {
         if (!dependencies.dashboard) throw new Error("operator console unavailable");
         const actorId = await dependencies.authenticateCreator(request);

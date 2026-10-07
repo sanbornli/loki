@@ -67,6 +67,8 @@ export interface Project {
   slug: string;
   state: ProjectState;
   activeDeploymentId?: string;
+  /** Why an operator suspended the project. Present only while suspended. */
+  suspensionReason?: string;
   createdAt: string;
   updatedAt: string;
 }

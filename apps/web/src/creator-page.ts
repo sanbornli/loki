@@ -147,6 +147,14 @@ body.creator-dashboard .page-shell {
   font-size: 0.82rem;
 }
 
+.auth-panel > .auth-platform-note {
+  margin: -0.8rem 0 1.8rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--amber);
+  color: var(--paper);
+  line-height: 1.5;
+}
+
 .auth-panel .notice {
   margin-bottom: 1rem;
 }
@@ -701,6 +709,10 @@ body.creator-dashboard .page-shell {
   font-size: 0.72rem;
 }
 
+.project-suspension {
+  margin-top: 1.5rem;
+}
+
 .project-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1094,6 +1106,7 @@ const pageBody = `
         <p class="eyebrow" id="auth-mode-label">Creator access</p>
         <h2 id="auth-panel-title">Sign in</h2>
         <p id="auth-panel-copy">Continue to your projects and release history.</p>
+        <p class="auth-platform-note">Loki hosts finished web JavaScript games. Support for Unity, Godot, iOS, and Android are coming soon.</p>
         <div class="notice" id="auth-notice" role="status" aria-live="polite" hidden></div>
         <form class="form-grid" id="auth-form">
           <div class="field">
@@ -1844,6 +1857,19 @@ const creatorScript = String.raw`
       pill.dataset.state = text(project && project.state, "draft");
       top.append(titleGroup, pill);
       card.appendChild(top);
+
+      if (project && project.state === "suspended") {
+        const suspension = element("div", {
+          className: "notice project-suspension",
+          text: "Suspended by Loki. Reason: " + text(
+            project.suspensionReason,
+            "No reason was recorded."
+          )
+        });
+        suspension.dataset.tone = "error";
+        suspension.setAttribute("role", "alert");
+        card.appendChild(suspension);
+      }
 
       const meta = element("div", { className: "project-meta" });
       meta.appendChild(element("span", {

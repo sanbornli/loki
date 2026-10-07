@@ -17,6 +17,13 @@ import type {
   Organization,
   Project,
 } from "./platform.js";
+import {
+  allocateCosts,
+  type CostAnalytics,
+  type CostProjectRow,
+  type VendorUsage,
+  type VendorUsageService,
+} from "./vendor-usage.js";
 import { isPlanId, isPlanStatus, limitsFor, entitledPlan } from "./plans.js";
 
 export type MembershipRole = "owner" | "member";
@@ -76,12 +83,33 @@ export interface OperatorProject extends DashboardProject {
   organization: Pick<Organization, "id" | "name" | "slug">;
 }
 
+export interface UsageMeter {
+  scope: "account" | "project";
+  scopeId: string;
+  scopeLabel: string;
+  metric: string;
+  label: string;
+  /** What the limit counts over: a rolling window or the plan itself. */
+  period: string;
+  used: number;
+  /** null when no limit applies. */
+  limit: number | null;
+}
+
+export interface OperatorUsage {
+  generatedAt: string;
+  meters: UsageMeter[];
+}
+
 export interface DashboardOperations {
   creatorOverview(actorId: string): Promise<CreatorOverview>;
   projectDeployments(actorId: string, projectId: string): Promise<Deployment[]>;
   publicCatalog(): Promise<PublicCatalogEntry[]>;
   operatorOverview(actorId: string): Promise<OperatorOverview>;
   operatorProjects(actorId: string): Promise<OperatorProject[]>;
+  operatorUsage(actorId: string): Promise<OperatorUsage>;
+  operatorVendorUsage(actorId: string, refresh?: boolean): Promise<VendorUsage>;
+  operatorCosts(actorId: string): Promise<CostAnalytics>;
   operatorAudit(actorId: string, limit: number): Promise<AuditRecord[]>;
   operatorTransitionProject(
     actorId: string,
@@ -115,6 +143,7 @@ type ProjectRow = {
   slug: string;
   state: ProjectState;
   active_deployment_id: string | null;
+  play_disabled_reason?: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -210,6 +239,9 @@ const projectFromRow = (row: ProjectRow): Project => ({
   slug: row.slug,
   state: ProjectStateSchema.parse(row.state),
   activeDeploymentId: row.active_deployment_id ?? undefined,
+  ...(row.state === "suspended" && row.play_disabled_reason
+    ? { suspensionReason: row.play_disabled_reason }
+    : {}),
   createdAt: iso(row.created_at),
   updatedAt: iso(row.updated_at),
 });
@@ -353,6 +385,36 @@ async function requireAdmin(client: Pool | PoolClient, actorId: string): Promise
   if (result.rows[0]?.platform_role !== "admin") throw new Error("admin required");
 }
 
+const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
+
+/** Metering windows. Anything not listed here is metered over 30 days. */
+const meterPeriodSeconds: Record<string, number> = {
+  deployments: 60 * 60,
+};
+
+const meterLabels: Record<string, string> = {
+  projects: "Projects created",
+  stored_bytes: "Stored bytes",
+  deployments: "Deployments",
+  guest_sessions: "Guest sessions",
+  player_sessions: "Player sessions",
+  deployment_credentials: "Deployment credentials",
+  plan_games: "Games",
+  plan_play_links: "Play links",
+};
+
+const meterLabel = (metric: string): string =>
+  meterLabels[metric] ?? metric.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+
+const meterPeriodLabel = (seconds: number): string =>
+  seconds === 60 * 60 ? "per hour" : "per 30 days";
+
+const currentPeriodStart = (nowMs: number, seconds: number): number =>
+  Math.floor(nowMs / 1000 / seconds) * seconds * 1000;
+
+const usageRatio = (meter: UsageMeter): number =>
+  meter.limit === null ? -1 : meter.limit === 0 ? Infinity : meter.used / meter.limit;
+
 function validateLimit(limit: number): void {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
     throw new Error("limit must be an integer between 1 and 100");
@@ -360,7 +422,10 @@ function validateLimit(limit: number): void {
 }
 
 export class DashboardService implements DashboardOperations {
-  constructor(readonly pool: Pool) {}
+  constructor(
+    readonly pool: Pool,
+    readonly vendors?: VendorUsageService,
+  ) {}
 
   async creatorOverview(actorId: string): Promise<CreatorOverview> {
     const [accountResult, membershipResult, projectResult] = await Promise.all([
@@ -508,6 +573,177 @@ export class DashboardService implements DashboardOperations {
         slug: row.organization_slug,
       },
     }));
+  }
+
+  async operatorUsage(actorId: string): Promise<OperatorUsage> {
+    await requireAdmin(this.pool, actorId);
+    const now = Date.now();
+    const [meterResult, planResult] = await Promise.all([
+      this.pool.query<{
+        scope_type: "account" | "project";
+        scope_id: string;
+        metric: string;
+        period_start: Date | string;
+        quantity: string | number;
+        hard_limit: string | number | null;
+        scope_label: string | null;
+      }>(
+        `SELECT meters.scope_type, meters.scope_id, meters.metric,
+                meters.period_start, meters.quantity,
+                COALESCE(own.hard_limit, platform.hard_limit) AS hard_limit,
+                CASE WHEN meters.scope_type = 'account'
+                     THEN accounts.email ELSE projects.name END AS scope_label
+           FROM usage_meters AS meters
+           LEFT JOIN quota_limits AS own
+             ON own.metric = meters.metric
+            AND own.scope_type = meters.scope_type
+            AND own.scope_id = meters.scope_id
+           LEFT JOIN quota_limits AS platform
+             ON platform.metric = meters.metric
+            AND platform.scope_type = 'global'
+           LEFT JOIN accounts
+             ON meters.scope_type = 'account' AND accounts.id = meters.scope_id
+           LEFT JOIN projects
+             ON meters.scope_type = 'project' AND projects.id = meters.scope_id
+          WHERE meters.period_start > now() - interval '31 days'`,
+      ),
+      this.pool.query<{
+        id: string;
+        email: string;
+        plan: string;
+        plan_status: string;
+        plan_period_end: Date | string | null;
+        games: number | string;
+        play_links: number | string;
+      }>(
+        `SELECT accounts.id, accounts.email, accounts.plan, accounts.plan_status,
+                accounts.plan_period_end,
+                COUNT(projects.id)::integer AS games,
+                COUNT(projects.id) FILTER (
+                  WHERE projects.state IN ('private', 'unlisted', 'published')
+                )::integer AS play_links
+           FROM accounts
+           JOIN organization_members
+             ON organization_members.account_id = accounts.id
+            AND organization_members.role = 'owner'
+           JOIN projects ON projects.organization_id = organization_members.organization_id
+          GROUP BY accounts.id
+         HAVING COUNT(projects.id) > 0`,
+      ),
+    ]);
+
+    const meters: UsageMeter[] = [];
+    for (const row of meterResult.rows) {
+      const seconds = meterPeriodSeconds[row.metric] ?? THIRTY_DAYS_SECONDS;
+      const start =
+        row.period_start instanceof Date
+          ? row.period_start.getTime()
+          : new Date(row.period_start).getTime();
+      if (start !== currentPeriodStart(now, seconds)) continue;
+      meters.push({
+        scope: row.scope_type,
+        scopeId: row.scope_id,
+        scopeLabel: row.scope_label ?? row.scope_id,
+        metric: row.metric,
+        label: meterLabel(row.metric),
+        period: meterPeriodLabel(seconds),
+        used: Number(row.quantity),
+        limit: row.hard_limit === null ? null : Number(row.hard_limit),
+      });
+    }
+    for (const row of planResult.rows) {
+      if (!isPlanId(row.plan) || !isPlanStatus(row.plan_status)) continue;
+      const planLimits = limitsFor(
+        entitledPlan(row.email, {
+          plan: row.plan,
+          status: row.plan_status,
+          periodEnd: row.plan_period_end ? iso(row.plan_period_end) : undefined,
+        }),
+      );
+      meters.push(
+        {
+          scope: "account",
+          scopeId: row.id,
+          scopeLabel: row.email,
+          metric: "plan_games",
+          label: meterLabel("plan_games"),
+          period: "plan cap",
+          used: Number(row.games),
+          limit: planLimits.games,
+        },
+        {
+          scope: "account",
+          scopeId: row.id,
+          scopeLabel: row.email,
+          metric: "plan_play_links",
+          label: meterLabel("plan_play_links"),
+          period: "plan cap",
+          used: Number(row.play_links),
+          limit: planLimits.playLinks,
+        },
+      );
+    }
+    meters.sort(
+      (a, b) =>
+        usageRatio(b) - usageRatio(a) ||
+        a.scopeLabel.localeCompare(b.scopeLabel) ||
+        a.metric.localeCompare(b.metric),
+    );
+    return { generatedAt: new Date(now).toISOString(), meters };
+  }
+
+  async operatorVendorUsage(actorId: string, refresh = false): Promise<VendorUsage> {
+    await requireAdmin(this.pool, actorId);
+    if (!this.vendors) throw new Error("vendor usage is not configured");
+    return this.vendors.usage(refresh);
+  }
+
+  async operatorCosts(actorId: string): Promise<CostAnalytics> {
+    await requireAdmin(this.pool, actorId);
+    if (!this.vendors) throw new Error("vendor usage is not configured");
+    const [usage, result] = await Promise.all([
+      this.vendors.usage(),
+      this.pool.query<{
+        project_id: string;
+        name: string;
+        organization_name: string;
+        owner_id: string | null;
+        owner_email: string | null;
+        stored_bytes: string | number;
+        sessions: string | number;
+      }>(
+        `SELECT projects.id AS project_id, projects.name,
+                organizations.name AS organization_name,
+                owner.account_id AS owner_id, accounts.email AS owner_email,
+                COALESCE(SUM(meters.quantity)
+                  FILTER (WHERE meters.metric = 'stored_bytes'), 0) AS stored_bytes,
+                COALESCE(SUM(meters.quantity)
+                  FILTER (WHERE meters.metric IN ('player_sessions', 'guest_sessions')
+                            AND meters.period_start >= to_timestamp($1)), 0) AS sessions
+           FROM projects
+           JOIN organizations ON organizations.id = projects.organization_id
+           LEFT JOIN LATERAL (
+                  SELECT account_id FROM organization_members
+                   WHERE organization_id = projects.organization_id AND role = 'owner'
+                   LIMIT 1
+                ) AS owner ON true
+           LEFT JOIN accounts ON accounts.id = owner.account_id
+           LEFT JOIN usage_meters AS meters
+             ON meters.scope_type = 'project' AND meters.scope_id = projects.id
+          GROUP BY projects.id, organizations.name, owner.account_id, accounts.email`,
+        [currentPeriodStart(Date.now(), THIRTY_DAYS_SECONDS) / 1000],
+      ),
+    ]);
+    const rows: CostProjectRow[] = result.rows.map((row) => ({
+      projectId: row.project_id,
+      name: row.name,
+      organizationName: row.organization_name,
+      ownerId: row.owner_id,
+      ownerEmail: row.owner_email,
+      storedBytes: Number(row.stored_bytes),
+      sessions: Number(row.sessions),
+    }));
+    return allocateCosts(usage, rows);
   }
 
   async operatorAudit(actorId: string, limit: number): Promise<AuditRecord[]> {
