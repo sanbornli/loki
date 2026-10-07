@@ -44,8 +44,8 @@ body.operator-dashboard .page-shell { width: 100%; max-width: none; margin: 0; p
   padding-block: clamp(3rem, 7vw, 6rem);
 }
 .auth-intro h1 {
-  max-width: 9ch;
-  margin: .4rem 0 1.5rem;
+  max-width: 10ch;
+  margin: 0 0 1.5rem;
   font-size: clamp(2.8rem, 5.5vw, 5.4rem);
   font-weight: 470;
   letter-spacing: -.06em;
@@ -412,8 +412,7 @@ const body = `
     <main class="page-shell">
       <section class="auth-layout" id="auth-view" aria-labelledby="auth-title">
         <div class="auth-intro">
-          <p class="eyebrow">Internal operations</p>
-          <h1 id="auth-title">Platform truth, clearly stated.</h1>
+          <h1 id="auth-title">Operator Dashboard</h1>
           <p>Restricted access for Loki operators. Review hosted games, suspend violations, and watch usage against limits.</p>
         </div>
         <div class="auth-card">
