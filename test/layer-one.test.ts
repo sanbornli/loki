@@ -515,30 +515,31 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /function configuredCliVersion\(\)/);
   assert.match(creator, /"0\.5\.0"/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
-  assert.match(creator, /createRoom\(\)/);
-  assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
+  assert.match(creator, /Follow the Loki integration rules in AGENTS\.md/);
+  assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " init/);
+  assert.match(creator, /llms-full\.txt/);
+  assert.match(creator, /stop and ask the creator/);
+  assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " preview/);
   assert.match(creator, /id="organization-slug"/);
   assert.match(creator, /playPathForProject\(project\)/);
   assert.match(player, /play\/studio\/game-slug/);
-  assert.match(creator, /usable room-entry flow/);
-  assert.match(creator, /minimal lobby/);
-  assert.match(creator, /does not add a public lobby screen/);
-  assert.match(creator, /Do not make every room public/);
-  assert.match(creator, /listPublicRooms/);
-  assert.match(creator, /joinPublic/);
-  assert.match(creator, /Do not infer multiplayer requirements/);
-  assert.match(creator, /stop and ask the creator/);
-  assert.match(creator, /Do not invent new game\.json fields/);
-  assert.doesNotMatch(creator, /Do not redesign the game merely to make it fit/);
-  assert.doesNotMatch(creator, /report that incompatibility instead of implementing a degraded substitute/);
-  assert.match(creator, /createSynchronizedRoom\(\)/);
-  assert.match(creator, /Let the SDK own lifecycle detection/);
-  assert.match(creator, /viewport-fit=cover/);
-  assert.match(creator, /Pointer Events/);
-  assert.match(creator, /requestAnimationFrame/);
-  assert.match(creator, /Google Fonts/);
-  assert.match(creator, /inline <script>/);
-  assert.match(creator, /<form> submissions/);
+  // The long rules live in AGENTS.md; the desk prompt must not repeat them.
+  for (const repeated of [
+    /joinRoom\(\{ inviteCode \}\)/,
+    /usable room-entry flow/,
+    /does not add a public lobby screen/,
+    /listPublicRooms/,
+    /Do not infer multiplayer requirements/,
+    /Do not invent new game\.json fields/,
+    /Let the SDK own lifecycle detection/,
+    /viewport-fit=cover/,
+    /Pointer Events/,
+    /Google Fonts/,
+    /<form> submissions/,
+    /Hosted SDK delivery/,
+  ]) {
+    assert.doesNotMatch(creator, repeated);
+  }
   assert.match(creator, /Package installation and creator authentication are separate/);
   assert.match(creator, /Needs an operator; approval will activate it automatically/);
   assert.match(creator, /Passed and publicly playable/);
