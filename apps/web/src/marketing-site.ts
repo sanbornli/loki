@@ -4584,6 +4584,16 @@ export const marketingStyles = `
   display: none;
 }
 
+.price-was {
+  margin-right: 0.35em;
+  color: var(--muted);
+  font-size: 0.46em;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-decoration: line-through;
+  vertical-align: 0.45em;
+}
+
 .pricing-plans-block:has(#billing-annual:checked) .price-monthly {
   display: none;
 }

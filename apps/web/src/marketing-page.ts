@@ -86,25 +86,24 @@ function pricingPlans(): string {
           </article>
           <article class="pricing-card pricing-card-featured">
             <h3>Loki</h3>
-            <p class="pricing-amount"><span class="price-monthly">$12</span><span class="price-annual">$8</span></p>
+            <p class="pricing-amount"><span class="price-monthly">$12</span><span class="price-annual"><s class="price-was">$12</s>$8</span></p>
             <p class="pricing-period"><span class="price-monthly">per month</span><span class="price-annual">per month, billed annually</span></p>
             <ul class="pricing-features">
               <li>20 games</li>
               <li>8 players per room</li>
-              <li>Unlisted play links</li>
+              <li>Play links</li>
               <li>Host and server authoritative</li>
             </ul>
             <a class="button button-primary" href="https://app.lokiplay.cc/signup">Get Loki</a>
           </article>
           <article class="pricing-card">
             <h3>Loki Pro</h3>
-            <p class="pricing-amount">$20</p>
-            <p class="pricing-period">per month</p>
+            <p class="pricing-amount"><span class="price-monthly">$20</span><span class="price-annual"><s class="price-was">$20</s>$15</span></p>
+            <p class="pricing-period"><span class="price-monthly">per month</span><span class="price-annual">per month, billed annually</span></p>
             <ul class="pricing-features">
               <li>Unlimited games</li>
               <li>Unlimited links</li>
               <li>8 players per room</li>
-              <li>Unlisted play links</li>
               <li>Host and server authoritative</li>
             </ul>
             <a class="button" href="https://app.lokiplay.cc/signup">Get Loki Pro</a>
@@ -556,7 +555,7 @@ const pricingMain = `
         <div>
           <p class="eyebrow">Pricing</p>
           <h1 class="display" id="page-title">Start free.</h1>
-          <p class="lede">Start free. Loki is $12 a month, or $8 a month billed annually. Loki Pro is $20 a month.</p>
+          <p class="lede">Start free. Loki is $12 a month, or $8 a month billed annually. Loki Pro is $20 a month, or $15 a month billed annually.</p>
         </div>
       </div>
     </section>
@@ -576,7 +575,6 @@ ${pricingPlans()}
             <tr><td>Play links</td><td>1</td><td>20</td><td>Unlimited</td></tr>
             <tr><td>Players per room</td><td>4</td><td>8</td><td>8</td></tr>
             <tr><td>Public catalog</td><td>Closed</td><td>Closed</td><td>Closed</td></tr>
-            <tr><td>Unlisted play links</td><td>—</td><td>Yes</td><td>Yes</td></tr>
             <tr><td>Authority</td><td>Host</td><td>Host and server</td><td>Host and server</td></tr>
           </tbody>
         </table>
