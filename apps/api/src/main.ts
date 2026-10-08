@@ -10,6 +10,7 @@ import { DashboardService } from "./dashboard.js";
 import { PostgresDeploymentDedupService } from "./deployment-dedup.js";
 import { DeploymentService } from "./deployments.js";
 import { GitHubAppClient } from "./github-app.js";
+import { EmailNotifier } from "./notifications.js";
 import { PostgresGitHubConnectionService } from "./github-connections.js";
 import {
   GuestResumeSigner,
@@ -56,7 +57,14 @@ const tokens = new SessionTokenService({
     "LOKI_SESSION_PUBLIC_KEY",
   ),
 });
-const platform = new PostgresPlatformService(pool, tokens);
+const notifier = environment.LOKI_RESEND_API_KEY
+  ? new EmailNotifier({
+      apiKey: environment.LOKI_RESEND_API_KEY,
+      from: environment.LOKI_NOTIFY_EMAIL_FROM!,
+      to: environment.LOKI_NOTIFY_EMAIL_TO!,
+    })
+  : undefined;
+const platform = new PostgresPlatformService(pool, tokens, notifier);
 const safety = new PostgresSafetyService(pool);
 const playInviteKey = environment.LOKI_PLAY_INVITE_KEY
   ? Buffer.from(environment.LOKI_PLAY_INVITE_KEY, "base64url")
@@ -171,6 +179,7 @@ const deviceAuth = new PostgresCliDeviceAuthorizationService(
       environment.LOKI_PUBLIC_WEB_ORIGIN!,
     ).toString(),
     maximumAccessTokenLifetimeSeconds: 3_700,
+    notifier,
   },
 );
 const artifacts = new R2ArtifactStore({

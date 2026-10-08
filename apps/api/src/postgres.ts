@@ -40,6 +40,7 @@ import {
   validateOrganizationSlug,
   validateProjectSlug,
 } from "./slugs.js";
+import type { OperatorNotifier } from "./notifications.js";
 import { SessionTokenService } from "./tokens.js";
 
 type ProjectRow = {
@@ -220,6 +221,7 @@ export class PostgresPlatformService implements PlatformOperations {
   constructor(
     readonly pool: Pool,
     readonly tokens: SessionTokenService,
+    readonly notifier?: OperatorNotifier,
   ) {}
 
   async ensureCreator(
@@ -269,7 +271,7 @@ export class PostgresPlatformService implements PlatformOperations {
       };
     }
     if (!legalVersions) throw new Error("legal acceptance required");
-    return transaction(this.pool, async (client) => {
+    const created = await transaction(this.pool, async (client) => {
       const result = await client.query<{
         id: string;
         email: string;
@@ -305,6 +307,8 @@ export class PostgresPlatformService implements PlatformOperations {
         ...billing,
       };
     });
+    this.notifier?.notify({ type: "account.created", email: created.email });
+    return created;
   }
 
   async createOrganization(
@@ -589,7 +593,7 @@ export class PostgresPlatformService implements PlatformOperations {
     projectId: string,
     deploymentId: string,
   ): Promise<Project> {
-    return transaction(this.pool, async (client) => {
+    const outcome = await transaction(this.pool, async (client) => {
       const projectResult = await client.query<ProjectRow>(
         "SELECT * FROM projects WHERE id = $1 FOR UPDATE",
         [projectId],
@@ -617,6 +621,14 @@ export class PostgresPlatformService implements PlatformOperations {
         nextState = activationState(accountBilling(owner).plan);
         await assertPlanTransition(client, project.organization_id, project.state, nextState);
       }
+      const firstActivation = !(
+        await client.query(
+          `SELECT 1 FROM audit_records
+            WHERE project_id = $1 AND action = 'deployment.activated'
+            LIMIT 1`,
+          [projectId],
+        )
+      ).rowCount;
       const updated = await client.query<ProjectRow>(
         `UPDATE projects
             SET active_deployment_id = $2,
@@ -633,8 +645,27 @@ export class PostgresPlatformService implements PlatformOperations {
         action: "deployment.activated",
         detail: { deploymentId },
       });
-      return projectFromRow(updated.rows[0]!);
+      const actor = firstActivation
+        ? (
+            await client.query<{ email: string }>(
+              "SELECT email FROM accounts WHERE id = $1",
+              [actorId],
+            )
+          ).rows[0]
+        : undefined;
+      return {
+        project: projectFromRow(updated.rows[0]!),
+        firstActivationBy: actor?.email,
+      };
     });
+    if (outcome.firstActivationBy) {
+      this.notifier?.notify({
+        type: "game.first_deployed",
+        email: outcome.firstActivationBy,
+        projectName: outcome.project.name,
+      });
+    }
+    return outcome.project;
   }
 
   async getProject(actorId: string, projectId: string): Promise<Project> {

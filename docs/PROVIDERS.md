@@ -271,6 +271,23 @@ saturation, R2 errors, restart loops, and missing heartbeats are created in the
 Railway dashboard when the API does not expose monitor-create. Sentry remains
 deferred.
 
+## Operator notifications
+
+The API emails the operator through Resend (`https://api.resend.com/emails`)
+for each of these:
+
+- a new account, when its Loki account is first created after email confirmation
+- an account's first approved CLI login
+- a project's first activated deployment
+
+Set all three on the api service: `LOKI_RESEND_API_KEY`,
+`LOKI_NOTIFY_EMAIL_FROM` (an address on a domain verified in Resend, for example
+`Loki <notify@lokiplay.cc>`), and `LOKI_NOTIFY_EMAIL_TO`. Setting only some of
+them fails startup. Each email carries the account email and, for deploys, the
+game name. A failed or slow send is logged without the key and never affects the
+request. Leave all three unset to turn notifications off. The running API reads
+them at start, so setting them needs a restart.
+
 ## Verification
 
 `npm run providers:check` validates the production variable shape without

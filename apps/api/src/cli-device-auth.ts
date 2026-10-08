@@ -5,6 +5,7 @@ import {
   randomBytes,
 } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
+import type { OperatorNotifier } from "./notifications.js";
 
 export type DeviceAuthorizationPollResult =
   | { status: "pending" }
@@ -33,6 +34,8 @@ export interface CliDeviceAuthorizationOptions {
   expiresInSeconds?: number;
   pollIntervalSeconds?: number;
   maximumAccessTokenLifetimeSeconds?: number;
+  /** Told the first time an account approves a CLI login. */
+  notifier?: OperatorNotifier;
 }
 
 type AuthorizationRow = {
@@ -180,7 +183,7 @@ export class PostgresCliDeviceAuthorizationService
     ) {
       throw new Error("access token must be short-lived");
     }
-    await transaction(this.pool, async (client) => {
+    const firstLoginEmail = await transaction(this.pool, async (client) => {
       const selected = await client.query<AuthorizationRow>(
         `SELECT *
            FROM cli_device_authorizations
@@ -229,6 +232,12 @@ export class PostgresCliDeviceAuthorizationService
           tokenExpiresAt,
         ],
       );
+      const earlier = await client.query(
+        `SELECT 1 FROM security_audit_records
+          WHERE actor_id = $1 AND action = 'cli_device_authorization.approved'
+          LIMIT 1`,
+        [input.actorId],
+      );
       await audit(
         client,
         "cli_device_authorization.approved",
@@ -236,7 +245,20 @@ export class PostgresCliDeviceAuthorizationService
         input.actorId,
         { accessTokenExpiresAt: tokenExpiresAt },
       );
+      if (earlier.rowCount) return undefined;
+      return (
+        await client.query<{ email: string }>(
+          "SELECT email FROM accounts WHERE id = $1",
+          [input.actorId],
+        )
+      ).rows[0]?.email;
     });
+    if (firstLoginEmail) {
+      this.options.notifier?.notify({
+        type: "cli.first_login",
+        email: firstLoginEmail,
+      });
+    }
   }
 
   async poll(

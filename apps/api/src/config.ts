@@ -56,6 +56,11 @@ const ProviderEnvironmentSchema = z
     /** Partial JSON override of the vendor list prices used for cost estimates. */
     LOKI_VENDOR_RATES_JSON: z.string().optional(),
 
+    /** Resend key, sender, and recipient for emails about new accounts, CLI logins, and first deploys. */
+    LOKI_RESEND_API_KEY: optionalSecret,
+    LOKI_NOTIFY_EMAIL_FROM: z.string().min(3).optional(),
+    LOKI_NOTIFY_EMAIL_TO: z.string().email().optional(),
+
     SENTRY_DSN: optionalUrl,
     SENTRY_ENVIRONMENT: z.string().default("local"),
     SENTRY_RELEASE: z.string().optional(),
@@ -82,6 +87,22 @@ const ProviderEnvironmentSchema = z
             code: "custom",
             path: [key],
             message: `${key} is required when GitHub App integration is configured`,
+          });
+        }
+      }
+    }
+    const emailKeys = [
+      "LOKI_RESEND_API_KEY",
+      "LOKI_NOTIFY_EMAIL_FROM",
+      "LOKI_NOTIFY_EMAIL_TO",
+    ] as const;
+    if (emailKeys.some((key) => environment[key])) {
+      for (const key of emailKeys) {
+        if (!environment[key]) {
+          context.addIssue({
+            code: "custom",
+            path: [key],
+            message: `${key} is required when operator email is configured`,
           });
         }
       }
