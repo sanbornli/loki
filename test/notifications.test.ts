@@ -6,8 +6,11 @@ import { loadProviderEnvironment } from "../apps/api/src/config.js";
 import {
   EmailNotifier,
   describeEvent,
+  gameCreatedEmail,
+  welcomeEmail,
   type OperatorEvent,
   type OperatorNotifier,
+  type UserEmail,
 } from "../apps/api/src/notifications.js";
 import { PostgresPlatformService } from "../apps/api/src/postgres.js";
 import { SessionTokenService } from "../apps/api/src/tokens.js";
@@ -33,13 +36,40 @@ function fakePool(respond: (sql: string, params: unknown[]) => unknown[]): {
   return { pool, queries };
 }
 
-function recorder(): { notifier: OperatorNotifier; events: OperatorEvent[] } {
+function recorder(): {
+  notifier: OperatorNotifier;
+  events: OperatorEvent[];
+  userEmails: UserEmail[];
+} {
   const events: OperatorEvent[] = [];
-  return { notifier: { notify: (event) => events.push(event) }, events };
+  const userEmails: UserEmail[] = [];
+  return {
+    notifier: {
+      notify: (event) => events.push(event),
+      notifyUser: (email) => userEmails.push(email),
+    },
+    events,
+    userEmails,
+  };
 }
 
 const tokens = {} as SessionTokenService;
 const legal = { terms: "1", privacy: "1", aup: "1" };
+
+test("a new account is welcomed and a new game gets install instructions", () => {
+  const welcome = welcomeEmail();
+  assert.equal(welcome.subject, "Welcome to Loki!");
+  assert.match(welcome.text, /^Welcome to Loki!\n\nYour account is ready\. Sign in and create your first game at app\.lokiplay\.cc\./);
+  assert.match(welcome.text, /visit lokiplay\.cc or reach out to contact@lokiplay\.cc\.$/);
+
+  const created = gameCreatedEmail("Tanks\n<script>");
+  assert.equal(created.subject, "Congrats! You just created Tanksscript.");
+  assert.match(created.text, /^Congrats! You just created Tanksscript\./);
+  assert.match(created.text, /1\. Visit your game page on the Creator dashboard \(app\.lokiplay\.cc\)\./);
+  assert.match(created.text, /4\. Wait for the installation to be run by your agent, authenticate using your Loki account when prompted\./);
+  assert.match(created.text, /visit https:\/\/lokiplay\.cc or reach out to contact@lokiplay\.cc\.$/);
+  assert.doesNotMatch(created.text, /\n<script>/);
+});
 
 test("messages name the person and strip anything that could mention or link", () => {
   assert.equal(
@@ -88,6 +118,19 @@ test("each event is one plain email to the operator through Resend", async () =>
     to: ["sanborn.li.hk@gmail.com"],
     subject: "New Loki account: a@b.co",
     text: "New Loki account: a@b.co",
+  });
+  await notifier.deliver({
+    to: "new@example.com",
+    subject: "Welcome to Loki!",
+    text: "Welcome to Loki!",
+    replyTo: "contact@lokiplay.cc",
+  });
+  assert.deepEqual(calls[1]!.body, {
+    from: "Loki <notify@lokiplay.cc>",
+    to: ["new@example.com"],
+    subject: "Welcome to Loki!",
+    text: "Welcome to Loki!",
+    reply_to: "contact@lokiplay.cc",
   });
 });
 
@@ -148,6 +191,7 @@ test("a brand new account is announced once, and signing in again is not", async
   const service = new PostgresPlatformService(fresh.pool, tokens, first.notifier);
   await service.ensureCreator("subject-1", "New@Example.com", legal);
   assert.deepEqual(first.events, [{ type: "account.created", email: "new@example.com" }]);
+  assert.deepEqual(first.userEmails, [{ type: "welcome", to: "new@example.com" }]);
 
   const known = fakePool((sql) => {
     if (sql.startsWith("UPDATE accounts SET email")) return [accountRow];
@@ -158,6 +202,48 @@ test("a brand new account is announced once, and signing in again is not", async
   const again = new PostgresPlatformService(known.pool, tokens, second.notifier);
   await again.ensureCreator("subject-1", "new@example.com", legal);
   assert.deepEqual(second.events, []);
+  assert.deepEqual(second.userEmails, []);
+});
+
+test("creating a game emails that creator once", async () => {
+  const actor = "55555555-5555-4555-8555-555555555555";
+  const organizationId = "44444444-4444-4444-8444-444444444444";
+  const pool = fakePool((sql) => {
+    if (sql.includes("count(*)")) return [{ count: "0" }];
+    if (sql.includes("role = 'owner'")) {
+      return [{
+        id: actor,
+        email: "maker@example.com",
+        plan: "free",
+        plan_status: "active",
+        plan_period_end: null,
+        stripe_customer_id: null,
+      }];
+    }
+    if (sql.includes("FROM organization_members")) return [{ "?column?": 1 }];
+    if (sql.includes("INSERT INTO projects")) {
+      return [{
+        id: "22222222-2222-4222-8222-222222222222",
+        organization_id: organizationId,
+        name: "Tanks",
+        slug: "tanks",
+        state: "draft",
+        active_deployment_id: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      }];
+    }
+    if (sql.includes("SELECT email FROM accounts")) return [{ email: "maker@example.com" }];
+    return [];
+  });
+  const recorded = recorder();
+  const project = await new PostgresPlatformService(pool.pool, tokens, recorded.notifier)
+    .createProject(actor, organizationId, { name: "Tanks", slug: "tanks" });
+  assert.equal(project.name, "Tanks");
+  assert.deepEqual(recorded.userEmails, [
+    { type: "game_created", to: "maker@example.com", projectName: "Tanks" },
+  ]);
+  assert.deepEqual(recorded.events, []);
 });
 
 const projectId = "22222222-2222-4222-8222-222222222222";

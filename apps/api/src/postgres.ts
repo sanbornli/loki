@@ -308,6 +308,7 @@ export class PostgresPlatformService implements PlatformOperations {
       };
     });
     this.notifier?.notify({ type: "account.created", email: created.email });
+    this.notifier?.notifyUser?.({ type: "welcome", to: created.email });
     return created;
   }
 
@@ -377,7 +378,7 @@ export class PostgresPlatformService implements PlatformOperations {
     const name = input.name.trim();
     if (!name) throw new Error("project name required");
     validateProjectSlug(input.slug);
-    return transaction(this.pool, async (client) => {
+    const created = await transaction(this.pool, async (client) => {
       await requireMember(client, actorId, organizationId);
       const owner = await lockOwnerBilling(client, organizationId);
       const limits = limitsFor(accountBilling(owner).plan);
@@ -400,8 +401,20 @@ export class PostgresPlatformService implements PlatformOperations {
         action: "project.created",
         detail: { slug: project.slug },
       });
-      return project;
+      const actor = await client.query<{ email: string }>(
+        "SELECT email FROM accounts WHERE id = $1",
+        [actorId],
+      );
+      return { project, email: actor.rows[0]?.email };
     });
+    if (created.email) {
+      this.notifier?.notifyUser?.({
+        type: "game_created",
+        to: created.email,
+        projectName: created.project.name,
+      });
+    }
+    return created.project;
   }
 
   async transitionProject(

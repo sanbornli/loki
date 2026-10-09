@@ -273,12 +273,16 @@ deferred.
 
 ## Operator notifications
 
-The API emails the operator through Resend (`https://api.resend.com/emails`)
-for each of these:
+The API emails through Resend (`https://api.resend.com/emails`). The operator
+hears about each of these:
 
 - a new account, when its Loki account is first created after email confirmation
 - an account's first approved CLI login
 - a project's first activated deployment
+
+The new account also gets a welcome email, and the creator gets one email when
+they create a game. Those two use the same sender, set `Reply-To` to
+`contact@lokiplay.cc`, and are the messages people reply to.
 
 Set all three on the api service: `LOKI_RESEND_API_KEY`,
 `LOKI_NOTIFY_EMAIL_FROM` (an address on a domain verified in Resend, for example
