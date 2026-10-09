@@ -198,11 +198,15 @@ body.creator-dashboard .page-shell {
   width: 100%;
 }
 
-/* Compact login card so the whole card stays visible with a notice showing. */
+/* Compact login card: fills 70% of the login section (15% gutters), wide rather than tall. */
+.auth-stage {
+  padding-inline: 15%;
+}
+
 .auth-panel {
-  width: min(100%, 16.5rem);
-  padding: 1.15rem;
-  border-radius: 1rem;
+  width: 100%;
+  padding: 1.6rem 1.35rem;
+  border-radius: 1.15rem;
 }
 
 .auth-panel .eyebrow {
@@ -236,7 +240,8 @@ body.creator-dashboard .page-shell {
 }
 
 .auth-panel .form-grid {
-  gap: 0.6rem;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem 0.75rem;
 }
 
 .auth-panel .field {
@@ -248,20 +253,29 @@ body.creator-dashboard .page-shell {
 }
 
 .auth-panel .field input {
-  min-height: 2.1rem;
+  min-height: 2.35rem;
   padding: 0.4rem 0.6rem;
   font-size: 0.78rem;
 }
 
 .auth-panel .button {
-  min-height: 2.1rem;
+  min-height: 2.35rem;
   padding: 0.45rem 0.7rem;
   font-size: 0.64rem;
 }
 
 .auth-panel .form-actions {
-  gap: 0.5rem;
-  margin-top: 0.3rem;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 1rem;
+  margin-top: 0.15rem;
+}
+
+.auth-panel .form-actions .button {
+  flex: 1 1 100%;
+  width: 100%;
 }
 
 .auth-panel .text-button {
@@ -274,7 +288,38 @@ body.creator-dashboard .page-shell {
 }
 
 .oauth-actions {
+  grid-template-columns: 1fr 1fr;
   gap: 0.45rem;
+}
+
+.oauth-actions .button {
+  min-width: 0;
+  gap: 0.4rem;
+  padding-inline: 0.4rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.oauth-actions .button svg {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+}
+
+.oauth-actions .button-github svg {
+  fill: currentColor;
+}
+
+@media (max-width: 30rem) {
+  .auth-stage {
+    padding-inline: 1rem;
+  }
+
+  .auth-panel .form-grid,
+  .oauth-actions {
+    grid-template-columns: 1fr;
+  }
 }
 
 .dashboard-shell {
@@ -942,6 +987,30 @@ body.creator-dashboard .page-shell {
   font-size: 0.69rem;
 }
 
+.project-visibility {
+  margin: 1.15rem 0 0;
+  color: var(--paper);
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.pill[data-state="private"] {
+  border-color: #80602c;
+  color: var(--amber-bright);
+}
+
+.pill[data-state="unlisted"] {
+  border-color: #49613a;
+  color: #bde3a5;
+}
+
+.project-tile .pill {
+  margin-bottom: auto;
+  padding: 0.45rem 0.62rem;
+  font-size: 0.72rem;
+}
+
 .project-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1149,11 +1218,11 @@ body.creator-dashboard .page-shell {
   }
 
   .auth-stage {
-    padding: 2rem var(--space) 3rem;
+    padding: 2rem 15% 3rem;
   }
 
   .auth-panel {
-    width: min(100%, 17.5rem);
+    width: 100%;
     transform: none;
   }
 
@@ -1342,8 +1411,14 @@ const pageBody = `
         </form>
         <div class="auth-divider"><span>or</span></div>
         <div class="oauth-actions">
-          <button class="button" id="oauth-google" type="button">Continue with Google</button>
-          <button class="button" id="oauth-github" type="button">Continue with GitHub</button>
+          <button class="button" id="oauth-google" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.09a6.6 6.6 0 0 1 0-4.18V7.07H2.18a11 11 0 0 0 0 9.86l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.07l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
+            <span>Sign in with Google</span>
+          </button>
+          <button class="button button-github" id="oauth-github" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.13v3.16c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5z"/></svg>
+            <span>Sign in with GitHub</span>
+          </button>
         </div>
       </section>
       </div>
@@ -2128,6 +2203,8 @@ const creatorScript = String.raw`
         text: projectStateLabel(project && project.state)
       });
       pill.dataset.state = text(project && project.state, "draft");
+      const tileNote = visibilityNote(project && project.state);
+      if (tileNote) pill.title = tileNote;
       tile.appendChild(pill);
       tile.appendChild(element("span", {
         className: "project-tile-name",
@@ -2205,6 +2282,8 @@ const creatorScript = String.raw`
         text: projectStateLabel(project && project.state)
       });
       pill.dataset.state = text(project && project.state, "draft");
+      const cardNote = visibilityNote(project && project.state);
+      if (cardNote) pill.title = cardNote;
       top.append(titleGroup, pill);
       card.appendChild(top);
 
@@ -2245,12 +2324,27 @@ const creatorScript = String.raw`
         button.addEventListener("click", () => transitionProject(projectId, next, button));
         actions.appendChild(button);
       }
+      const visibility = visibilityNote(project && project.state);
+      if (visibility) {
+        card.appendChild(element("p", { className: "project-visibility", text: visibility }));
+      }
+
       if (playableStates.has(project && project.state) && project && project.activeDeploymentId) {
-        const link = element("a", { className: "button button-quiet", text: "Open playable release" });
-        link.href = playPathForProject(project);
-        link.target = "_blank";
-        link.rel = "noopener";
-        actions.appendChild(link);
+        if (project.state === "private") {
+          const openButton = element("button", {
+            className: "button button-quiet",
+            text: "Open Game",
+            type: "button"
+          });
+          openButton.addEventListener("click", () => openPrivateGame(project, openButton));
+          actions.appendChild(openButton);
+        } else {
+          const link = element("a", { className: "button button-quiet", text: "Open Game" });
+          link.href = playPathForProject(project);
+          link.target = "_blank";
+          link.rel = "noopener";
+          actions.appendChild(link);
+        }
       }
       const detailsButton = element("button", {
         className: "button button-quiet",
@@ -2710,6 +2804,32 @@ const creatorScript = String.raw`
       container.appendChild(list);
     }
 
+    async function openPrivateGame(project, button) {
+      const tab = window.open("", "_blank");
+      button.disabled = true;
+      setGlobalStatus("Opening your game…", true);
+      try {
+        const invite = await api("/v1/projects/" + encodeURIComponent(text(project && project.id, "")) + "/play-invites", {
+          method: "POST",
+          body: "{}"
+        });
+        if (!invite || typeof invite.token !== "string") throw new Error("The game could not be opened.");
+        const target = playPathForProject(project) + "?invite=" + encodeURIComponent(invite.token);
+        if (tab) {
+          tab.opener = null;
+          tab.location.href = target;
+        } else {
+          window.location.href = target;
+        }
+        setGlobalStatus("", false);
+      } catch (error) {
+        if (tab) tab.close();
+        setGlobalStatus(error instanceof Error ? error.message : "The game could not be opened.", false);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     async function transitionProject(projectId, next, button) {
       button.disabled = true;
       setGlobalStatus("Updating project state…", true);
@@ -2755,8 +2875,18 @@ const creatorScript = String.raw`
 
     function projectStateLabel(value) {
       const projectState = text(value, "draft");
-      if (projectState === "unlisted") return "Public";
+      if (projectState === "unlisted" || projectState === "published") return "Public";
+      if (projectState === "private") return "Private";
       return projectState.replaceAll("_", " ");
+    }
+
+    function visibilityNote(value) {
+      const projectState = text(value, "");
+      if (projectState === "private") return "Private. Only you can open this game from the dashboard.";
+      if (projectState === "unlisted" || projectState === "published") {
+        return "Public. Anyone with the link can play.";
+      }
+      return "";
     }
 
     function slugify(value) {
