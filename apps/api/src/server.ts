@@ -843,13 +843,10 @@ export function createApiHandler(dependencies: ApiDependencies) {
       if (request.method === "POST" && playInviteMatch) {
         if (!dependencies.hostingAuth) throw new Error("play invites unavailable");
         const actorId = await dependencies.authenticateCreator(request);
-        const input = JSON.parse((await readBody(request, 8 * 1024)).toString("utf8") || "{}") as {
-          expiresInSeconds?: number;
-        };
+        await readBody(request, 8 * 1024);
         json(response, 201, await dependencies.hostingAuth.createInvite(
           actorId,
           playInviteMatch[1]!,
-          input.expiresInSeconds,
         ));
         return;
       }

@@ -20,8 +20,10 @@ import { renderOperatorPage } from "./operator-page.js";
 import {
   gameSecurityHeaders,
   playServiceWorkerSource,
+  isPrivatePlayDenial,
   renderPlayManifest,
   renderPlayerShell,
+  renderPrivatePlayPage,
 } from "./player.js";
 import { renderPlayerPlatformPage } from "./player-platform-page.js";
 import type { ProductPageConfig } from "./product-theme.js";
@@ -356,7 +358,21 @@ export function createWebHandler(dependencies: WebDependencies) {
               playSlugs![2]!,
             );
         const projectId = project.id;
-        const playInvite = await dependencies.authorizePlay(request, projectId);
+        let playInvite: string | undefined;
+        try {
+          playInvite = (await dependencies.authorizePlay(request, projectId)) || undefined;
+        } catch (error) {
+          if (isPrivatePlayDenial(error)) {
+            response.writeHead(403, {
+              "content-type": "text/html; charset=utf-8",
+              "cache-control": "no-store",
+              "x-content-type-options": "nosniff",
+            });
+            response.end(renderPrivatePlayPage());
+            return;
+          }
+          throw error;
+        }
         const deployment = await dependencies.deployments.get(
           projectId,
           project.activeDeploymentId!,

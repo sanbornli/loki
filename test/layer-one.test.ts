@@ -543,6 +543,11 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /Needs an operator; approval will activate it automatically/);
   assert.match(creator, /Passed and publicly playable/);
   assert.match(creator, /unlisted: "Make public"/);
+  assert.match(creator, /Open Game/);
+  assert.doesNotMatch(creator, /Open playable release/);
+  assert.match(creator, /\/play-invites/);
+  assert.match(creator, /Private\. Only you can open this game from the dashboard\./);
+  assert.match(creator, /Public\. Anyone with the link can play\./);
   assert.doesNotMatch(
     creator,
     /private: \["draft", "unlisted", "review_requested"\]/,
@@ -751,6 +756,44 @@ test("web server delivers the active immutable release through a sandbox shell",
     /turn:turn\.lokiplay\.cc:3478 turns:turn\.lokiplay\.cc:5349/,
   );
   assert.match(await asset.text(), /Playable/);
+});
+
+test("a private game link without access shows a Loki page", async (t) => {
+  const { platform, creator, project } = setupProject();
+  const artifacts = new MemoryArtifactStore();
+  const deployments = new DeploymentService(platform, artifacts);
+  const credential = platform.issueDeploymentCredential(creator.account.id, project.id);
+  await deployments.deployZip({
+    ...credential,
+    archive: buildZip({
+      "game.json": JSON.stringify(manifest),
+      "index.html": "<!doctype html><main>Playable</main>",
+    }),
+    activate: true,
+  });
+  const server = startWebServer(
+    {
+      platform,
+      deployments,
+      artifacts,
+      async authorizePlay() {
+        throw new Error("play invite required");
+      },
+      gameOrigin() {
+        return "http://127.0.0.1";
+      },
+    },
+    0,
+  );
+  t.after(() => server.close());
+  await once(server, "listening");
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const denied = await fetch(`${origin}/play/studio/counter-party`);
+  assert.equal(denied.status, 403);
+  assert.match(denied.headers.get("content-type") ?? "", /text\/html/);
+  const page = await denied.text();
+  assert.match(page, /Sorry, the game has been set private by the creator/);
+  assert.doesNotMatch(page, /"error"/);
 });
 
 test("match-state encoding round-trips Unicode JSON", () => {

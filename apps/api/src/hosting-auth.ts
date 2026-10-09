@@ -156,6 +156,9 @@ export interface HostingAuthorization {
 
 export const OPERATOR_INVITE_SECONDS = 15 * 60;
 
+/** Long enough for the creator's new tab to load the game. Not a shareable link. */
+export const CREATOR_OPEN_SECONDS = 10 * 60;
+
 export class PostgresHostingAuthorization implements HostingAuthorization {
   constructor(
     readonly pool: Pool,
@@ -165,13 +168,13 @@ export class PostgresHostingAuthorization implements HostingAuthorization {
   async createInvite(
     actorId: string,
     projectId: string,
-    expiresInSeconds = 3600,
+    expiresInSeconds = CREATOR_OPEN_SECONDS,
   ): Promise<{ token: string; expiresAt: number }> {
-    if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 60 || expiresInSeconds > 604800) {
-      throw new ServiceError("INVALID_INVITE_TTL", "invite expiry must be between 60 seconds and 7 days");
+    if (expiresInSeconds !== CREATOR_OPEN_SECONDS) {
+      throw new ServiceError("INVALID_INVITE_TTL", "a private game can only be opened from the dashboard");
     }
-    const access = await this.pool.query<{ organization_id: string }>(
-      `SELECT projects.organization_id FROM projects
+    const access = await this.pool.query<{ organization_id: string; state: string }>(
+      `SELECT projects.organization_id, projects.state FROM projects
         JOIN organization_members
           ON organization_members.organization_id = projects.organization_id
          AND organization_members.account_id = $2
@@ -180,6 +183,9 @@ export class PostgresHostingAuthorization implements HostingAuthorization {
     );
     const project = access.rows[0];
     if (!project) throw new ServiceError("PROJECT_NOT_FOUND", "project not found", 404);
+    if (project.state !== "private") {
+      throw new ServiceError("PLAY_NOT_PRIVATE", "this game is not private", 400);
+    }
     const id = randomUUID();
     const expiresAt = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const token = this.signer.issue({ id, projectId, expiresAt });
@@ -243,7 +249,7 @@ export class PostgresHostingAuthorization implements HostingAuthorization {
   async authorizeRequest(
     request: IncomingMessage,
     projectId: string,
-    actorId?: string,
+    _actorId?: string,
   ): Promise<string | undefined> {
     const result = await this.pool.query<{
       state: string;
@@ -267,16 +273,6 @@ export class PostgresHostingAuthorization implements HostingAuthorization {
     if (project.state === "unlisted" || project.state === "published") return undefined;
     if (project.state !== "private") {
       throw new ServiceError("PLAY_UNAVAILABLE", "play unavailable", 404);
-    }
-    if (actorId) {
-      const membership = await this.pool.query(
-        `SELECT 1 FROM organization_members
-          WHERE organization_id = $1 AND account_id = $2`,
-        [project.organization_id, actorId],
-      );
-      if (membership.rowCount) {
-        return (await this.createInvite(actorId, projectId, 600)).token;
-      }
     }
     const url = new URL(request.url ?? "/", "http://web.local");
     const token =
