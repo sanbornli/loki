@@ -61,6 +61,9 @@ const ProviderEnvironmentSchema = z
     LOKI_NOTIFY_EMAIL_FROM: z.string().min(3).optional(),
     LOKI_NOTIFY_EMAIL_TO: z.string().email().optional(),
 
+    /** Shared secret the edge (Cloudflare) adds as x-loki-edge-secret; only then is cf-connecting-ip trusted. */
+    LOKI_EDGE_SECRET: optionalSecret,
+
     SENTRY_DSN: optionalUrl,
     SENTRY_ENVIRONMENT: z.string().default("local"),
     SENTRY_RELEASE: z.string().optional(),

@@ -47,6 +47,7 @@ export interface ApiDependencies {
   readiness?(): Promise<Record<string, boolean>>;
   log?(record: Record<string, unknown>): void;
   allowOrigin?(origin: string): boolean;
+  edgeSecret?: string;
   captureException?(error: unknown): void;
 }
 
@@ -63,6 +64,24 @@ async function readBody(
     chunks.push(bytes);
   }
   return Buffer.concat(chunks);
+}
+
+/**
+ * Database and network failures carry infrastructure detail (constraint and
+ * table names, hosts, ports) that must not reach clients.
+ */
+export function isInternalError(error: unknown): boolean {
+  if (error instanceof ServiceError || !(error instanceof Error)) return false;
+  const detail = error as Error & Record<string, unknown>;
+  return (
+    typeof detail.severity === "string" ||
+    typeof detail.routine === "string" ||
+    typeof detail.syscall === "string" ||
+    typeof detail.errno === "number" ||
+    /ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|connection terminated|timeout exceeded when trying to connect|violates .* constraint|relation ".*" does not exist|column ".*" does not exist/i.test(
+      error.message,
+    )
+  );
 }
 
 function json(response: ServerResponse, status: number, value: unknown): void {
@@ -309,7 +328,11 @@ export function createApiHandler(dependencies: ApiDependencies) {
       const rate = rateLimitFor(request.method ?? "GET", url.pathname);
       if (rate && dependencies.safety) {
         await dependencies.safety.rateLimit(
-          clientAddress(request.headers, request.socket.remoteAddress),
+          clientAddress(
+            request.headers,
+            request.socket.remoteAddress,
+            dependencies.edgeSecret,
+          ),
           `${request.method}:${url.pathname}`,
           rate.limit,
           rate.window,
@@ -1142,8 +1165,13 @@ export function createApiHandler(dependencies: ApiDependencies) {
       json(response, 404, { error: "not found" });
     } catch (error) {
       dependencies.captureException?.(error);
-      const message = error instanceof Error ? error.message : "request failed";
-      const status = error instanceof ServiceError ? error.status :
+      const internal = isInternalError(error);
+      const message = internal
+        ? "internal error"
+        : error instanceof Error
+          ? error.message
+          : "request failed";
+      const status = internal ? 500 : error instanceof ServiceError ? error.status :
         /authentication required|session required|deployment credential required/i.test(
           message,
         )

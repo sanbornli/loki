@@ -101,3 +101,30 @@ test("HTTP rate limits cover account project device session deploy and webhook p
   });
   assert.equal(clientAddress({ "cf-connecting-ip": "203.0.113.9" }, "10.0.0.1"), "203.0.113.9");
 });
+
+test("client address trusts cf-connecting-ip only with the edge secret", () => {
+  const spoofed = {
+    "cf-connecting-ip": "198.51.100.7",
+    "x-forwarded-for": "198.51.100.7, 203.0.113.50",
+  };
+  assert.equal(clientAddress(spoofed, "10.0.0.1", "edge-secret"), "203.0.113.50");
+  assert.equal(
+    clientAddress({ ...spoofed, "x-loki-edge-secret": "wrong" }, "10.0.0.1", "edge-secret"),
+    "203.0.113.50",
+  );
+  assert.equal(
+    clientAddress({ ...spoofed, "x-loki-edge-secret": "edge-secret" }, "10.0.0.1", "edge-secret"),
+    "198.51.100.7",
+  );
+  assert.equal(clientAddress({}, "10.0.0.1", "edge-secret"), "10.0.0.1");
+});
+
+test("database and network errors are treated as internal", async () => {
+  const { isInternalError } = await import("../apps/api/src/server.js");
+  const pg = Object.assign(new Error('duplicate key value violates unique constraint "x"'), {
+    severity: "ERROR",
+  });
+  assert.equal(isInternalError(pg), true);
+  assert.equal(isInternalError(new Error("connect ECONNREFUSED 10.0.0.1:5432")), true);
+  assert.equal(isInternalError(new Error("game.json is required")), false);
+});

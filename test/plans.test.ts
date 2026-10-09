@@ -241,7 +241,10 @@ test("creator dashboard shows the account plan and billing actions", () => {
   });
   assert.match(page, /id="account-plan"/);
   assert.match(page, /id="plan-card"/);
-  assert.match(page, /Loki Pro \$15\/month, billed annually/);
+  assert.match(page, /\$15\/month, billed annually/);
+  assert.match(page, /Manage subscription/);
+  assert.match(page, /id="nav-billing"/);
+  assert.match(page, /usage-fill/);
   assert.match(page, /\/v1\/billing\/checkout/);
   assert.match(page, /\/v1\/billing\/portal/);
   assert.match(page, /Continue with Google/);

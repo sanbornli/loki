@@ -19,5 +19,6 @@ COPY scripts/build-hosted-sdk.mjs scripts/build-hosted-sdk.mjs
 RUN node scripts/build-hosted-sdk.mjs
 
 ENV NODE_ENV=production
+USER node
 
 CMD ["sh", "-ec", "test -n \"$SERVICE_ENTRYPOINT\"; exec node --import tsx \"$SERVICE_ENTRYPOINT\""]

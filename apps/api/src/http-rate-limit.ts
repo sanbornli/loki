@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 export type RateLimitRule = { limit: number; window: number };
 
 const exact: Record<string, RateLimitRule> = {
@@ -15,17 +17,39 @@ const exact: Record<string, RateLimitRule> = {
   "POST:/v1/runtime-reports": { limit: 30, window: 60 },
 };
 
+/**
+ * With `edgeSecret` set, `cf-connecting-ip` is trusted only when the request
+ * carries a matching `x-loki-edge-secret` (added by Cloudflare), so callers who
+ * reach the origin directly cannot spoof their address. Otherwise the last
+ * `x-forwarded-for` entry (appended by the platform proxy) is used.
+ * Without `edgeSecret`, the previous header-trusting behavior applies.
+ */
 export function clientAddress(
   headers: Record<string, string | string[] | undefined>,
   remoteAddress?: string,
+  edgeSecret?: string,
 ): string {
   const read = (name: string): string | undefined => {
     const value = headers[name] ?? headers[name.toLowerCase()];
     return Array.isArray(value) ? value[0] : value;
   };
-  const forwarded = read("cf-connecting-ip") ?? read("x-forwarded-for");
-  const first = forwarded?.split(",")[0]?.trim();
-  return first || remoteAddress || "unknown";
+  if (!edgeSecret) {
+    const forwarded = read("cf-connecting-ip") ?? read("x-forwarded-for");
+    const first = forwarded?.split(",")[0]?.trim();
+    return first || remoteAddress || "unknown";
+  }
+  const supplied = read("x-loki-edge-secret") ?? "";
+  const expected = Buffer.from(edgeSecret);
+  const given = Buffer.from(supplied);
+  if (
+    given.length === expected.length &&
+    timingSafeEqual(given, expected)
+  ) {
+    const trusted = read("cf-connecting-ip")?.trim();
+    if (trusted) return trusted;
+  }
+  const last = read("x-forwarded-for")?.split(",").at(-1)?.trim();
+  return last || remoteAddress || "unknown";
 }
 
 export function rateLimitFor(

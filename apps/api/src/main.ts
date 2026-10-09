@@ -337,6 +337,7 @@ const server = startApiServer(
           )).id
         : identity.subject;
     },
+    edgeSecret: environment.LOKI_EDGE_SECRET,
     allowOrigin(origin) {
       try {
         const url = new URL(origin);
@@ -345,7 +346,8 @@ const server = startApiServer(
           (url.protocol === "https:" &&
             (url.hostname === baseDomain ||
               url.hostname.endsWith(`.${baseDomain}`))) ||
-          (url.protocol === "http:" &&
+          (process.env.NODE_ENV !== "production" &&
+            url.protocol === "http:" &&
             (url.hostname === "localhost" || url.hostname === "127.0.0.1"))
         );
       } catch {

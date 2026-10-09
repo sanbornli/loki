@@ -198,6 +198,85 @@ body.creator-dashboard .page-shell {
   width: 100%;
 }
 
+/* Compact login card so the whole card stays visible with a notice showing. */
+.auth-panel {
+  width: min(100%, 16.5rem);
+  padding: 1.15rem;
+  border-radius: 1rem;
+}
+
+.auth-panel .eyebrow {
+  margin-bottom: 0.5rem;
+  font-size: 0.6rem;
+}
+
+.auth-panel h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+}
+
+.auth-panel > p {
+  margin: 0 0 0.75rem;
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.auth-panel > .auth-platform-note {
+  margin: -0.25rem 0 0.75rem;
+  padding-left: 0.55rem;
+  font-size: 0.66rem;
+  line-height: 1.4;
+}
+
+.auth-panel .notice {
+  margin-bottom: 0.7rem;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.auth-panel .form-grid {
+  gap: 0.6rem;
+}
+
+.auth-panel .field {
+  gap: 0.3rem;
+}
+
+.auth-panel .field label {
+  font-size: 0.6rem;
+}
+
+.auth-panel .field input {
+  min-height: 2.1rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.auth-panel .button {
+  min-height: 2.1rem;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.64rem;
+}
+
+.auth-panel .form-actions {
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.auth-panel .text-button {
+  font-size: 0.62rem;
+}
+
+.auth-divider {
+  margin: 0.7rem 0 0.55rem;
+  font-size: 0.6rem;
+}
+
+.oauth-actions {
+  gap: 0.45rem;
+}
+
 .dashboard-shell {
   display: grid;
   grid-template-columns: 15.5rem minmax(0, 1fr);
@@ -461,6 +540,144 @@ body.creator-dashboard .page-shell {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
+}
+
+.plan-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.usage-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.usage-row {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.usage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.8rem;
+}
+
+.usage-label {
+  color: var(--paper);
+}
+
+.usage-value {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.usage-track {
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+}
+
+.usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--amber);
+}
+
+.usage-fill[data-level="full"] {
+  background: var(--danger);
+}
+
+.usage-row.usage-cap .usage-fill {
+  display: none;
+}
+
+.usage-row.usage-cap .usage-track {
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--paper) 14%, transparent) 0 6px,
+    transparent 6px 10px
+  );
+}
+
+.usage-note {
+  margin: 0;
+  color: var(--quiet);
+  font-size: 0.7rem;
+}
+
+.billing-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.billing-section {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  background: var(--ink);
+}
+
+.billing-section h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 560;
+}
+
+.billing-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.billing-facts dt {
+  color: var(--muted);
+}
+
+.billing-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+
+.plan-option {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+}
+
+.plan-option[data-current="true"] {
+  border-color: var(--amber);
+}
+
+.plan-option h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 560;
+}
+
+.plan-option p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .instruction-callout {
@@ -936,7 +1153,7 @@ body.creator-dashboard .page-shell {
   }
 
   .auth-panel {
-    width: min(100%, 26rem);
+    width: min(100%, 17.5rem);
     transform: none;
   }
 
@@ -1162,6 +1379,10 @@ const pageBody = `
             <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><path d="M4 20V10M12 20V4M20 20v-7"></path></svg>
             <span class="nav-label">Analytics</span>
           </button>
+          <button class="nav-item" type="button" data-nav-target="nav-billing" aria-current="false" title="Billing">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><rect x="3" y="6" width="18" height="12"></rect><path d="M3 10h18M7 15h3"></path></svg>
+            <span class="nav-label">Billing</span>
+          </button>
         </nav>
         <div class="sidebar-account">
           <span class="account-label" id="account-label" hidden></span>
@@ -1189,12 +1410,15 @@ const pageBody = `
           </div>
 
           <section class="plan-card" id="plan-card" hidden>
-            <div>
-              <p class="eyebrow">Plan</p>
-              <h2 id="plan-name">Free</h2>
-              <p id="plan-detail"></p>
+            <div class="plan-card-head">
+              <div>
+                <p class="eyebrow">Plan</p>
+                <h2 id="plan-name">Free</h2>
+                <p id="plan-detail"></p>
+              </div>
+              <button class="button button-primary" id="manage-subscription" type="button" data-nav-link="nav-billing">Manage subscription</button>
             </div>
-            <div class="plan-actions" id="plan-actions"></div>
+            <div class="usage-list" id="plan-usage"></div>
           </section>
 
           <section class="instruction-callout" aria-labelledby="instruction-title">
@@ -1318,6 +1542,29 @@ const pageBody = `
           <div class="empty-state">
             <strong>Analytics are coming soon.</strong>
             <p>Player and session insights for your releases will appear here.</p>
+          </div>
+        </section>
+
+        <section class="nav-panel" id="nav-billing" hidden>
+          <div class="panel-header">
+            <p class="eyebrow">Creator desk</p>
+            <h1>Billing</h1>
+          </div>
+          <div class="billing-grid">
+            <section class="billing-section" aria-labelledby="billing-plan-title">
+              <h2 id="billing-plan-title">Current plan</h2>
+              <dl class="billing-facts" id="billing-facts"></dl>
+              <div class="plan-actions" id="billing-portal-actions"></div>
+            </section>
+            <section class="billing-section" aria-labelledby="billing-usage-title">
+              <h2 id="billing-usage-title">Usage</h2>
+              <div class="usage-list" id="billing-usage"></div>
+              <p class="usage-note">Plan limits apply across every organization you own.</p>
+            </section>
+            <section class="billing-section" aria-labelledby="billing-upgrade-title">
+              <h2 id="billing-upgrade-title">Plans</h2>
+              <div class="plan-options" id="plan-options"></div>
+            </section>
           </div>
         </section>
       </div>
@@ -1609,12 +1856,61 @@ const creatorScript = String.raw`
       return "Free";
     }
 
-    function limitText(limits) {
-      if (!limits) return "";
-      const games = limits.games == null ? "Unlimited games" : limits.games + (limits.games === 1 ? " game" : " games");
-      const links = limits.playLinks == null ? "unlimited play links" : limits.playLinks + (limits.playLinks === 1 ? " play link" : " play links");
-      const rooms = limits.simultaneousRooms == null ? "unlimited simultaneous rooms" : limits.simultaneousRooms + " simultaneous rooms";
-      return games + ", " + links + ", " + rooms + ", " + limits.maxPlayersPerRoom + " players per room.";
+    function ownedProjects() {
+      const owned = new Set(
+        state.organizations.filter((organization) => organization && organization.role === "owner").map((organization) => organization.id)
+      );
+      return state.projects.filter((project) => project && owned.has(project.organizationId));
+    }
+
+    function usageRow(label, used, limit, capText) {
+      const row = document.createElement("div");
+      row.className = "usage-row";
+      const head = document.createElement("div");
+      head.className = "usage-head";
+      const name = document.createElement("span");
+      name.className = "usage-label";
+      name.textContent = label;
+      const value = document.createElement("span");
+      value.className = "usage-value";
+      const track = document.createElement("div");
+      track.className = "usage-track";
+      const fill = document.createElement("span");
+      fill.className = "usage-fill";
+      if (capText) {
+        row.classList.add("usage-cap");
+        value.textContent = capText;
+      } else if (limit == null) {
+        value.textContent = used + " used · Unlimited";
+        fill.style.width = "0%";
+      } else {
+        const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100;
+        value.textContent = used + " / " + limit;
+        fill.style.width = percent + "%";
+        if (used >= limit) fill.dataset.level = "full";
+      }
+      head.append(name, value);
+      track.appendChild(fill);
+      row.append(head, track);
+      return row;
+    }
+
+    function renderUsage(container, limits) {
+      clear(container);
+      if (!limits) return;
+      const owned = ownedProjects();
+      const playLinks = owned.filter((project) => playableStates.has(project.state)).length;
+      container.appendChild(usageRow("Games", owned.length, limits.games));
+      container.appendChild(usageRow("Play links", playLinks, limits.playLinks));
+      container.appendChild(
+        usageRow(
+          "Simultaneous rooms",
+          0,
+          limits.simultaneousRooms,
+          limits.simultaneousRooms == null ? "Unlimited" : "Up to " + limits.simultaneousRooms
+        )
+      );
+      container.appendChild(usageRow("Players per room", 0, limits.maxPlayersPerRoom, "Up to " + limits.maxPlayersPerRoom));
     }
 
     function planStatusText(account) {
@@ -1661,33 +1957,87 @@ const creatorScript = String.raw`
       const card = byId("plan-card");
       card.hidden = false;
       byId("plan-name").textContent = planLabel(plan);
-      const status = planStatusText(account);
-      const summary = limitText(account && account.limits);
-      byId("plan-detail").textContent = status ? summary + " " + status : summary;
-      const actions = byId("plan-actions");
-      clear(actions);
-      if (account && account.manageBilling) {
+      byId("plan-detail").textContent = planStatusText(account);
+      byId("plan-detail").hidden = !planStatusText(account);
+      renderUsage(byId("plan-usage"), account && account.limits);
+      renderBilling(account, plan);
+    }
+
+    function addFact(list, label, value) {
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const detail = document.createElement("dd");
+      detail.textContent = value;
+      list.append(term, detail);
+    }
+
+    function renderBilling(account, plan) {
+      const facts = byId("billing-facts");
+      clear(facts);
+      addFact(facts, "Plan", planLabel(plan));
+      addFact(facts, "Account", text(account && account.email, "Creator account"));
+      const status = account && account.planStatus;
+      if (plan === "free") {
+        addFact(facts, "Status", "Free plan, no payment method on file");
+      } else {
+        const when = account && account.planPeriodEnd ? new Date(account.planPeriodEnd).toLocaleDateString() : "";
+        if (status === "active") {
+          addFact(facts, "Status", "Active");
+          if (when) addFact(facts, "Renews", when);
+        } else if (status === "past_due") {
+          addFact(facts, "Status", "Payment past due");
+          if (when) addFact(facts, "Paid limits until", when);
+        } else if (status === "canceled") {
+          addFact(facts, "Status", "Canceled");
+          if (when) addFact(facts, "Ends", when);
+        }
+      }
+      renderUsage(byId("billing-usage"), account && account.limits);
+
+      const portal = byId("billing-portal-actions");
+      clear(portal);
+      const subscribed = Boolean(account && account.manageBilling);
+      if (subscribed) {
         const button = document.createElement("button");
         button.className = "button button-primary";
         button.type = "button";
-        button.textContent = "Manage billing";
+        button.textContent = "Payment method, invoices and cancellation";
         button.addEventListener("click", () => startPortal(button));
-        actions.appendChild(button);
-        return;
+        portal.appendChild(button);
       }
-      const choices = [
-        ["loki_monthly", "Loki $12/month"],
-        ["loki_annual", "Loki $8/month, billed annually"],
-        ["pro_monthly", "Loki Pro $20/month"],
-        ["pro_annual", "Loki Pro $15/month, billed annually"]
+
+      const options = byId("plan-options");
+      clear(options);
+      const catalog = [
+        { id: "loki", title: "Loki", blurb: "20 games, 20 play links, unlimited rooms, 8 players per room, public catalog and server authority.", prices: [["loki_monthly", "$12/month"], ["loki_annual", "$8/month, billed annually"]] },
+        { id: "pro", title: "Loki Pro", blurb: "Unlimited games and play links, unlimited rooms, 16 players per room, public catalog and server authority.", prices: [["pro_monthly", "$20/month"], ["pro_annual", "$15/month, billed annually"]] }
       ];
-      for (const choice of choices) {
-        const button = document.createElement("button");
-        button.className = "button";
-        button.type = "button";
-        button.textContent = choice[1];
-        button.addEventListener("click", () => startCheckout(choice[0], button));
-        actions.appendChild(button);
+      for (const entry of catalog) {
+        const card = document.createElement("div");
+        card.className = "plan-option";
+        card.dataset.current = entry.id === plan ? "true" : "false";
+        const title = document.createElement("h3");
+        title.textContent = entry.title + (entry.id === plan ? " (current)" : "");
+        const blurb = document.createElement("p");
+        blurb.textContent = entry.blurb;
+        card.append(title, blurb);
+        if (!subscribed && entry.id !== plan) {
+          for (const price of entry.prices) {
+            const button = document.createElement("button");
+            button.className = "button";
+            button.type = "button";
+            button.textContent = "Upgrade " + price[1];
+            button.addEventListener("click", () => startCheckout(price[0], button));
+            card.appendChild(button);
+          }
+        }
+        options.appendChild(card);
+      }
+      if (subscribed) {
+        const note = document.createElement("p");
+        note.className = "usage-note";
+        note.textContent = "To change plan, switch between monthly and annual, or cancel, use the billing portal above.";
+        options.appendChild(note);
       }
     }
 
@@ -2107,11 +2457,6 @@ const creatorScript = String.raw`
       return [
         "Integrate and ship this repository to Loki.",
         "",
-        "Rules",
-        "- Follow the Loki integration rules in AGENTS.md at the repository root for every integration decision: rooms, lobby, matchmaking, leaderboard, host or server authority, the hosted SDK, mobile, and hosting limits.",
-        "- If AGENTS.md is missing, run npx lokiplay@" + cliVersion + " init to create it. If the repository already has a different AGENTS.md, do not overwrite it; read https://docs.lokiplay.cc/llms-full.txt instead.",
-        "- If a material multiplayer detail is ambiguous, stop and ask the creator. Do not guess player counts, room type, or host versus server.",
-        "",
         "Project",
         "- Name: " + projectName,
         "- Studio slug: " + (organizationSlug || "Unavailable"),
@@ -2122,31 +2467,93 @@ const creatorScript = String.raw`
         "- Canonical API URL: " + apiUrl,
         "- Canonical player URL: " + playerUrl,
         "",
-        "Packages",
-        "Package installation and creator authentication are separate: installing is public and needs no Loki credentials, and sign-in happens only through the Loki CLI device flow.",
-        "- Use only these official packages, pinned exactly: lokiplay@" + cliVersion + ", @lokiplay/sdk@" + version + ", and optionally @lokiplay/ui-web@" + version + ".",
-        "- Do not install or import @loki/*, unofficial packages named loki, or @heroiclabs/nakama-js. Do not substitute a local workspace, git dependency, tarball, or different version.",
-        "- Before implementing, verify both versions exist, and stop and report the failing command if either does not:",
+        "Package installation and creator authentication are separate. Package installation is public and must not require Loki credentials. Creator authentication happens only through the Loki CLI device flow.",
+        "",
+        "Use only the official public packages and pin the exact version shown above:",
+        "- CLI: lokiplay@" + cliVersion,
+        "- Runtime SDK: @lokiplay/sdk@" + version,
+        "- Optional web UI: @lokiplay/ui-web@" + version,
+        "- Protocol package: @lokiplay/protocol@" + version + " (only if the SDK or existing repository directly requires it)",
+        "- MCP package: @lokiplay/mcp@" + version + " (tooling only; never ship it in the game bundle)",
+        "Do not install or import @loki/*, any unofficial package named loki, or @heroiclabs/nakama-js.",
+        "Before implementation, verify the required public packages are available from the registry:",
         "   npm view @lokiplay/sdk@" + version + " version",
         "   npm view lokiplay@" + cliVersion + " version",
+        "Stop and report the failing command if either exact version is unavailable. Do not substitute a local workspace, git dependency, tarball, unpublished package, or different version.",
         "",
-        "Steps",
-        "1. Inspect the repository (package manager, framework, entry points, existing multiplayer code, production output directory) and preserve its stack and UI.",
-        "2. Add the smallest complete Loki integration following AGENTS.md. Run the repository's own install, typecheck, test, lint, and production-build commands, and verify the built output, not only the source.",
-        "3. Serve the finished build and confirm it loads:",
-        "   npx lokiplay@" + cliVersion + " preview",
-        "4. Ask the user to authorize creator access. After approval, run the device login and give the user its displayed URL and code:",
+        "Repository inspection and implementation",
+        "1. Inspect the repository before changing it: identify its package manager, framework, entry points, existing multiplayer/game-state architecture, scripts, and browser production output directory.",
+        "2. Preserve the existing stack and UI. Install the exact public @lokiplay/sdk version with the repository's package manager and add the smallest complete Loki integration; add @lokiplay/ui-web only when the repository needs Loki-provided UI.",
+        "3. Ensure the finished browser build contains game.json, index.html, and all required static assets. Do not ship source-only output, backend processes, secrets, creator ad scripts, or localhost dependencies.",
+        "4. Use the repository's own install, typecheck, test, lint, and production-build commands. Fix integration-caused failures and verify the built output, not only source code.",
+        "5. Before connecting or shipping, ask the user to authorize creator access. After approval, run the device login command and give the user its displayed URL and code so they can sign in and approve this terminal:",
         "   LOKI_API_URL=" + apiUrl + " npx lokiplay@" + cliVersion + " login",
-        "5. After the CLI reports \"Logged in\", connect this exact project:",
+        "6. After the CLI reports \"Logged in\", connect this exact project. This verifies that the authenticated creator can access the project and writes only the non-secret project link to the repository:",
         "   npx lokiplay@" + cliVersion + " connect --project " + projectId,
-        "6. Ship the finished build:",
+        "7. Ship the finished build:",
         "   npx lokiplay@" + cliVersion + " ship",
-        "Never ask the user to paste an access token or deployment credential. If login, connect, or ship fails, report the exact non-secret error and stop instead of bypassing authentication. Do not put secrets in code, game.json, logs, commits, or the final report.",
+        "Never ask the user to paste an access token or deployment credential. If login, ownership verification, or deployment fails, report the exact non-secret error and stop rather than bypassing authentication.",
+        "",
+        "Hosted SDK delivery",
+        "- Install @lokiplay/sdk@" + version + " for TypeScript types and local development, and import from \"@lokiplay/sdk\" as usual. In production Loki serves the SDK from the game host at /loki/sdk.js and maps that import to it, so production may run a newer, compatible SDK than the package you pinned. Fixes to Loki networking then reach players on refresh without a rebuild.",
+        "- Leave @lokiplay/sdk external in the production build only (Vite: build.rollupOptions.external: [\"@lokiplay/sdk\"]). Do not bundle it into the finished build. Local dev servers keep resolving the installed package.",
+        "- Ship an ES module entry (<script type=\"module\">); a classic single-file bundle cannot use the import map. Do not import @lokiplay/sdk from a Web Worker, and do not register a game service worker that intercepts or caches /loki/sdk.js.",
+        "- Before shipping, serve the finished build with npx lokiplay@" + cliVersion + " preview and confirm the page loads. The preview serves the hosted SDK; the multiplayer session handshake only runs inside the Loki play page.",
+        "",
+        "Host-authoritative requirements",
+        "- Loki owns identity, project and tenant boundaries, room membership, matchmaking, event sequencing, snapshots, and host migration.",
+        "- Never trust, replace, or override the projectId, player identity, membership, host assignment, sequence, or snapshots returned by Loki.",
+        "- Create rooms with createRoom() and join with joinRoom({ inviteCode }). Do not invent Loki room keys or pass player-typed codes to createRoom. create() stays invite-only unless the game explicitly passes { visibility: \"public\" }. Do not make every room public. Confirm for each mode whether entry is private invites, public room browsing (listPublicRooms + joinPublic), automatic matchmaking, or a combination. Loki's SDK does not add a public lobby screen. If public-room discovery is enabled, the game agent must build the room browser and all loading, empty, joining, full-room, waiting, readiness, and error states. The Loki overlay does not list, create, or join public rooms.",
+        "- Installing the SDK does not add a create/join screen. If the game has no usable room-entry flow, add one before shipping: a minimal lobby (create room, join with invite, copy invite, start when ready) or an automatic flow (plain URL creates a room; invite or deep-link URL joins it). The Loki overlay shows room status, players, invite copy, and chat only; it does not create or join rooms. Players still need loading, waiting, and error states.",
+        "- Installing the SDK also does not add Match or Leaderboard screens; both are required alongside create/join, and the Loki overlay never draws them. Add a Match control that calls the room wrapper's matchmake() (SynchronizedRoom.matchmake() / RealtimeRoom.matchmake()) with confirmed player/team settings, plus searching, cancel, timeout, waiting, and error states. Add a per-game Leaderboard using listLeaderboard()/submitLeaderboardScore() (or the in-room submitScore() for a mid-room board), with display-name collection or a sensible fallback, plus loading, empty, pagination, submission, and error states. Player count, teams, and scoring stay creator decisions; if the game has no numeric result to store, ask the creator once what to record instead of inventing a scoring rule. Leaderboards are per-game/project and available to guest sessions without a creator account; client-submitted scores are not an anti-cheat boundary. Public room browsing stays optional.",
+        "- Before configuring Loki multiplayer, inspect the game's source, existing UI, configuration, documentation, tests, and finished build. Locate its game modes, seats, local-player handling, AI opponents, teams, start conditions, turn or update loop, win conditions, reconnect behavior, and existing networking code.",
+        "- Do not infer multiplayer requirements from the game's name, genre, appearance, or common rules. A chess, pool, racing, or strategy game may support different player and team arrangements.",
+        "- Determine requirements separately for every supported game mode. Do not collapse multiple modes into one profile.",
+        "- Record evidence for each conclusion and distinguish observed facts from creator decisions. If any material field is ambiguous, stop and ask the creator. Never silently choose a player count, team arrangement, simulation model, authority model, update frequency, persistence policy, or matchmaking flow.",
+        "- Determine and confirm for each mode: minimum, recommended, and maximum players; number of teams, team size, and whether players share control; private invite, public room browsing, automatic matchmaking, a combination, or asynchronous entry; whether late joining and spectators are allowed; turn-based, event-driven, continuous realtime, or hybrid simulation; sequential or simultaneous input; required authoritative update frequency and latency sensitivity; session duration and persistence requirements; host-authoritative trust tolerance or server-authority requirement.",
+        "- Classify simulation from how authoritative state progresses, not from visual animation. A game animated at 60 FPS may still be turn-based or event-driven.",
+        "- Preserve existing game modes and rules. Add online settings and entry UI from the confirmed profile, including mode selection, team or seat selection, readiness, player limits, invite and join behavior, waiting states, and start conditions.",
+        "- Do not invent new game.json fields. Current manifests accept only enabled, authority, maxPlayers, tickRate, and — only when authority is \"server\" — step. Report the richer profile in the final report: values, supporting evidence, and creator-confirmed decisions.",
+        "- Classify authority from the code that advances match state, not from the genre or the frame rate. Turn-based or event-driven means state changes only when a player action is committed. Continuous realtime means state advances on a tick even when nobody has just pressed a button. If that reading is ambiguous, stop and ask the creator what the match state depends on. Do not guess. One game.json has one authority for the whole project; if modes disagree, say so and ask which one this project is.",
+        "- Host is more suitable for turn-based and event-driven games. Write authority \"host\", omit step, and use createSynchronizedRoom(). Server is more suitable for continuous realtime games. Tell the creator what the update path does, then ask them to confirm server. Write authority \"server\" and step, and do not elect a player host. Server rooms are browser-only, run in Singapore, and end if the step fails; they do not fall back to a player. That is fairness, not lower latency. The viewer clock follows tickRate. Leave simulationHz as the local prediction step. Do not set simulationHz equal to tickRate to unstick presentation.",
+        "- Before compiling step, change the state update so the next state depends only on the previous state and this tick's inputs. Drawing, sound, and asset loads stay in the browser. If the update reads the DOM, the clock, randomness, or assets, remove those calls from it. A seed or the tick index, when the game needs one, is an input field. If you cannot make that change, say so and do not write authority \"server\". Host realtime (createRealtimeRoom() with authority \"host\") can ship until the update is pure; say that is why, and do not describe host as the better fit for a continuous game. step is a .wasm module exporting exactly one function, step, and importing nothing. A later switch is another deploy after the creator confirms again; rooms already open keep the authority they started with.",
+        "- After confirming each mode's profile, choose createSynchronizedRoom() for turn-based or event-driven state, or createRealtimeRoom() for continuous realtime. Choose by how authoritative state actually progresses, not by genre or animation smoothness. Do not run both room types for the same mode.",
+        "- createSynchronizedRoom(): define this repository's state and actions, then provide a reducer. Loki owns authority checks, state versions, snapshots, retries, and membership.",
+        "- Clients dispatch actions through the synchronized room. Do not create a parallel authoritative backend or direct Nakama integration.",
+        "- Keep replicated state JSON-compatible and use finite safe integers. Reducers must be synchronous, deterministic, and fast, with no rendering, timers, network calls, or other I/O.",
+        "- Subscribe to synchronized snapshots for state, members, authority, connection status, and rejected actions. Keep the same LokiClient and synchronized-room instance while interrupted.",
+        "- createRealtimeRoom(): integrate the game's existing simulation through its predict/interpolate/extrapolate/blendCorrection callbacks instead of writing a parallel input queue, RTT estimator, snapshot pacer, stale-round rejection, input ledger, interpolation buffer, or reconnect netcode; the SDK already owns all of that, including per-submission in-flight accounting and setInput() network pacing. Keep one game-owned render loop, keep authoritative snapshots compact and self-contained. snapshotHz (default 30, cap 100) is a ceiling, not a delivery guarantee: start conservative with adaptiveRate: true and a low initialSnapshotHz, or use calibrateRealtimeRoom() against a real two-player pair (fixed snapshotHz per candidate) to pick the highest delivered rate without a transport/hold/ack cliff and write only that RealtimeProfile into createRealtimeRoom(); game.json tickRate is a separate Nakama room-loop setting and must not be copied from snapshotHz. Use createHostedLokiClient() to own the hosted-shell session handshake at page boot instead of hand-writing it. Report the selected snapshot/input rates and observed diagnostics (RTT, jitter, acceptance/rejection ratios, reconnect/migration duration, dropped/coalesced frames, held authoritative frames) as evidence.",
+        "- Do not claim Loki supplies game physics, collision resolution, rendering optimization, or competitive/anti-cheat integrity for createRealtimeRoom() games. Loki owns transport, sequencing, fencing, and delivery only; the game owns simulation and rendering.",
+        "- createRealtimeRoom() requires every present room member to be realtime-capable before it activates; a legacy or non-realtime-capable client blocks activation and cannot join an already-active realtime room. Native clients cannot join realtime-mode rooms until a later parity release; do not offer createRealtimeRoom() for cross-client modes yet.",
+        "- Let the SDK own lifecycle detection, socket replacement, reconnect retries, snapshot recovery, and pending-action replay. Do not add competing visibilitychange, pagehide, pageshow, blur, focus, online, or offline reconnect logic.",
+        "- Never call leave(), close(), transport disconnect, reload, or create a replacement room because the page became hidden, blurred, offline, or unloaded. Call leave() only from a deliberate Leave/End Game action.",
+        "- Call dispatch() only while connection is connected. Treat suspended, reconnecting, and resynchronizing as recoverable connection states, not a leave.",
+        "- While interrupted, lock authoritative input, preserve the last rendered state, show a temporary Reconnecting message, and wait for an authoritative snapshot. Do not assume the player remains host.",
+        "- Do not repeat an unresolved action under a new action ID. Treat indeterminate or authoritative confirmation timed out as an unknown outcome, not proof of failure. Treat room_closed as terminal and resolve leave_failed before starting another room with that client.",
+        "- Production multiplayer must run from a Loki-hosted finished browser build.",
+        "- Hosted games run in a sandbox iframe with a strict CSP. Do not use inline <script> tags, inline event handlers, Google Fonts or other remote stylesheets, or <form> submissions. Bundle JavaScript and fonts as same-origin files and use <button type=\"button\"> for create/join controls.",
+        "",
+        "Mobile browser requirements",
+        "- Include <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">. Do not globally disable browser zoom.",
+        "- Make the game root width: 100%, height: 100vh followed by height: 100dvh, and overflow: hidden. Account for env(safe-area-inset-*). Gameplay must not require document scrolling, though internal menus may scroll.",
+        "- Recalculate layout from the game container on resize, visualViewport.resize when available, and orientation changes. Preserve logical coordinates and fit them to the available area instead of hard-coding desktop pixels.",
+        "- Support both orientations unless the game clearly explains a required orientation. Keep critical controls inside safe-area boundaries.",
+        "- For canvas games, separate CSS size from backing resolution, scale by devicePixelRatio with a reasonable cap such as 2, and resize and redraw after viewport changes without replacing the canvas node.",
+        "- Use Pointer Events for touch, mouse, pen, and trackpad. Restrict touch-action: none to direct-manipulation playfields, use pointer capture for dragging or aiming, handle pointercancel and lost capture, provide primary targets of at least 44x44 CSS pixels, and do not rely on hover.",
+        "- Use one controlled requestAnimationFrame loop. Pause or throttle rendering while hidden without leaving the Loki room, then render the latest authoritative snapshot. Keep transient visual state out of synchronized state, cap canvas resolution, and avoid large per-frame allocations.",
+        "- Report whether mobile Safari and Android Chrome were tested. Never claim real-device testing unless it actually occurred. When supported by the available environment, exercise resize, orientation changes, interrupted gestures, hide/restore, temporary offline recovery, host migration, and return after extended backgrounding.",
+        "",
+        "Security and approval",
+        "- Do not put credentials, access tokens, deployment secrets, private keys, or environment-secret values in code, game.json, logs, commits, this prompt, or the final report.",
+        "- Before any browser action that requires login, OAuth, permissions, external account access, or a deployment confirmation, pause and ask the user for explicit approval. Continue only after approval.",
         "",
         "Final report",
-        "- Files changed, the confirmed multiplayer profile for each mode with its evidence and the creator's decisions, and the exact package versions and commands used.",
-        "- Typecheck, test, lint, build, preview, connect, and ship results reported separately, including anything skipped.",
-        "- Deployment ID, status, and playable URL, plus any remaining blockers or manual approval steps.",
+        "- List files changed and summarize the Loki integration.",
+        "- Report the confirmed multiplayer profile for each mode, the evidence that established it, and any creator-confirmed decisions.",
+        "- Report the exact package versions and commands used.",
+        "- Report typecheck, test, lint, production-build, connect, and ship results separately, including any command that was unavailable or skipped.",
+        "- Provide the deployment ID, integration/deployment status, and latest playable URL when returned by Loki.",
+        "- Call out remaining blockers or manual approval steps without exposing credentials."
       ].join("\n");
     }
 
@@ -2632,6 +3039,10 @@ const creatorScript = String.raw`
     }
 
     finishRedirectSignIn().then(() => {
+      if (new URLSearchParams(window.location.search).has("billing")) {
+        history.replaceState(null, "", window.location.pathname);
+        setActiveNav("nav-billing");
+      }
       if (state.token) {
         loadOverview();
       } else {
