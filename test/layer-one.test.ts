@@ -520,30 +520,35 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /function configuredCliVersion\(\)/);
   assert.match(creator, new RegExp(`"${releaseVersion.replaceAll(".", "\\.")}"`));
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
-  assert.match(creator, /createRoom\(\)/);
-  assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);
   assert.match(creator, /id="organization-slug"/);
   assert.match(creator, /playPathForProject\(project\)/);
   assert.match(player, /play\/studio\/game-slug/);
-  assert.match(creator, /usable room-entry flow/);
-  assert.match(creator, /minimal lobby/);
-  assert.match(creator, /does not add a public lobby screen/);
-  assert.match(creator, /Do not make every room public/);
-  assert.match(creator, /listPublicRooms/);
-  assert.match(creator, /joinPublic/);
-  assert.match(creator, /Do not infer multiplayer requirements/);
-  assert.match(creator, /stop and ask the creator/);
-  assert.match(creator, /Do not invent new game\.json fields/);
-  assert.doesNotMatch(creator, /Do not redesign the game merely to make it fit/);
-  assert.doesNotMatch(creator, /report that incompatibility instead of implementing a degraded substitute/);
-  assert.match(creator, /createSynchronizedRoom\(\)/);
-  assert.match(creator, /Let the SDK own lifecycle detection/);
-  assert.match(creator, /viewport-fit=cover/);
-  assert.match(creator, /Pointer Events/);
-  assert.match(creator, /requestAnimationFrame/);
-  assert.match(creator, /Google Fonts/);
-  assert.match(creator, /inline <script>/);
-  assert.match(creator, /<form> submissions/);
+  assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " init/);
+  assert.match(creator, /Read AGENTS\.md in full and follow it/);
+  assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " preview/);
+  const promptSource = creator.slice(
+    creator.indexOf("function agentPrompt"),
+    creator.indexOf("async function copyWithStatus"),
+  );
+  for (const rule of [
+    /usable room-entry flow/,
+    /does not add a public lobby screen/,
+    /Do not infer multiplayer requirements/,
+    /Do not invent new game\.json fields/,
+    /createSynchronizedRoom\(\)/,
+    /Let the SDK own lifecycle detection/,
+    /viewport-fit=cover/,
+    /Pointer Events/,
+    /requestAnimationFrame/,
+    /Google Fonts/,
+    /Hosted SDK delivery/,
+    /Host-authoritative requirements/,
+    /Mobile browser requirements/,
+    /createRoom\(\)/,
+    /validate/,
+  ]) {
+    assert.doesNotMatch(promptSource, rule);
+  }
   assert.match(creator, /Package installation and creator authentication are separate/);
   assert.match(creator, /Needs an operator; approval will activate it automatically/);
   assert.match(creator, /Passed and publicly playable/);
@@ -1043,6 +1048,12 @@ test("CLI initializes, validates and archives finished builds", async () => {
     assert.match(agents, /viewport-fit=cover/);
     assert.match(agents, /Pointer Events/);
     assert.match(agents, /requestAnimationFrame/);
+    assert.match(agents, /createSynchronizedRoom\(\)/);
+    assert.match(agents, /createRoom\(\)/);
+    assert.match(agents, /joinRoom\(\{ inviteCode \}\)/);
+    assert.match(agents, /lokiplay preview/);
+    assert.doesNotMatch(agents, /lokiplay validate|lokiplay deploy|MVP multiplayer/);
+    assert.match(agents, /25 MiB/);
     assert.ok((await archiveBuild(directory)).byteLength > 0);
   } finally {
     await rm(directory, { recursive: true, force: true });

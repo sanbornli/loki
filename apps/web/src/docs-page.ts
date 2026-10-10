@@ -863,6 +863,9 @@ npx lokiplay@${v} ship`)}
       },
     ]),
     main: `
+          <h2>0.5.2</h2>
+          <p>The prompt copied from the creator desk is now short. It installs the pinned packages, writes the current Loki rules into your repository with <code>npx lokiplay init</code>, and tells your coding agent to follow <code>AGENTS.md</code>. The rules live in one place, so the prompt and the rules can no longer disagree.</p>
+          <p>The rules now describe one flow: preview the finished build, then ship it.</p>
           <h2>0.5.1</h2>
           <p>A game link is public by default on every plan, and you can switch it between public and private from the dashboard. Deactivate a game to free its active slot without deleting it, then reactivate it later. The Free plan stores two games with one active at a time.</p>
           <p>Loki keeps the latest three releases of each game and caps stored builds per plan. The command-line tool checks the size of your build before it uploads.</p>

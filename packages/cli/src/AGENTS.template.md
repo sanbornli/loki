@@ -15,14 +15,22 @@
   multiplayer session handshake only runs inside the Loki play page.
 - Upload `game.json`, `index.html`, and static assets. Do not upload source-only
   repositories, backend processes, secrets, creator ad scripts, or localhost
-  dependencies.
-- MVP multiplayer is host-authoritative. Loki controls identity, tenant
-  boundaries, membership, matchmaking, sequencing, snapshots, and host
-  migration.
-- Never trust or override the `projectId`, player identity, room membership, or
-  sequence returned by Loki.
+  dependencies. The upload is the finished browser build only, within 25 MiB
+  compressed, 100 MiB uncompressed, and 1000 files. Verify the built output,
+  not only the source.
+- Do not put credentials, access tokens, deployment secrets, private keys, or
+  environment-secret values in code, `game.json`, logs, commits, or reports.
+  Never ask the user to paste a token or deployment credential. Before any
+  browser action that needs login, OAuth, permissions, external account
+  access, or a deployment confirmation, pause and ask the user for explicit
+  approval.
+- Loki controls identity, tenant boundaries, membership, matchmaking,
+  sequencing, snapshots, and host migration. Authority per project is set in
+  `game.json` and chosen below.
+- Never trust or override the `projectId`, player identity, room membership,
+  host assignment, sequence, or snapshots returned by Loki.
 - Create rooms with `createRoom()` and join with `joinRoom({ inviteCode })`.
-  Do not invent Loki room keys. `create()` stays invite-only unless the
+  Do not invent Loki room keys or pass player-typed codes to `createRoom`. `create()` stays invite-only unless the
   game explicitly passes `{ visibility: "public" }`. Do not make every room
   public. Confirm for each mode whether entry is private invites, public
   room browsing (`listPublicRooms` + `joinPublic`), automatic matchmaking,
@@ -89,6 +97,9 @@
   `authority` is `"server"` — `step`. Report the richer profile in the
   final report: values, supporting evidence, and creator-confirmed
   decisions.
+- If `lokiplay init` created `game.json`, its `multiplayer` values (host,
+  `maxPlayers` 8, `tickRate` 30) are placeholders, not a confirmed profile.
+  Replace them with the confirmed values for this game.
 - Classify authority from the code that advances match state, not from the
   genre or the frame rate. Turn-based or event-driven means that state
   changes only when a player action is committed. Continuous realtime means
@@ -242,7 +253,7 @@
   `listPublicRooms()` and `joinPublic({ roomId })` with loading, empty,
   joining, full, waiting, and error states.
 - Handle rejected actions from `dispatch()` without inventing a parallel
-  protocol. Build and deploy from this repository.
+  protocol.
 - Include `<meta name="viewport"
   content="width=device-width, initial-scale=1, viewport-fit=cover">`. Do not
   globally disable browser zoom. Make the game root `width: 100%`,
@@ -270,9 +281,9 @@
   inline `<script>` tags, inline event handlers, Google Fonts or other remote
   stylesheets, or `<form>` submissions. Put JavaScript and fonts in same-origin
   files and use `<button type="button">` for create/join controls.
-- Run `npx lokiplay validate` before `npx lokiplay deploy`. Report whether
-  mobile Safari and Android Chrome were tested; never claim real-device testing
-  unless it was actually performed. Exercise resize, orientation changes,
+- Run `npx lokiplay preview` on the finished build, then `npx lokiplay ship`.
+  Report whether mobile Safari and Android Chrome were tested; never claim
+  real-device testing unless it was actually performed. Exercise resize, orientation changes,
   interrupted gestures, hide/restore, temporary offline recovery, host
   migration, and return after an extended background period when the available
   test environment supports them.
