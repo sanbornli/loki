@@ -24,6 +24,9 @@
   browser action that needs login, OAuth, permissions, external account
   access, or a deployment confirmation, pause and ask the user for explicit
   approval.
+- If `lokiplay ship` or `connect` reports that the game is inactive, stop and
+  tell the user to press Reactivate for this project in the Loki dashboard,
+  then ship again. Do not create another project to get around it.
 - Loki controls identity, tenant boundaries, membership, matchmaking,
   sequencing, snapshots, and host migration. Authority per project is set in
   `game.json` and chosen below.
@@ -147,7 +150,10 @@
   interpolation data out of synchronized state.
 - Subscribe to synchronized snapshots for state, members, authority, and
   connection status. Keep the same `LokiClient` and synchronized-room instance
-  while interrupted. Let the SDK own browser lifecycle detection, socket
+  while interrupted. That applies to one match only: between matches,
+  `await leave()` on the old room, stop listening to it, and create a fresh
+  `createSynchronizedRoom()` for the next match instead of reusing the old
+  room object. Let the SDK own browser lifecycle detection, socket
   replacement, reconnect retries, snapshot recovery, and pending-action replay.
 - `createRealtimeRoom()`: integrate the game's existing simulation through
   `RealtimeRoom`'s callbacks (predict/interpolate/extrapolate/blendCorrection/

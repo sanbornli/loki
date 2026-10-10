@@ -863,6 +863,9 @@ npx lokiplay@${v} ship`)}
       },
     ]),
     main: `
+          <h2>0.5.3</h2>
+          <p>The creator desk now shows a note for a game that already has Loki: ship it again with <code>npx lokiplay ship --project &lt;id&gt;</code> instead of creating a new project or pasting the prompt again.</p>
+          <p>The rules now tell a coding agent to make a fresh room for each match, and to stop and ask you to press Reactivate when a game has been deactivated.</p>
           <h2>0.5.2</h2>
           <p>The prompt copied from the creator desk is now short. It installs the pinned packages, writes the current Loki rules into your repository with <code>npx lokiplay init</code>, and tells your coding agent to follow <code>AGENTS.md</code>. The rules live in one place, so the prompt and the rules can no longer disagree.</p>
           <p>The rules now describe one flow: preview the finished build, then ship it.</p>

@@ -2389,6 +2389,10 @@ const creatorScript = String.raw`
       integrationCopy.appendChild(element("p", {
         text: "Click \"Copy agent prompt\", then paste it directly into your game's coding agent chat (Cursor, Claude Code, or similar) inside your game's repository. The agent will install the official Loki packages, connect this project, and ship a playable build for you."
       }));
+      integrationCopy.appendChild(element("p", {
+        className: "relink-note",
+        text: "Already installed Loki in this game before? Do not create another project or use this prompt. Ship the game again by running this command in your game agent: npx lokiplay@" + configuredCliVersion() + " ship --project " + projectId
+      }));
       const integrationActions = element("div", { className: "integration-actions" });
       const promptButton = element("button", {
         className: "button button-primary",
@@ -2546,12 +2550,12 @@ const creatorScript = String.raw`
           productConfig.lokiplayVersion ||
           productConfig.packageVersion
         ),
-        "0.5.2"
+        "0.5.3"
       );
     }
 
     function configuredCliVersion() {
-      return text(productConfig && productConfig.cliVersion, "0.5.2");
+      return text(productConfig && productConfig.cliVersion, "0.5.3");
     }
 
     function agentPrompt(project) {
@@ -2607,8 +2611,6 @@ const creatorScript = String.raw`
         "   npx lokiplay@" + cliVersion + " connect --project " + projectId,
         "7. Ship the finished build. The upload is the finished browser build only, not the repository. Keep it within 25 MiB compressed, 100 MiB uncompressed, and 1000 files:",
         "   npx lokiplay@" + cliVersion + " ship",
-        "   If this repository was linked to a deleted project, do not create another project. Ship this one with:",
-        "   npx lokiplay@" + cliVersion + " ship --project " + projectId,
         "Never ask the user to paste an access token or deployment credential. If login, ownership verification, or deployment fails, report the exact non-secret error and stop rather than bypassing authentication. Before any browser action that requires login, OAuth, permissions, external account access, or a deployment confirmation, pause and ask the user for explicit approval.",
         "",
         "Final report",

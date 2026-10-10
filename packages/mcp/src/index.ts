@@ -19,6 +19,10 @@ export const lokiResources = [
       "Dispatch only while connected. During suspended, reconnecting, or resynchronizing, lock authoritative input, preserve rendered state, show a temporary reconnecting message, and wait for an authoritative snapshot. Do not assume host authority survives reconnect.",
       "For a synchronized room, every control that commits a match action calls dispatch() while connection is connected. Decide whether the player can act from the latest snapshot, and use that same check for the control and for the handler. Draw the committed result from the snapshot that comes back. Aim, hover, and animation stay local. The same control works for the host and for every other member. If the player cannot act, or dispatch() rejects or throws, show that on the control. Do not ignore the input, and do not apply the committed result on the acting client before the snapshot arrives.",
       "Do not repeat unresolved actions under new IDs. Treat indeterminate confirmation as an unknown outcome, room_closed as terminal, and leave_failed as requiring resolution before another room.",
+      "Keep the same client and synchronized room while a match is interrupted, but between matches await leave() on the old room, stop listening to it, and create a fresh createSynchronizedRoom() for the next match instead of reusing the old room object.",
+      "Do not put credentials, access tokens, deployment secrets, private keys, or environment-secret values in code, game.json, logs, commits, or reports, and never ask the user to paste a token or deployment credential. Before any browser action that needs login, OAuth, permissions, external account access, or a deployment confirmation, pause and ask the user for explicit approval.",
+      "If lokiplay ship or connect reports that the game is inactive, stop and tell the user to press Reactivate for this project in the Loki dashboard, then ship again. Do not create another project to get around it.",
+      "The upload is the finished browser build only, within 25 MiB compressed, 100 MiB uncompressed, and 1000 files. If lokiplay init created game.json, its multiplayer values (host, maxPlayers 8, tickRate 30) are placeholders, not a confirmed profile; replace them with the confirmed values for this game.",
       "Starting another match from the menu: await leave() to completion before create(), join(), joinPublic(), or matchmake(); skip it only when connection is idle. Do not treat closed or failed as already left while a room id is still held; call leave() and retry after leave_failed. Reset game-local match state whenever the room id changes. Every Creating, Joining, and Searching screen needs a timeout, an error message, and a way back to the menu.",
       "Start the match from the roster, not from one flag: begin once the minimum number of members are present and the local player has a seat. Do not gate the start on membership === \"ready\" alone; it can read synchronizing briefly while the roster is restored. While fewer members are present, show the invite code with a player count such as 1 / 2.",
       "When a mode's confirmed entry is private invites plus public rooms, show both a Create private room control and a Create public room control (create({ visibility: \"public\" })), and a public room list built on listPublicRooms() and joinPublic({ roomId }) with loading, empty, joining, full, waiting, and error states.",
@@ -120,8 +124,8 @@ export async function callLokiTool(
   }
   if (name === "integration_requirements") {
     return {
-      packages: ["@lokiplay/sdk@0.5.2", "@lokiplay/ui-web@0.5.2"],
-      command: "npm install @lokiplay/sdk@0.5.2 @lokiplay/ui-web@0.5.2",
+      packages: ["@lokiplay/sdk@0.5.3", "@lokiplay/ui-web@0.5.3"],
+      command: "npm install @lokiplay/sdk@0.5.3 @lokiplay/ui-web@0.5.3",
       apiOrigin: "https://api.lokiplay.cc",
       authority: "host",
       rankedIntegrity: false,
@@ -178,7 +182,7 @@ export async function callLokiTool(
     if (!/@lokiplay\/sdk|FirstPartyTransport|LokiClient/.test(joined)) {
       findings.push({
         code: "SDK_NOT_DETECTED",
-        message: "Install and initialize @lokiplay/sdk@0.5.2.",
+        message: "Install and initialize @lokiplay/sdk@0.5.3.",
       });
     }
     if (

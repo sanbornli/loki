@@ -525,11 +525,15 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(player, /play\/studio\/game-slug/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " init/);
   assert.match(creator, /Read AGENTS\.md in full and follow it/);
+  assert.match(creator, /className: "relink-note"/);
+  assert.match(creator, /Do not create another project or use this prompt/);
+  assert.match(creator, /ship --project " \+ projectId/);
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " preview/);
   const promptSource = creator.slice(
     creator.indexOf("function agentPrompt"),
     creator.indexOf("async function copyWithStatus"),
   );
+  assert.doesNotMatch(promptSource, /ship --project/);
   for (const rule of [
     /usable room-entry flow/,
     /does not add a public lobby screen/,
