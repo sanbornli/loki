@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -57,6 +58,8 @@ import type {
   ClientEnvelope,
   ServerEnvelope,
 } from "../packages/protocol/src/index.js";
+
+const releaseVersion = (JSON.parse(readFileSync(new URL("../packages/protocol/package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 const manifest = {
   schemaVersion: 1 as const,
@@ -442,13 +445,13 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(docsHome, /href="\/safety"/);
   assert.doesNotMatch(docsHome, /One plugin\. A playable URL/);
   assert.doesNotMatch(docsHome, /Install is not the finish/);
-  assert.match(docsHome, /@lokiplay\/sdk(?:@|&#64;)0\.5\.0/);
+  assert.match(docsHome, new RegExp(`@lokiplay\\/sdk(?:@|&#64;)${releaseVersion.replaceAll(".", "\\.")}`));
   assert.match(docsHome, /<!--email_off-->/);
   assert.doesNotMatch(docsHome, /@lokiplay\/sdk(?:@|&#64;)0\.3\.5/);
   assert.match(renderDocsPage(config, "/quickstart"), /createHostedLokiClient/);
   assert.match(
     renderDocsPage(config, "/quickstart"),
-    /LOKI_API_URL=https:\/\/api\.lokiplay\.cc npx lokiplay(?:@|&#64;)0\.5\.0 login/,
+    new RegExp(`LOKI_API_URL=https:\\/\\/api\\.lokiplay\\.cc npx lokiplay(?:@|&#64;)${releaseVersion.replaceAll(".", "\\.")} login`),
   );
   assert.match(renderDocsPage(config, "/realtime-rooms"), /calibrateRealtimeRoom/);
   assert.match(renderDocsPage(config, "/rooms"), /listPublicRooms/);
@@ -477,7 +480,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
     /Clients --> JavaScript SDK/,
   );
   assert.match(renderDocsPage(config, "/changelog"), /Reference --> Changelog/);
-  assert.match(renderDocsPage(config, "/changelog"), /<h2>0\.5\.0<\/h2>/);
+  assert.match(renderDocsPage(config, "/changelog"), new RegExp(`<h2>${releaseVersion.replaceAll(".", "\\.")}</h2>`));
   assert.match(renderDocsPage(config, "/changelog"), /<h2>0\.4\.1<\/h2>/);
   assert.match(docsHome, /href="\/changelog"/);
   assert.doesNotMatch(
@@ -515,7 +518,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.doesNotMatch(creator, /copyWithStatus\(agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
-  assert.match(creator, /"0\.5\.0"/);
+  assert.match(creator, new RegExp(`"${releaseVersion.replaceAll(".", "\\.")}"`));
   assert.match(creator, /npx lokiplay@" \+ cliVersion \+ " login/);
   assert.match(creator, /createRoom\(\)/);
   assert.match(creator, /joinRoom\(\{ inviteCode \}\)/);

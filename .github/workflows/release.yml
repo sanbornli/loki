@@ -335,16 +335,19 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Deploy marketing site
+      # Skipped with a warning until the Cloudflare secrets exist, so a missing
+      # token does not block the npm release or the production deploy.
+      - name: Deploy marketing and docs sites
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npm run marketing:deploy
-      - name: Deploy docs site
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npm run docs:deploy
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning::Cloudflare secrets are not set; marketing and docs were not deployed"
+            exit 0
+          fi
+          npm run marketing:deploy
+          npm run docs:deploy
 
   github-release:
     needs: [publish-npm, verify-swift, verify-unity, deploy-production, deploy-sites]

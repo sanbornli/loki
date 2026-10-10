@@ -4,7 +4,7 @@ import {
   type ProductPageConfig,
 } from "./product-theme.js";
 
-export const LOKI_PACKAGE_VERSION = "0.5.0";
+export const LOKI_PACKAGE_VERSION = "0.5.1";
 
 export const docsRoutes = [
   "/",

@@ -863,6 +863,9 @@ npx lokiplay@${v} ship`)}
       },
     ]),
     main: `
+          <h2>0.5.1</h2>
+          <p>A game link is public by default on every plan, and you can switch it between public and private from the dashboard. Deactivate a game to free its active slot without deleting it, then reactivate it later. The Free plan stores two games with one active at a time.</p>
+          <p>Loki keeps the latest three releases of each game and caps stored builds per plan. The command-line tool checks the size of your build before it uploads.</p>
           <h2>0.5.0</h2>
           <p>Loki now serves the browser networking from the game's own address. A new game installs the package once, ships once, and later networking fixes arrive the next time a player opens the game. The creator does not install a new package or ship again for those fixes.</p>
           <p>An existing game keeps the copy it already shipped. It switches only after one rebuild that leaves the package out of the finished build, then one ship.</p>

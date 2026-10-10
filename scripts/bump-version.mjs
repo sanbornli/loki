@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 
 const next = process.argv[2];
 if (!/^\d+\.\d+\.\d+$/.test(next ?? "")) {
@@ -28,7 +29,9 @@ const files = [
 
 const lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
 for (const [name, info] of Object.entries(lock.packages ?? {})) {
-  if (info && info.version === current && !name.includes("lokiplay") && name !== "") {
+  // Workspace entries (apps/*, packages/*) are ours. A third-party package
+  // under node_modules that happens to share the version must not be touched.
+  if (info && info.version === current && name.includes("node_modules/") && !name.includes("@lokiplay/")) {
     throw new Error(`package-lock.json has ${name}@${current}; refusing a blind replace`);
   }
 }
@@ -41,17 +44,16 @@ for (const file of files) {
   console.log(`${file}: ${count}`);
 }
 
-for (const file of ["apps/web/hosted-sdk/stable.js", "apps/web/hosted-sdk/candidate.js"]) {
-  if (!existsSync(file)) {
-    if (file.endsWith("stable.js")) throw new Error(`${file} is missing`);
-    continue;
-  }
-  const text = readFileSync(file, "utf8");
-  const from = `/*lokiplay-hosted-sdk version=${current}`;
-  if (!text.startsWith(from)) throw new Error(`${file} header is not ${current}`);
-  writeFileSync(file, text.replace(from, `/*lokiplay-hosted-sdk version=${next}`));
-  console.log(`${file}: header`);
+// The built SDK embeds its version in the header and in LOKI_SDK_VERSION, so
+// rebuild it instead of editing text. The build keeps stable.js if it exists.
+const stable = "apps/web/hosted-sdk/stable.js";
+if (!existsSync(stable)) throw new Error(`${stable} is missing`);
+unlinkSync(stable);
+execFileSync("node", ["scripts/build-hosted-sdk.mjs"], { stdio: "inherit" });
+if (!readFileSync(stable, "utf8").startsWith(`/*lokiplay-hosted-sdk version=${next}`)) {
+  throw new Error(`${stable} was not rebuilt at ${next}`);
 }
+console.log(`${stable}: rebuilt`);
 
 const docsPath = "apps/web/src/docs-page.ts";
 const docs = readFileSync(docsPath, "utf8");
