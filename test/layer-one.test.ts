@@ -510,7 +510,9 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(creator, /Copy agent prompt/);
   assert.match(creator, /Full agent prompt/);
   assert.match(creator, /className: "integration-prompt"/);
-  assert.match(creator, /text: agentPrompt\(project\)/);
+  assert.match(creator, /promptNode\.textContent = agentPrompt\(project\)/);
+  assert.match(creator, /copyWithStatus\(promptNode\.textContent/);
+  assert.doesNotMatch(creator, /copyWithStatus\(agentPrompt\(project\)/);
   assert.match(creator, /npm view @lokiplay\/sdk@/);
   assert.match(creator, /function configuredCliVersion\(\)/);
   assert.match(creator, /"0\.5\.0"/);
@@ -601,6 +603,24 @@ test("creator host login and signup paths render the creator studio", async (t) 
     assert.equal(response.status, 200);
     assert.match(await response.text(), /Creator Studio — Loki/);
   }
+
+  for (const pathname of ["/login", "/signup", "/creator?github=connected", "/device?user_code=ABCD-EFGH"]) {
+    const response = await fetch(`${origin}${pathname}`, {
+      headers: { "x-forwarded-host": "play.lokiplay.cc" },
+      redirect: "manual",
+    });
+    assert.equal(response.status, 302);
+    const target = new URL(pathname, "https://app.lokiplay.cc");
+    assert.equal(response.headers.get("location"), target.toString());
+  }
+  const catalog = await fetch(`${origin}/`, {
+    headers: { "x-forwarded-host": "play.lokiplay.cc" },
+  });
+  assert.equal(catalog.status, 200);
+  const catalogText = await catalog.text();
+  assert.match(catalogText, /Public catalog/);
+  assert.match(catalogText, /https:\/\/app\.lokiplay\.cc\/login/);
+  assert.doesNotMatch(catalogText, /href="\/creator"/);
 });
 
 test("docs host serves the developer documentation site", async (t) => {

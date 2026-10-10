@@ -431,7 +431,7 @@ export function createApiHandler(dependencies: ApiDependencies) {
           configuration,
         );
         response.writeHead(303, {
-          location: "https://play.lokiplay.cc/creator?github=connected",
+          location: "https://app.lokiplay.cc/creator?github=connected",
           "cache-control": "no-store",
           "referrer-policy": "no-referrer",
         });

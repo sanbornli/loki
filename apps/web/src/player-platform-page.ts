@@ -140,7 +140,7 @@ const body = `
     <nav aria-label="Primary navigation">
       <a href="#catalog">Catalog</a>
       <a href="#recent">Recent</a>
-      <a href="/creator">Creator sign in</a>
+      <a href="https://app.lokiplay.cc/login">Creator sign in</a>
     </nav>
   </header>
   <main class="page-shell">
@@ -193,7 +193,7 @@ const body = `
   </main>
   <footer class="site-footer page-shell">
     <p>Private hosting first. Public discovery only after review.</p>
-    <a href="/creator">Build on Loki</a>
+    <a href="https://app.lokiplay.cc/signup">Build on Loki</a>
   </footer>
 `;
 

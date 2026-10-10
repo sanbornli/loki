@@ -254,6 +254,20 @@ export function createWebHandler(dependencies: WebDependencies) {
       const playerHost = hostname === "play.lokiplay.cc";
       const creatorHost = hostname === "app.lokiplay.cc";
       const docsHost = hostname === "docs.lokiplay.cc";
+      if (
+        playerHost &&
+        (url.pathname === "/creator" ||
+          url.pathname === "/login" ||
+          url.pathname === "/signup" ||
+          url.pathname === "/device")
+      ) {
+        response.writeHead(302, {
+          location: "https://app.lokiplay.cc" + url.pathname + url.search,
+          "cache-control": "no-store",
+        });
+        response.end();
+        return;
+      }
       let productPage: string | undefined;
       if (request.method === "GET" && dependencies.productConfig) {
         if (docsHost && (url.pathname === "/llms.txt" || url.pathname === "/llms-full.txt")) {

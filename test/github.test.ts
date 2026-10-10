@@ -309,7 +309,7 @@ test("GitHub callback binds but does not consume state and escapes HTML", async 
       assert.equal(configured.status, 303);
       assert.equal(
         configured.headers.get("location"),
-        "https://play.lokiplay.cc/creator?github=connected",
+        "https://app.lokiplay.cc/creator?github=connected",
       );
     },
   );

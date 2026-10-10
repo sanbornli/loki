@@ -2397,8 +2397,12 @@ const creatorScript = String.raw`
       const integrationNotice = element("div", { className: "notice", hidden: true });
       integrationNotice.setAttribute("role", "status");
       integrationNotice.setAttribute("aria-live", "polite");
+      const promptNode = element("pre");
+      // The screen and the button share this node. A package or prompt
+      // change updates the text once, and Copy reads that same text back.
+      promptNode.textContent = agentPrompt(project);
       promptButton.addEventListener("click", () =>
-        copyWithStatus(agentPrompt(project), promptButton, integrationNotice, "Agent prompt copied.")
+        copyWithStatus(promptNode.textContent || "", promptButton, integrationNotice, "Agent prompt copied.")
       );
       idButton.addEventListener("click", () =>
         copyWithStatus(projectId, idButton, integrationNotice, "Project ID copied.")
@@ -2432,7 +2436,7 @@ const creatorScript = String.raw`
       const promptPreview = element("section", { className: "integration-prompt" });
       promptPreview.setAttribute("aria-label", "Full agent prompt");
       promptPreview.appendChild(element("h6", { text: "Full agent prompt" }));
-      promptPreview.appendChild(element("pre", { text: agentPrompt(project) }));
+      promptPreview.appendChild(promptNode);
       integrationPanel.append(integrationCopy, statusList, promptPreview);
 
       const historyPanel = element("section", { className: "tool-panel", hidden: true });
