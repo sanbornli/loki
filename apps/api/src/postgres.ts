@@ -474,6 +474,30 @@ export class PostgresPlatformService implements PlatformOperations {
     });
   }
 
+  async deleteProject(actorId: string, projectId: string): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const result = await client.query<ProjectRow>(
+        "SELECT * FROM projects WHERE id = $1 FOR UPDATE",
+        [projectId],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("project not found");
+      await requireMember(client, actorId, row.organization_id);
+      await recordAudit(client, {
+        actorId,
+        organizationId: row.organization_id,
+        action: "project.deleted",
+        detail: {
+          projectId,
+          name: row.name,
+          slug: row.slug,
+          state: row.state,
+        },
+      });
+      await client.query("DELETE FROM projects WHERE id = $1", [projectId]);
+    });
+  }
+
   async issueDeploymentCredential(
     actorId: string,
     projectId: string,

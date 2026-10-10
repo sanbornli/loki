@@ -2352,6 +2352,13 @@ const creatorScript = String.raw`
         type: "button"
       });
       actions.appendChild(detailsButton);
+      const deleteButton = element("button", {
+        className: "button button-quiet",
+        text: "Delete project",
+        type: "button"
+      });
+      deleteButton.addEventListener("click", () => deleteProject(project, deleteButton));
+      actions.appendChild(deleteButton);
       card.appendChild(actions);
 
       const tools = createProjectTools(project, detailsButton);
@@ -2827,6 +2834,30 @@ const creatorScript = String.raw`
         setGlobalStatus(error instanceof Error ? error.message : "The game could not be opened.", false);
       } finally {
         button.disabled = false;
+      }
+    }
+
+    async function deleteProject(project, button) {
+      const name = text(project && project.name, "this project");
+      const confirmed = window.confirm(
+        "Delete " + name + "? This removes the game and frees its plan slots. This cannot be undone."
+      );
+      if (!confirmed) return;
+      button.disabled = true;
+      setGlobalStatus("Deleting project…", true);
+      try {
+        await api("/v1/projects/" + encodeURIComponent(text(project && project.id, "")), {
+          method: "DELETE"
+        });
+        state.projectPane = "grid";
+        state.selectedProjectId = "";
+        await loadOverview({ quiet: true });
+        setGlobalStatus("Project deleted.", false);
+        window.setTimeout(() => setGlobalStatus("", false), 2400);
+      } catch (error) {
+        button.disabled = false;
+        setGlobalStatus(error instanceof Error ? error.message : "Could not delete the project.", false);
+        globalStatus.dataset.tone = "error";
       }
     }
 

@@ -101,6 +101,7 @@ export interface PlatformOperations {
     projectId: string,
     next: ProjectState,
   ): Awaitable<Project>;
+  deleteProject(actorId: string, projectId: string): Awaitable<void>;
   issueDeploymentCredential(
     actorId: string,
     projectId: string,
@@ -343,6 +344,21 @@ export class PlatformService {
       next,
     });
     return structuredClone(project);
+  }
+
+  deleteProject(actorId: string, projectId: string): void {
+    const project = this.#requireProject(projectId);
+    this.#requireMember(actorId, project.organizationId);
+    this.#projects.delete(projectId);
+    for (const [id, credential] of this.#credentials) {
+      if (credential.projectId === projectId) this.#credentials.delete(id);
+    }
+    this.#record(actorId, project.organizationId, undefined, "project.deleted", {
+      projectId,
+      name: project.name,
+      slug: project.slug,
+      state: project.state,
+    });
   }
 
   issueDeploymentCredential(

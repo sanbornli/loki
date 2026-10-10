@@ -49,6 +49,31 @@ test("the master test account keeps Pro entitlements on a stored free plan", () 
   assert.equal(activated.state, "unlisted");
 });
 
+test("deleting a project frees its game and play link slots", () => {
+  const platform = new PlatformService();
+  const creator = platform.registerCreator("owner@example.test", "Studio");
+  const project = platform.createProject(creator.account.id, creator.organization.id, {
+    name: "Only",
+    slug: "only-game",
+  });
+  platform.transitionProject(creator.account.id, project.id, "private");
+  platform.deleteProject(creator.account.id, project.id);
+  assert.throws(
+    () => platform.getProject(creator.account.id, project.id),
+    /project not found/,
+  );
+  const replacement = platform.createProject(creator.account.id, creator.organization.id, {
+    name: "Only",
+    slug: "only-game",
+  });
+  platform.transitionProject(creator.account.id, replacement.id, "private");
+  const stranger = platform.registerCreator("other@example.test", "Other");
+  assert.throws(
+    () => platform.deleteProject(stranger.account.id, replacement.id),
+    /organization access denied/,
+  );
+});
+
 test("free plan limits follow the owning account across organizations", () => {
   const platform = new PlatformService();
   const creator = platform.registerCreator("owner@example.test", "Studio");
@@ -247,6 +272,8 @@ test("creator dashboard shows the account plan and billing actions", () => {
   assert.match(page, /usage-fill/);
   assert.match(page, /\/v1\/billing\/checkout/);
   assert.match(page, /\/v1\/billing\/portal/);
+  assert.match(page, /Delete project/);
+  assert.match(page, /method: "DELETE"/);
   assert.match(page, /Sign in with Google/);
   assert.match(page, /Sign in with GitHub/);
   assert.match(page, /grant_type=pkce/);

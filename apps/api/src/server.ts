@@ -1079,6 +1079,13 @@ export function createApiHandler(dependencies: ApiDependencies) {
         );
         return;
       }
+      if (request.method === "DELETE" && projectMatch) {
+        const actorId = await dependencies.authenticateCreator(request);
+        await dependencies.platform.deleteProject(actorId, projectMatch[1]!);
+        response.writeHead(204);
+        response.end();
+        return;
+      }
       if (request.method === "GET" && projectMatch) {
         const actorId = await dependencies.authenticateCreator(request);
         json(

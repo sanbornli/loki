@@ -65,6 +65,12 @@ export function rateLimitFor(
     return { limit: 60, window: 60 };
   }
   if (
+    method === "DELETE" &&
+    /^\/v1\/projects\/[0-9a-f-]{36}$/i.test(pathname)
+  ) {
+    return { limit: 20, window: 3600 };
+  }
+  if (
     method === "POST" &&
     /^\/v1\/projects\/[0-9a-f-]{36}\/deployment-credentials$/i.test(pathname)
   ) {

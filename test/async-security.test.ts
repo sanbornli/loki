@@ -95,6 +95,10 @@ test("HTTP rate limits cover account project device session deploy and webhook p
     limit: 30,
     window: 60,
   });
+  assert.deepEqual(rateLimitFor("DELETE", "/v1/projects/11111111-1111-1111-1111-111111111111"), {
+    limit: 20,
+    window: 3600,
+  });
   assert.deepEqual(rateLimitFor("POST", "/v1/reports"), {
     limit: 30,
     window: 60,
