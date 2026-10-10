@@ -312,6 +312,7 @@ export class SynchronizedRoom<State, Action> {
   readonly #waiters = new Map<string, CommitWaiter[]>();
   readonly #commitTimers = new Map<string, ReturnType<typeof setTimeout>>();
   readonly #prepared = new Map<string, Prepared<State, Action>>();
+  #entryQueue: ServerEnvelope[] = [];
   #unsubscribe?: () => void;
   #unsubscribeConnection?: () => void;
   #playerId = "";
@@ -572,6 +573,18 @@ export class SynchronizedRoom<State, Action> {
     if (this.#pending.size) this.#rejectAll("rejected", "entering a new room");
     this.#releaseWaiters();
     this.#resyncing = false;
+    // Drop the previous room before any message from the new one arrives.
+    // Match presence is delivered while create() is still in progress, and
+    // emitting it before the invite code is stored shows a room with no code.
+    this.#clearIdentity();
+    this.#entryQueue = [];
+    // A new room starts from the configured initial state. Without this, a
+    // reused instance keeps the previous room's state version, so the new
+    // host skips publishing its initial state and the new room's snapshots
+    // are rejected as stale.
+    this.#state = this.#parseState(this.#options.initialState);
+    this.#previousState = this.#state;
+    this.#stateVersion = 0;
     this.#setConnection("joining");
     let joinedRoomId = "";
     try {
@@ -586,6 +599,9 @@ export class SynchronizedRoom<State, Action> {
       this.#requireCapabilities(joined.snapshot, options.requirePublicRoomBrowser === true);
       this.#roomId = joined.roomId;
       this.#inviteCode = joined.inviteCode;
+      const queued = this.#entryQueue;
+      this.#entryQueue = [];
+      for (const message of queued) this.#onMessage(message);
       this.#applyAuthoritative(joined.snapshot, true, {
         preserveLocalState: options.bootstrap,
         generation,
@@ -617,6 +633,7 @@ export class SynchronizedRoom<State, Action> {
         error instanceof Error ? error.message : "failed to enter room",
       );
       this.#releaseWaiters();
+      this.#entryQueue = [];
       this.#unbind();
       if (joinedRoomId) {
         await this.#host.leaveRoom(joinedRoomId).catch(() => undefined);
@@ -843,6 +860,10 @@ export class SynchronizedRoom<State, Action> {
 
   #onMessage(message: ServerEnvelope): void {
     if (this.#isInactive() && message.type !== "room_closed") return;
+    if (this.#connection === "joining" && !this.#roomId) {
+      this.#entryQueue.push(message);
+      return;
+    }
     if (this.#roomId && message.roomId !== this.#roomId) return;
     if (message.type === "snapshot" || message.type === "state") {
       this.#applyAuthoritative(message, message.type === "snapshot");

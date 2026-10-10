@@ -462,6 +462,11 @@ npx lokiplay@${v} <command>`)}
             <li>A 6-digit invite code issued by Loki (16-character hex codes from 0.2.0 still join)</li>
             <li>Loading, waiting, reconnecting, and error UI, including a game-owned public lobby when discovery is enabled</li>
             <li><code>leave()</code> only from an explicit Leave / End Game control</li>
+            <li>Before another match from the menu, <code>await leave()</code> to completion, then reset game-local match state when the room id changes</li>
+            <li>A timeout, an error message, and a way back to the menu on every Creating, Joining, and Searching screen</li>
+            <li>The match starts from the roster: begin once the minimum members are present and the local player has a seat, and show a count such as "1 / 2" with the invite code until then. Do not gate the start on <code>membership === "ready"</code> alone.</li>
+            <li>For a synchronized room, a control that commits a match action calls <code>dispatch()</code> while connected, using the same snapshot check that enables the control. Draw the result from the snapshot that comes back. If the player cannot act, or <code>dispatch()</code> rejects, the control says so.</li>
+            <li>When entry is private invites plus public rooms, a Create private room control, a Create public room control, and a public room list</li>
           </ul>
           <p>Fine-tuning after install means confirming those fields for <em>this</em> title, not copying a chess lobby onto a racer. Players see the result on the play link only after the next <code>ship</code>.</p>
           <h2>What Loki does not supply</h2>
@@ -480,6 +485,7 @@ npx lokiplay@${v} <command>`)}
             <li>Only the current host runs <code>reduce</code>.</li>
             <li>Subscribe to snapshots for <code>state</code>, <code>members</code>, host, and <code>connection</code>.</li>
             <li>Call <code>dispatch(action)</code> only while <code>connection === "connected"</code>.</li>
+            <li>A control that commits a match action calls <code>dispatch()</code>. Draw the result from the snapshot that comes back. Aim, hover, and animation stay local. Show a rejection on the control.</li>
           </ol>
           ${codeBlock(`const room = client.createSynchronizedRoom<State, Action>({
   initialState: { board: emptyBoard, turn: "white" },
@@ -750,6 +756,7 @@ const client = await createHostedLokiClient({
             <li>Realtime: calibrate; do not copy <code>snapshotHz</code> into <code>tickRate</code>.</li>
             <li>Let the SDK own lifecycle. Never leave on hide/offline.</li>
             <li><code>dispatch()</code> only while <code>connected</code>.</li>
+            <li>For a synchronized room, a control that commits a match action calls <code>dispatch()</code>, and the result is drawn from the snapshot that comes back. Aim, hover, and animation stay local. If the player cannot act, or <code>dispatch()</code> rejects, the control says so.</li>
             <li>CSP: no inline script, no remote fonts/CSS, no <code>&lt;form&gt;</code>.</li>
             <li>Leave <code>@lokiplay/sdk</code> external in the production build; Loki serves it at <code>/loki/sdk.js</code>. Run <code>lokiplay preview</code> before <code>ship</code>.</li>
             <li><code>validate</code> before <code>ship</code>. Do not claim device testing you did not do.</li>

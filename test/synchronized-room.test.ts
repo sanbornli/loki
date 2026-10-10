@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   LokiClient,
+  SynchronizedRoom,
   SynchronizedRoomError,
   SYNCHRONIZED_ROOM_COMMIT_TIMEOUT_MS,
   SYNCHRONIZED_ROOM_MIN_RECOVERY_DEADLINE_MS,
@@ -1223,6 +1224,121 @@ test("create commits initial state instead of the empty snapshot", async () => {
   await room.dispatch({ d: 1 });
   assert.deepEqual(room.getSnapshot().state, { n: 4 });
   assert.equal(room.getSnapshot().stateVersion, 2);
+});
+
+test("a reused room instance starts a new room from the initial state", async () => {
+  const { hostRoom, memberRoom } = await pair();
+  await hostRoom.dispatch({ d: 5 });
+  await hostRoom.dispatch({ d: 1 });
+  assert.equal(hostRoom.getSnapshot().stateVersion, 3);
+  await memberRoom.leave();
+  await hostRoom.leave();
+
+  const created = await hostRoom.create();
+  assert.equal(created.connection, "connected");
+  assert.deepEqual(created.state, { n: 0 });
+  assert.equal(created.stateVersion, 1);
+
+  const joined = await memberRoom.join({ inviteCode: created.inviteCode });
+  assert.deepEqual(joined.state, { n: 0 });
+  assert.equal(joined.stateVersion, 1);
+
+  await memberRoom.dispatch({ d: 2 });
+  assert.deepEqual(hostRoom.getSnapshot().state, { n: 2 });
+  assert.deepEqual(memberRoom.getSnapshot().state, { n: 2 });
+  assert.equal(hostRoom.getSnapshot().stateVersion, 2);
+  assert.equal(memberRoom.getSnapshot().stateVersion, 2);
+});
+
+test("presence delivered during create still shows the invite code", async () => {
+  const playerId = crypto.randomUUID();
+  const roomId = crypto.randomUUID();
+  const member = {
+    playerId,
+    sessionId: crypto.randomUUID(),
+    joinedAt: 1,
+    host: true,
+  };
+  let listener: (message: ServerEnvelope) => void = () => undefined;
+  const room = new SynchronizedRoom<OpaqueState, OpaqueAction>(
+    {
+      playerId: () => playerId,
+      sendAction: async () => undefined,
+      sendHostState: async (_version, _state, options) => {
+        listener({
+          protocolVersion: 1,
+          roomId,
+          sequence: 3,
+          type: "state",
+          hostId: playerId,
+          state: { n: 0 },
+          stateVersion: 1,
+          actionId: options?.actionId,
+          senderId: playerId,
+        });
+      },
+      sendActionRejection: async () => undefined,
+      requestSnapshot: async () => undefined,
+      createRoom: async () => {
+        listener({
+          protocolVersion: 1,
+          roomId,
+          sequence: 1,
+          type: "presence",
+          joins: [member],
+          leaves: [],
+          members: [member],
+          membersComplete: true,
+          membershipRevision: 1,
+        });
+        return {
+          roomId,
+          inviteCode: "123456",
+          snapshot: {
+            protocolVersion: 1,
+            roomId,
+            sequence: 2,
+            type: "snapshot",
+            hostId: playerId,
+            state: {},
+            stateVersion: 0,
+            capabilities: { synchronized_rooms: true },
+          },
+        };
+      },
+      joinRoom: async () => {
+        throw new Error("unused");
+      },
+      leaveRoom: async () => undefined,
+      reconnect: async () => undefined,
+      onMessage: (next) => {
+        listener = next;
+        return () => undefined;
+      },
+    },
+    {
+      initialState: { n: 0 },
+      reduce: (state) => state,
+    },
+  );
+  const codesWithMembers: string[] = [];
+  room.subscribe((snapshot) => {
+    if (snapshot.members.length > 0) codesWithMembers.push(snapshot.inviteCode);
+  });
+  const created = await room.create();
+  assert.equal(created.inviteCode, "123456");
+  assert.ok(codesWithMembers.length > 0);
+  assert.deepEqual(codesWithMembers, codesWithMembers.map(() => "123456"));
+});
+
+test("a joiner that reuses its room instance applies the new room's state", async () => {
+  const { hostRoom, memberRoom, created } = await pair();
+  await hostRoom.dispatch({ d: 4 });
+  await memberRoom.leave();
+  await hostRoom.dispatch({ d: 1 });
+  const rejoined = await memberRoom.join({ inviteCode: created.inviteCode });
+  assert.deepEqual(rejoined.state, { n: 5 });
+  assert.equal(rejoined.stateVersion, 3);
 });
 
 test("non-host clients do not run the reducer", async () => {

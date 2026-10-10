@@ -1135,6 +1135,15 @@ export interface FirstPartyTransportOptions {
   createPeerConnection?: PeerConnectionFactory;
   /** Base ICE servers for the host-star data channel, merged with any short-lived TURN credentials fetched from `loki_turn_credentials`. Defaults to Loki's public STUN configuration. */
   iceServers?: IceServerConfig[];
+  /**
+   * Replaces the Nakama client. Production leaves this unset. Tests use it
+   * to supply a socket without opening a real multiplayer connection.
+   */
+  nakamaClient?: {
+    rpc(session: Session, id: string, input?: object): Promise<{ payload?: object }>;
+    createSocket(secure: boolean, trace: boolean): Socket;
+    sessionRefresh(session: Session): Promise<Session>;
+  };
 }
 
 export class FirstPartyTransport implements LokiTransport {
@@ -1203,14 +1212,15 @@ export class FirstPartyTransport implements LokiTransport {
       this.#foreground.notify(cause);
       this.#scheduler.notifyEnvironmentChanged();
     });
-    this.#client = new Client(
-      options.nakamaServerKey ?? "lokiplay",
-      options.nakamaHost ?? "multiplayer.lokiplay.cc",
-      options.nakamaPort ?? (this.#secure ? "443" : "7350"),
-      this.#secure,
-      10_000,
-      false,
-    );
+    this.#client = (options.nakamaClient ??
+      new Client(
+        options.nakamaServerKey ?? "lokiplay",
+        options.nakamaHost ?? "multiplayer.lokiplay.cc",
+        options.nakamaPort ?? (this.#secure ? "443" : "7350"),
+        this.#secure,
+        10_000,
+        false,
+      )) as Client;
     this.#createPeerConnection =
       options.createPeerConnection ?? defaultPeerConnectionFactory();
     this.#iceServers = options.iceServers;
@@ -1375,11 +1385,17 @@ export class FirstPartyTransport implements LokiTransport {
     if (!created.matchId || !created.inviteCode) {
       throw new Error("Loki did not return a room invite");
     }
+    await this.#leavePreviousRoom(created.matchId);
     const metadata = this.#joinMetadata(input.realtimeCapable);
+    // Record the room before joinMatch. Match messages that arrive while
+    // the join is in progress are otherwise discarded, and the snapshot
+    // RPC does not carry the roster, so the creator would stay at zero
+    // members and never hear later joins.
+    this.#roomId = created.matchId;
     try {
+      await socket.joinMatch(created.matchId, undefined, metadata);
       const snapshot = await this.#snapshot(created.matchId);
       if (input.visibility === "public") this.#requirePublicRoomBrowser(snapshot);
-      this.#roomId = created.matchId;
       this.#foreground.notify();
       this.#roomKey = created.roomKey;
       this.#armWebrtc(metadata, webrtcAllowedFrom(snapshot));
@@ -1416,12 +1432,13 @@ export class FirstPartyTransport implements LokiTransport {
         this.#client.rpc(session, "loki_join_room", { inviteCode }),
       ),
     );
+    await this.#leavePreviousRoom(joined.matchId);
     const metadata = this.#joinMetadata(input.realtimeCapable);
-    await socket.joinMatch(joined.matchId, undefined, metadata);
+    this.#roomId = joined.matchId;
     try {
+      await socket.joinMatch(joined.matchId, undefined, metadata);
       const snapshot = await this.#snapshot(joined.matchId);
       this.#foreground.notify();
-      this.#roomId = joined.matchId;
       this.#armWebrtc(metadata, webrtcAllowedFrom(snapshot));
       if (snapshot.type === "snapshot") this.#star?.setHostId(snapshot.hostId);
       return {
@@ -1466,13 +1483,14 @@ export class FirstPartyTransport implements LokiTransport {
       ),
     );
     if (!joined.matchId) throw new Error("Loki did not return a room");
+    await this.#leavePreviousRoom(joined.matchId);
     const metadata = this.#joinMetadata(input.realtimeCapable);
-    await socket.joinMatch(joined.matchId, undefined, metadata);
+    this.#roomId = joined.matchId;
     try {
+      await socket.joinMatch(joined.matchId, undefined, metadata);
       const snapshot = await this.#snapshot(joined.matchId);
       this.#requirePublicRoomBrowser(snapshot);
       this.#foreground.notify();
-      this.#roomId = joined.matchId;
       this.#armWebrtc(metadata, webrtcAllowedFrom(snapshot));
       if (snapshot.type === "snapshot") this.#star?.setHostId(snapshot.hostId);
       return {
@@ -1574,11 +1592,14 @@ export class FirstPartyTransport implements LokiTransport {
         },
       );
       ticket = undefined;
+      const matchId = matched.match_id;
+      if (!matchId) throw new Error("Loki did not return a room");
+      await this.#leavePreviousRoom(matchId);
       const metadata = this.#joinMetadata(input.realtimeCapable);
-      const joined = await socket.joinMatch(matched.match_id, matched.token, metadata);
+      this.#roomId = matchId;
       try {
+        const joined = await socket.joinMatch(matchId, matched.token, metadata);
         const snapshot = await this.#snapshot(joined.match_id);
-        this.#roomId = joined.match_id;
         this.#foreground.notify();
         this.#roomKey = `match-${joined.match_id.slice(0, 12).toLowerCase()}`;
         this.#armWebrtc(metadata, webrtcAllowedFrom(snapshot));
@@ -1589,8 +1610,8 @@ export class FirstPartyTransport implements LokiTransport {
           snapshot,
         };
       } catch (error) {
-        await socket.leaveMatch(joined.match_id).catch(() => undefined);
-        if (this.#roomId === joined.match_id) {
+        await socket.leaveMatch(matchId).catch(() => undefined);
+        if (this.#roomId === matchId) {
           this.#roomId = undefined;
           this.#roomKey = undefined;
           this.#armWebrtc(undefined);
@@ -1682,6 +1703,12 @@ export class FirstPartyTransport implements LokiTransport {
   subscribeConnection(listener: (event: ConnectionEvent) => void): () => void {
     this.#connectionListeners.add(listener);
     return () => this.#connectionListeners.delete(listener);
+  }
+
+  async #leavePreviousRoom(nextRoomId: string): Promise<void> {
+    const previous = this.#roomId;
+    if (!previous || previous === nextRoomId) return;
+    await this.leaveRoom(previous).catch(() => undefined);
   }
 
   async leaveRoom(roomId: string): Promise<void> {

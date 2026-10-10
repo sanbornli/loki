@@ -209,11 +209,38 @@
   `reconnecting`, or `resynchronizing`, lock authoritative input, preserve the
   last rendered state, show a temporary reconnecting message, and wait for an
   authoritative snapshot. Do not assume the player is still host afterward.
+- For a synchronized room, every control that commits a match action calls
+  `dispatch()` while `connection` is `connected`. Decide whether the player
+  can act from the latest snapshot, and use that same check for the control
+  and for the handler. Draw the committed result from the snapshot that comes
+  back. Aim, hover, and animation stay local. The same control works for the
+  host and for every other member. If the player cannot act, or `dispatch()`
+  rejects or throws, show that on the control. Do not ignore the input, and
+  do not apply the committed result on the acting client before the snapshot
+  arrives.
 - Loki replays unresolved actions with the same `(senderId, actionId)`. Do not
   repeat one under a new action ID. Treat `indeterminate` or "authoritative
   confirmation timed out" as an unknown outcome, not proof of failure. Treat
   `room_closed` as terminal. Resolve `leave_failed` before starting another
   room with that client.
+- Starting another match from the menu: `await leave()` to completion before
+  `create()`, `join()`, `joinPublic()`, or `matchmake()`. Skip it only when
+  `connection` is `idle`. Do not treat `closed` or `failed` as already left
+  while a room id is still held; call `leave()` and retry after
+  `leave_failed`. Reset game-local match state (boards, turn, seat, result)
+  whenever the room id changes. Every "Creating…", "Joining…", and
+  "Searching…" screen needs a timeout, an error message, and a way back to
+  the menu; never leave a screen waiting on a promise that may not settle.
+- Start the match from the roster, not from one flag. Begin once at least the
+  minimum number of members are present and the local player has a seat. Do
+  not gate the start on `membership === "ready"` alone; it can read
+  `synchronizing` briefly while the roster is restored. While fewer members
+  are present, show the invite code with a player count such as "1 / 2".
+- When a mode's confirmed entry is private invites plus public rooms, show
+  both a Create private room control and a Create public room control
+  (`create({ visibility: "public" })`), and a public room list built on
+  `listPublicRooms()` and `joinPublic({ roomId })` with loading, empty,
+  joining, full, waiting, and error states.
 - Handle rejected actions from `dispatch()` without inventing a parallel
   protocol. Build and deploy from this repository.
 - Include `<meta name="viewport"
