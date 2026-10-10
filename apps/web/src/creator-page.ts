@@ -147,14 +147,6 @@ body.creator-dashboard .page-shell {
   font-size: 0.82rem;
 }
 
-.auth-panel > .auth-platform-note {
-  margin: -0.8rem 0 1.8rem;
-  padding-left: 0.75rem;
-  border-left: 2px solid var(--amber);
-  color: var(--paper);
-  line-height: 1.5;
-}
-
 .auth-panel .notice {
   margin-bottom: 1rem;
 }
@@ -222,13 +214,6 @@ body.creator-dashboard .page-shell {
 .auth-panel > p {
   margin: 0 0 0.75rem;
   font-size: 0.7rem;
-  line-height: 1.4;
-}
-
-.auth-panel > .auth-platform-note {
-  margin: -0.25rem 0 0.75rem;
-  padding-left: 0.55rem;
-  font-size: 0.66rem;
   line-height: 1.4;
 }
 
@@ -1005,6 +990,11 @@ body.creator-dashboard .page-shell {
   color: #bde3a5;
 }
 
+.pill[data-state="inactive"] {
+  border-color: #5c5346;
+  color: #c8bfb0;
+}
+
 .project-tile .pill {
   margin-bottom: auto;
   padding: 0.45rem 0.62rem;
@@ -1392,7 +1382,6 @@ const pageBody = `
         <p class="eyebrow" id="auth-mode-label">Creator access</p>
         <h2 id="auth-panel-title">Sign in</h2>
         <p id="auth-panel-copy">Continue to your projects and release history.</p>
-        <p class="auth-platform-note">Loki hosts finished web JavaScript games. Support for Unity, Godot, iOS, and Android are coming soon.</p>
         <div class="notice" id="auth-notice" role="status" aria-live="polite" hidden></div>
         <form class="form-grid" id="auth-form">
           <div class="field">
@@ -1652,10 +1641,11 @@ const creatorScript = String.raw`
     const OAUTH_VERIFIER_KEY = "loki.creator.oauth-verifier";
     const allowedTransitions = {
       draft: ["private"],
-      private: ["draft", "unlisted"],
-      unlisted: ["private"],
+      private: ["unlisted", "inactive"],
+      unlisted: ["private", "inactive"],
+      inactive: ["unlisted"],
       review_requested: ["private"],
-      published: ["unlisted"],
+      published: ["unlisted", "inactive"],
       suspended: []
     };
     const playableStates = new Set(["private", "unlisted", "published"]);
@@ -1975,8 +1965,11 @@ const creatorScript = String.raw`
       if (!limits) return;
       const owned = ownedProjects();
       const playLinks = owned.filter((project) => playableStates.has(project.state)).length;
-      container.appendChild(usageRow("Games", owned.length, limits.games));
-      container.appendChild(usageRow("Play links", playLinks, limits.playLinks));
+      container.appendChild(usageRow("Stored games", owned.length, limits.games));
+      container.appendChild(usageRow("Active games", playLinks, limits.playLinks));
+      if (limits.storedBytes) {
+        container.appendChild(usageRow("Stored builds", 0, null, "Up to " + formatByteCap(limits.storedBytes)));
+      }
       container.appendChild(
         usageRow(
           "Simultaneous rooms",
@@ -2084,8 +2077,8 @@ const creatorScript = String.raw`
       const options = byId("plan-options");
       clear(options);
       const catalog = [
-        { id: "loki", title: "Loki", blurb: "20 games, 20 play links, unlimited rooms, 8 players per room, public catalog and server authority.", prices: [["loki_monthly", "$12/month"], ["loki_annual", "$8/month, billed annually"]] },
-        { id: "pro", title: "Loki Pro", blurb: "Unlimited games and play links, unlimited rooms, 16 players per room, public catalog and server authority.", prices: [["pro_monthly", "$20/month"], ["pro_annual", "$15/month, billed annually"]] }
+        { id: "loki", title: "Loki", blurb: "20 stored games, 20 active games, 500 MiB of builds, unlimited rooms, 8 players per room, and server authority.", prices: [["loki_monthly", "$12/month"], ["loki_annual", "$8/month, billed annually"]] },
+        { id: "pro", title: "Loki Pro", blurb: "Unlimited stored and active games, 2 GiB of builds, unlimited rooms, 16 players per room, and server authority.", prices: [["pro_monthly", "$20/month"], ["pro_annual", "$15/month, billed annually"]] }
       ];
       for (const entry of catalog) {
         const card = document.createElement("div");
@@ -2222,7 +2215,19 @@ const creatorScript = String.raw`
       return tile;
     }
 
+    function storedGameBlockReason() {
+      const account = state.overview && state.overview.account;
+      const limits = account && account.limits;
+      if (!limits || limits.games == null) return "";
+      if (ownedProjects().length < limits.games) return "";
+      if (account.plan === "free") {
+        return "Free allows 2 stored games. Delete a game before creating another.";
+      }
+      return "This plan allows " + limits.games + " stored games. Delete a game before creating another.";
+    }
+
     function createNewProjectTile() {
+      const reason = storedGameBlockReason();
       const tile = element("button", {
         className: "project-tile project-tile-create",
         type: "button"
@@ -2230,8 +2235,13 @@ const creatorScript = String.raw`
       tile.appendChild(element("span", { className: "project-tile-plus", text: "+" }));
       tile.appendChild(element("span", {
         className: "project-tile-create-label",
-        text: "Create a new project"
+        text: reason || "Create a new project"
       }));
+      if (reason) {
+        tile.disabled = true;
+        tile.title = reason;
+        return tile;
+      }
       tile.addEventListener("click", () => {
         state.projectPane = "create";
         state.selectedProjectId = "";
@@ -2312,13 +2322,14 @@ const creatorScript = String.raw`
       card.appendChild(meta);
 
       const actions = element("div", { className: "project-actions" });
-      const transitions = allowedTransitions[text(project && project.state, "draft")] || [];
+      const currentState = text(project && project.state, "draft");
+      const transitions = allowedTransitions[currentState] || [];
       for (const next of transitions) {
         const button = element("button", {
-          className: next === "private" && project.state === "draft"
+          className: next === "unlisted" && currentState === "inactive"
             ? "button button-primary"
             : "button button-quiet",
-          text: transitionLabel(next),
+          text: transitionLabel(currentState, next),
           type: "button"
         });
         button.addEventListener("click", () => transitionProject(projectId, next, button));
@@ -2340,7 +2351,7 @@ const creatorScript = String.raw`
           actions.appendChild(openButton);
         } else {
           const link = element("a", { className: "button button-quiet", text: "Open Game" });
-          link.href = playPathForProject(project);
+          link.href = absolutePlayUrl(project);
           link.target = "_blank";
           link.rel = "noopener";
           actions.appendChild(link);
@@ -2526,7 +2537,7 @@ const creatorScript = String.raw`
       );
       if (supplied) return supplied;
       if (!project || !project.activeDeploymentId || !playableStates.has(project.state)) return "";
-      return new URL(playPathForProject(project), window.location.origin).toString();
+      return absolutePlayUrl(project);
     }
 
     function configuredPackageVersion() {
@@ -2554,10 +2565,7 @@ const creatorScript = String.raw`
       const version = configuredPackageVersion();
       const cliVersion = configuredCliVersion();
       const apiUrl = String(productConfig.apiOrigin || "").replace(/\/+$/, "");
-      const playerUrl = new URL(
-        playPathForProject(project),
-        window.location.origin
-      ).toString();
+      const playerUrl = absolutePlayUrl(project);
 
       return [
         "Integrate and ship this repository to Loki.",
@@ -2595,8 +2603,10 @@ const creatorScript = String.raw`
         "   LOKI_API_URL=" + apiUrl + " npx lokiplay@" + cliVersion + " login",
         "6. After the CLI reports \"Logged in\", connect this exact project. This verifies that the authenticated creator can access the project and writes only the non-secret project link to the repository:",
         "   npx lokiplay@" + cliVersion + " connect --project " + projectId,
-        "7. Ship the finished build:",
+        "7. Ship the finished build. The upload is the finished browser build only, not the repository. Keep it within 25 MiB compressed, 100 MiB uncompressed, and 1000 files:",
         "   npx lokiplay@" + cliVersion + " ship",
+        "   If this repository was linked to a deleted project, do not create another project. Ship this one with:",
+        "   npx lokiplay@" + cliVersion + " ship --project " + projectId,
         "Never ask the user to paste an access token or deployment credential. If login, ownership verification, or deployment fails, report the exact non-secret error and stop rather than bypassing authentication.",
         "",
         "Hosted SDK delivery",
@@ -2848,7 +2858,7 @@ const creatorScript = String.raw`
     async function deleteProject(project, button) {
       const name = text(project && project.name, "this project");
       const confirmed = window.confirm(
-        "Delete " + name + "? This removes the game and frees its plan slots. This cannot be undone."
+        "Delete " + name + "? This permanently removes the game and frees its plan slots. To link a repository to Loki again, create a new project and run npx lokiplay@" + configuredCliVersion() + " ship --project <the new project id>. This cannot be undone."
       );
       if (!confirmed) return;
       button.disabled = true;
@@ -2901,9 +2911,10 @@ const creatorScript = String.raw`
       }).format(date);
     }
 
-    function transitionLabel(next) {
+    function transitionLabel(current, next) {
+      if (next === "inactive") return "Deactivate";
+      if (current === "inactive") return "Reactivate";
       const labels = {
-        draft: "Return to draft",
         private: "Make private",
         unlisted: "Make public",
         review_requested: "Request review",
@@ -2916,6 +2927,7 @@ const creatorScript = String.raw`
       const projectState = text(value, "draft");
       if (projectState === "unlisted" || projectState === "published") return "Public";
       if (projectState === "private") return "Private";
+      if (projectState === "inactive") return "Inactive";
       return projectState.replaceAll("_", " ");
     }
 
@@ -2925,7 +2937,29 @@ const creatorScript = String.raw`
       if (projectState === "unlisted" || projectState === "published") {
         return "Public. Anyone with the link can play.";
       }
+      if (projectState === "inactive") {
+        return "Inactive. The link does not open the game. Reactivate it to make the link playable again.";
+      }
       return "";
+    }
+
+    function playerOrigin() {
+      const configured = text(productConfig && productConfig.playerOrigin, "");
+      return (configured || "https://play.lokiplay.cc").replace(/\/+$/, "");
+    }
+
+    function absolutePlayUrl(project) {
+      return new URL(playPathForProject(project), playerOrigin() + "/").toString();
+    }
+
+    function formatByteCap(bytes) {
+      const value = Number(bytes);
+      if (!Number.isFinite(value) || value <= 0) return "";
+      const gib = 1024 * 1024 * 1024;
+      const mib = 1024 * 1024;
+      if (value % gib === 0) return (value / gib) + " GiB";
+      if (value % mib === 0) return (value / mib) + " MiB";
+      return value + " bytes";
     }
 
     function slugify(value) {
@@ -3178,6 +3212,11 @@ const creatorScript = String.raw`
       event.preventDefault();
       const form = event.currentTarget;
       const notice = byId("project-notice");
+      const blocked = storedGameBlockReason();
+      if (blocked) {
+        showNotice(notice, blocked, "error");
+        return;
+      }
       setFormBusy(form, true);
       showNotice(notice, "Creating project…", "");
       try {

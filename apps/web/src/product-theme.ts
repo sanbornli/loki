@@ -2,6 +2,8 @@ export interface ProductPageConfig {
   apiOrigin: string;
   supabaseUrl: string;
   supabaseAnonKey: string;
+  /** Origin used for play links. Production is https://play.lokiplay.cc. */
+  playerOrigin?: string;
   termsVersion?: string;
   privacyVersion?: string;
   aupVersion?: string;

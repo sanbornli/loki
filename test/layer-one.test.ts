@@ -300,12 +300,12 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(marketing, /live-listing/);
   assert.match(marketing, /Creator share/);
   assert.match(marketing, /party-flow/);
-  assert.match(marketing, /Prompt-to-party timeline/);
+  assert.match(marketing, /Install-to-party timeline/);
   assert.match(marketing, /From side project<br>to Global Game<br>in a single prompt\./);
   assert.match(marketing, /Give your game hosting, a shareable game link, real-time online multiplayer and game publishing/);
   assert.match(marketing, /Let your Agent handle the rest\./);
-  assert.match(marketing, /Ship your game today\./);
-  assert.match(marketing, /Get started today for free/);
+  assert.match(marketing, /a way to get discovered/);
+  assert.match(marketing, /Get Started/);
   assert.doesNotMatch(marketing, /Create free project ↗/);
   assert.match(marketing, /ide-stage/);
   assert.match(marketing, /share-editor/);
@@ -317,7 +317,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
     /beforeinstallprompt|loki_pwa_dismissed/,
   );
   assert.match(marketing, /Installing @lokiplay\/sdk/);
-  assert.match(marketing, /make this game playable with friends tonight/);
+  assert.match(marketing, /Room ready at play\.lokiplay\.cc\/battleship/);
   assert.doesNotMatch(marketing, /cursor-screen\.jpg/);
   assert.doesNotMatch(marketing, /cursor-screen-prompt\.jpg/);
   assert.match(marketing, /CUBE_2D_DARK\.svg/);
@@ -415,7 +415,7 @@ test("Theme 03 product surfaces render functional, safely configured shells", ()
   assert.match(renderMarketingPage(config, "/pricing"), /\$8/);
   assert.match(renderMarketingPage(config, "/pricing"), /Loki Pro/);
   assert.match(renderMarketingPage(config, "/pricing"), /\$20/);
-  assert.match(renderMarketingPage(config, "/pricing"), /20 games/);
+  assert.match(renderMarketingPage(config, "/pricing"), /20 stored games/);
   assert.doesNotMatch(renderMarketingPage(config, "/pricing"), />Studio</);
   assert.match(renderMarketingPage(config, "/pricing"), /pricing-grid/);
   assert.match(renderMarketingPage(config, "/pricing"), /Compare features across plans/);
@@ -814,6 +814,15 @@ test("a private game link without access shows a Loki page", async (t) => {
   const page = await denied.text();
   assert.match(page, /Sorry, the game has been set private by the creator/);
   assert.doesNotMatch(page, /"error"/);
+
+  platform.transitionProject(creator.account.id, project.id, "inactive");
+  const unavailable = await fetch(`${origin}/play/studio/counter-party`);
+  assert.equal(unavailable.status, 403);
+  assert.match(await unavailable.text(), /This game is not available/);
+  assert.throws(
+    () => platform.issueDeploymentCredential(creator.account.id, project.id),
+    /Reactivate it from the dashboard/,
+  );
 });
 
 test("match-state encoding round-trips Unicode JSON", () => {
@@ -1164,7 +1173,9 @@ test("release workflow retries npm smoke and generates a Swift 5.9 manifest", as
   assert.match(workflow, /railway up --service web --ci --yes/);
   assert.match(workflow, /RAILWAY_API_TOKEN:/);
   assert.match(workflow, /secrets\.RAILWAY_TOKEN/);
-  assert.match(workflow, /needs: \[publish-npm, verify-swift, verify-unity, deploy-production\]/);
+  assert.match(workflow, /needs: \[publish-npm, verify-swift, verify-unity, deploy-production, deploy-sites\]/);
+  assert.match(workflow, /npm run marketing:deploy/);
+  assert.match(workflow, /npm run docs:deploy/);
   assert.doesNotMatch(workflow, /working-directory: infra\/nakama/);
   assert.doesNotMatch(workflow, /deploy-web:/);
   assert.doesNotMatch(workflow, /needs: \[verify-native-installs\]/);

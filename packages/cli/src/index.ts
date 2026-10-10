@@ -563,6 +563,10 @@ export async function startPreviewServer(
   return server;
 }
 
+const MAX_ARCHIVE_FILES = 1_000;
+const MAX_EXPANDED_BYTES = 100 * 1024 * 1024;
+const MAX_COMPRESSED_BYTES = 25 * 1024 * 1024;
+
 export async function archiveBuild(directory: string): Promise<Uint8Array> {
   const validation = await validateBuildDirectory(directory);
   const archive: Record<string, [Uint8Array, { mtime: Date }]> = {};
@@ -573,7 +577,21 @@ export async function archiveBuild(directory: string): Promise<Uint8Array> {
       { mtime: new Date("1980-01-01T00:00:00.000Z") },
     ];
   }
-  return zipSync(archive, { level: 6 });
+  const names = Object.keys(archive);
+  if (names.length > MAX_ARCHIVE_FILES) {
+    throw new Error(
+      `This build has ${names.length} files. Loki allows ${MAX_ARCHIVE_FILES}.`,
+    );
+  }
+  const expanded = names.reduce((sum, name) => sum + archive[name]![0].byteLength, 0);
+  if (expanded > MAX_EXPANDED_BYTES) {
+    throw new Error("This build is over 100 MiB uncompressed. Loki allows 100 MiB.");
+  }
+  const zipped = zipSync(archive, { level: 6 });
+  if (zipped.byteLength > MAX_COMPRESSED_BYTES) {
+    throw new Error("This build is over 25 MiB compressed. Loki allows 25 MiB.");
+  }
+  return zipped;
 }
 
 async function readCliSession(): Promise<

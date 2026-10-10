@@ -181,15 +181,21 @@ export class R2ArtifactStore implements ArtifactWriteStore {
   }
 
   async delete(deploymentId: string): Promise<void> {
-    const indexResponse = await this.#client.send(
-      new GetObjectCommand({
-        Bucket: this.#bucket,
-        Key: indexKey(deploymentId),
-      }),
-    );
-    const names = indexResponse.Body
-      ? (JSON.parse(await indexResponse.Body.transformToString()) as string[])
-      : [];
+    let names: string[] = [];
+    try {
+      const indexResponse = await this.#client.send(
+        new GetObjectCommand({
+          Bucket: this.#bucket,
+          Key: indexKey(deploymentId),
+        }),
+      );
+      names = indexResponse.Body
+        ? (JSON.parse(await indexResponse.Body.transformToString()) as string[])
+        : [];
+    } catch (error) {
+      if (statusCode(error) === 404) return;
+      throw error;
+    }
     await this.#client.send(
       new DeleteObjectsCommand({
         Bucket: this.#bucket,

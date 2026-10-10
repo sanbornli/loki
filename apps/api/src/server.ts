@@ -21,6 +21,7 @@ import { clientAddress, rateLimitFor } from "./http-rate-limit.js";
 import { ServiceError, type SafetyOperations } from "./safety.js";
 import { assertPriceKey, type BillingService } from "./billing.js";
 import { RuntimeReportSchema } from "../../../packages/protocol/src/index.js";
+import { releaseIdentity } from "./release.js";
 
 export interface ApiDependencies {
   platform: PlatformOperations;
@@ -290,7 +291,7 @@ export function createApiHandler(dependencies: ApiDependencies) {
         request.method === "GET" &&
         (url.pathname === "/health" || url.pathname === "/health/live")
       ) {
-        json(response, 200, { ok: true });
+        json(response, 200, { ok: true, ...releaseIdentity() });
         return;
       }
       if (request.method === "GET" && url.pathname === "/health/ready") {

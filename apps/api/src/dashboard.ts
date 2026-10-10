@@ -188,11 +188,12 @@ type DashboardProjectRow = ProjectRow & {
 const projectStates = ProjectStateSchema.options;
 
 const adminTransitions: Record<ProjectState, readonly ProjectState[]> = {
-  draft: ["private", "suspended"],
-  private: ["draft", "unlisted", "review_requested", "suspended"],
-  unlisted: ["private", "review_requested", "suspended"],
-  review_requested: ["private", "suspended"],
-  published: ["unlisted", "suspended"],
+  draft: ["private", "inactive", "suspended"],
+  private: ["unlisted", "inactive", "review_requested", "suspended"],
+  unlisted: ["private", "inactive", "review_requested", "suspended"],
+  inactive: ["unlisted", "private", "suspended"],
+  review_requested: ["private", "inactive", "suspended"],
+  published: ["unlisted", "inactive", "suspended"],
   suspended: ["private"],
 };
 
@@ -394,7 +395,7 @@ const meterPeriodSeconds: Record<string, number> = {
 
 const meterLabels: Record<string, string> = {
   projects: "Projects created",
-  stored_bytes: "Stored bytes",
+  stored_bytes: "30-day uploads",
   deployments: "Deployments",
   guest_sessions: "Guest sessions",
   player_sessions: "Player sessions",
@@ -711,15 +712,29 @@ export class DashboardService implements DashboardOperations {
         owner_email: string | null;
         stored_bytes: string | number;
         sessions: string | number;
+        retained_bytes: string | number;
+        release_count: string | number;
+        owner_plan: string | null;
       }>(
         `SELECT projects.id AS project_id, projects.name,
                 organizations.name AS organization_name,
                 owner.account_id AS owner_id, accounts.email AS owner_email,
+                accounts.plan AS owner_plan,
                 COALESCE(SUM(meters.quantity)
                   FILTER (WHERE meters.metric = 'stored_bytes'), 0) AS stored_bytes,
                 COALESCE(SUM(meters.quantity)
                   FILTER (WHERE meters.metric IN ('player_sessions', 'guest_sessions')
-                            AND meters.period_start >= to_timestamp($1)), 0) AS sessions
+                            AND meters.period_start >= to_timestamp($1)), 0) AS sessions,
+                COALESCE((
+                  SELECT SUM(deployments.total_bytes)
+                    FROM deployments
+                   WHERE deployments.project_id = projects.id
+                ), 0) AS retained_bytes,
+                COALESCE((
+                  SELECT COUNT(*)
+                    FROM deployments
+                   WHERE deployments.project_id = projects.id
+                ), 0) AS release_count
            FROM projects
            JOIN organizations ON organizations.id = projects.organization_id
            LEFT JOIN LATERAL (
@@ -730,7 +745,7 @@ export class DashboardService implements DashboardOperations {
            LEFT JOIN accounts ON accounts.id = owner.account_id
            LEFT JOIN usage_meters AS meters
              ON meters.scope_type = 'project' AND meters.scope_id = projects.id
-          GROUP BY projects.id, organizations.name, owner.account_id, accounts.email`,
+          GROUP BY projects.id, organizations.name, owner.account_id, accounts.email, accounts.plan`,
         [currentPeriodStart(Date.now(), THIRTY_DAYS_SECONDS) / 1000],
       ),
     ]);
@@ -742,6 +757,9 @@ export class DashboardService implements DashboardOperations {
       ownerEmail: row.owner_email,
       storedBytes: Number(row.stored_bytes),
       sessions: Number(row.sessions),
+      retainedBytes: Number(row.retained_bytes),
+      releaseCount: Number(row.release_count),
+      ownerPlan: row.owner_plan,
     }));
     return allocateCosts(usage, rows);
   }

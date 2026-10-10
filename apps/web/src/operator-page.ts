@@ -1205,6 +1205,18 @@ const script = `
     }
   }
 
+  function storageDetail(entry) {
+    const sessions = formatNumber(entry.sessions || 0) + " sessions";
+    const uploads = formatBytes(entry.storedBytes || 0) + " 30-day uploads";
+    const retained = formatBytes(entry.retainedBytes || 0) + " retained";
+    const releases = formatNumber(entry.releaseCount || 0) + " releases";
+    const cap = entry.storedBytesCap
+      ? "cap " + formatBytes(entry.storedBytesCap)
+      : "";
+    const warning = entry.nearStorageCap ? "near storage cap" : "";
+    return [sessions, uploads, retained, releases, cap, warning].filter(Boolean).join(" · ");
+  }
+
   function costRow(name, sub, detail, cost) {
     const row = node("article", "cost-row");
     const identity = node("div");
@@ -1243,7 +1255,7 @@ const script = `
       costGames.append(costRow(
         display(game.name, "Game"),
         display(game.organizationName, "Studio") + (game.ownerEmail ? " · " + game.ownerEmail : ""),
-        formatNumber(game.sessions || 0) + " sessions · " + formatBytes(game.storedBytes || 0) + " uploaded",
+        storageDetail(game),
         formatSmallMoney(game.costUsd)
       ));
     }
@@ -1253,7 +1265,7 @@ const script = `
       costCreators.append(costRow(
         display(creator.email, "Creator"),
         formatNumber(creator.games || 0) + (creator.games === 1 ? " game" : " games"),
-        formatNumber(creator.sessions || 0) + " sessions · " + formatBytes(creator.storedBytes || 0) + " uploaded",
+        storageDetail(creator),
         formatSmallMoney(creator.costUsd)
       ));
     }

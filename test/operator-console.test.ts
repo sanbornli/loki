@@ -142,11 +142,11 @@ test("operator usage compares meters and plan caps against limits", async () => 
   assert.equal(find("stored_bytes")?.limit, null);
   assert.deepEqual(
     { used: find("plan_games")?.used, limit: find("plan_games")?.limit },
-    { used: 1, limit: 1 },
+    { used: 1, limit: 2 },
   );
   assert.deepEqual(
     usage.meters.map((meter) => meter.metric),
-    ["plan_games", "plan_play_links", "player_sessions", "stored_bytes"],
+    ["plan_play_links", "player_sessions", "plan_games", "stored_bytes"],
     "meters closest to their limit come first and unlimited ones last",
   );
 });
@@ -236,7 +236,7 @@ test("every entry point says Loki is web JavaScript for now", async () => {
 
   assert.match(renderMarketingPage(config, "/sdk"), /Support for Unity, Godot, iOS, and Android are coming soon\./);
   assert.ok(renderDocsPage(config, "/").includes(NOTICE));
-  assert.ok(renderCreatorPage(config).includes(NOTICE));
+  assert.equal(renderCreatorPage(config).includes(NOTICE), false);
   assert.ok(llmsTxt.includes(NOTICE.replace("Loki hosts finished web JavaScript games.", "Loki hosts finished web JavaScript games only.")));
 
   const cli = JSON.parse(

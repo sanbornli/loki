@@ -79,6 +79,8 @@ test("free plan limits follow the owning account across organizations", () => {
   const creator = platform.registerCreator("owner@example.test", "Studio");
   assert.equal(creator.account.plan, "free");
   assert.equal(creator.account.limits.maxPlayersPerRoom, 4);
+  assert.equal(creator.account.limits.games, 2);
+  assert.equal(creator.account.limits.playLinks, 1);
   platform.createProject(creator.account.id, creator.organization.id, {
     name: "First",
     slug: "first-game",
@@ -87,21 +89,25 @@ test("free plan limits follow the owning account across organizations", () => {
     name: "Second",
     slug: "second-studio",
   });
-  assert.throws(
-    () => platform.createProject(creator.account.id, second.id, {
-      name: "Second",
-      slug: "second-game",
-    }),
-    /plan game limit reached/,
-  );
-  platform.assignPlan(creator.account.id, "loki");
   platform.createProject(creator.account.id, second.id, {
     name: "Second",
     slug: "second-game",
   });
+  assert.throws(
+    () => platform.createProject(creator.account.id, second.id, {
+      name: "Third",
+      slug: "third-game",
+    }),
+    /Free allows 2 stored games/,
+  );
+  platform.assignPlan(creator.account.id, "loki");
+  platform.createProject(creator.account.id, second.id, {
+    name: "Third",
+    slug: "third-game",
+  });
 });
 
-test("downgrade blocks new play links and public listing without removing games", () => {
+test("making a link public is not plan gated, and a second active game is", () => {
   const platform = new PlatformService();
   const creator = platform.registerCreator("owner@example.test", "Studio");
   platform.assignPlan(creator.account.id, "pro");
@@ -117,21 +123,25 @@ test("downgrade blocks new play links and public listing without removing games"
   platform.transitionProject(creator.account.id, second.id, "private");
   platform.assignPlan(creator.account.id, "free");
   assert.equal(platform.getProject(creator.account.id, first.id).state, "private");
-  platform.transitionProject(creator.account.id, second.id, "draft");
   assert.throws(
-    () => platform.transitionProject(creator.account.id, second.id, "private"),
-    /plan play link limit reached/,
+    () => platform.transitionProject(creator.account.id, second.id, "draft"),
+    /invalid project transition/,
   );
-  assert.throws(
-    () => platform.transitionProject(creator.account.id, first.id, "unlisted"),
-    /public catalog requires Loki or Loki Pro/,
-  );
-  platform.assignPlan(creator.account.id, "loki");
-  platform.transitionProject(creator.account.id, second.id, "private");
   platform.transitionProject(creator.account.id, first.id, "unlisted");
+  platform.transitionProject(creator.account.id, second.id, "inactive");
+  assert.throws(
+    () => platform.transitionProject(creator.account.id, second.id, "unlisted"),
+    /Free allows 1 active game\. Deactivate First first\./,
+  );
+  platform.transitionProject(creator.account.id, first.id, "inactive");
+  platform.transitionProject(creator.account.id, second.id, "unlisted");
+  assert.throws(
+    () => platform.transitionProject(creator.account.id, second.id, "published"),
+    /Layer 2 publication is closed/,
+  );
 });
 
-test("free activation stays private and room size follows the plan", () => {
+test("free activation is public and room size follows the plan", () => {
   const platform = new PlatformService();
   const creator = platform.registerCreator("owner@example.test", "Studio");
   const project = platform.createProject(creator.account.id, creator.organization.id, {
@@ -143,7 +153,7 @@ test("free activation stays private and room size follows the plan", () => {
     project.id,
     crypto.randomUUID(),
   );
-  assert.equal(activated.state, "private");
+  assert.equal(activated.state, "unlisted");
   assert.throws(
     () => platform.assertManifestAllowed(project.id, hostManifest),
     /this plan allows 4 players per room/,
@@ -273,6 +283,11 @@ test("creator dashboard shows the account plan and billing actions", () => {
   assert.match(page, /\/v1\/billing\/checkout/);
   assert.match(page, /\/v1\/billing\/portal/);
   assert.match(page, /Delete project/);
+  assert.match(page, /Deactivate/);
+  assert.match(page, /Reactivate/);
+  assert.match(page, /play\.lokiplay\.cc/);
+  assert.doesNotMatch(page, /Return to draft/);
+  assert.doesNotMatch(page, /Unity, Godot/);
   assert.match(page, /method: "DELETE"/);
   assert.match(page, /Sign in with Google/);
   assert.match(page, /Sign in with GitHub/);

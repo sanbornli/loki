@@ -8,10 +8,12 @@ import type {
   ArtifactReadStore,
   Deployment,
 } from "../../api/src/deployments.js";
-import type {
-  Awaitable,
-  PlatformOperations,
+import {
+  isInactiveProject,
+  type Awaitable,
+  type PlatformOperations,
 } from "../../api/src/platform.js";
+import { releaseIdentity } from "../../api/src/release.js";
 import { renderCreatorPage } from "./creator-page.js";
 import { renderDevicePage } from "./device-page.js";
 import { buildLlmsFull, isDocsRoute, llmsTxt, renderDocsPage } from "./docs-page.js";
@@ -24,6 +26,7 @@ import {
   renderPlayManifest,
   renderPlayerShell,
   renderPrivatePlayPage,
+  renderUnavailablePlayPage,
 } from "./player.js";
 import { renderPlayerPlatformPage } from "./player-platform-page.js";
 import type { ProductPageConfig } from "./product-theme.js";
@@ -224,7 +227,7 @@ export function createWebHandler(dependencies: WebDependencies) {
           "content-type": "application/json; charset=utf-8",
           "cache-control": "no-store",
         });
-        response.end('{"ok":true}\n');
+        response.end(`${JSON.stringify({ ok: true, ...releaseIdentity() })}\n`);
         return;
       }
       if (request.method === "GET" && url.pathname === "/health/ready") {
@@ -252,6 +255,18 @@ export function createWebHandler(dependencies: WebDependencies) {
       }
       const hostname = requestHostname(request);
       const playerHost = hostname === "play.lokiplay.cc";
+      if (
+        (url.pathname === "/play" || url.pathname.startsWith("/play/")) &&
+        (hostname === "lokiplay.cc" || hostname.endsWith(".lokiplay.cc")) &&
+        !playerHost
+      ) {
+        response.writeHead(302, {
+          location: "https://play.lokiplay.cc" + url.pathname + url.search,
+          "cache-control": "no-store",
+        });
+        response.end();
+        return;
+      }
       const creatorHost = hostname === "app.lokiplay.cc";
       const docsHost = hostname === "docs.lokiplay.cc";
       if (
@@ -365,12 +380,26 @@ export function createWebHandler(dependencies: WebDependencies) {
         /^\/play\/([a-z0-9-]{3,48})\/([a-z0-9-]{3,48})$/i,
       );
       if (request.method === "GET" && (playUuid || playSlugs)) {
-        const project = playUuid
-          ? await dependencies.platform.playableProject(playUuid[1]!)
-          : await dependencies.platform.playableProjectBySlugs(
-              playSlugs![1]!,
-              playSlugs![2]!,
-            );
+        let project;
+        try {
+          project = playUuid
+            ? await dependencies.platform.playableProject(playUuid[1]!)
+            : await dependencies.platform.playableProjectBySlugs(
+                playSlugs![1]!,
+                playSlugs![2]!,
+              );
+        } catch (error) {
+          if (isInactiveProject(error)) {
+            response.writeHead(403, {
+              "content-type": "text/html; charset=utf-8",
+              "cache-control": "no-store",
+              "x-content-type-options": "nosniff",
+            });
+            response.end(renderUnavailablePlayPage());
+            return;
+          }
+          throw error;
+        }
         const projectId = project.id;
         let playInvite: string | undefined;
         try {

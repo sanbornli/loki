@@ -27,6 +27,7 @@ export const ProjectStateSchema = z.enum([
   "draft",
   "private",
   "unlisted",
+  "inactive",
   "review_requested",
   "published",
   "suspended",

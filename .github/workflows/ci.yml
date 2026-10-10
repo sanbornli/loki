@@ -27,6 +27,8 @@ jobs:
           cmp packages/protocol/fixtures/conformance.json clients/swift/Tests/LokiSDKTests/Fixtures/conformance.json
           cmp packages/protocol/fixtures/conformance.json clients/kotlin/src/test/resources/conformance.json
           cmp packages/protocol/fixtures/conformance.json clients/unity/Tests/Fixtures/conformance.json
+      - name: Hosted SDK version matches the package
+        run: node scripts/check-hosted-sdk-version.mjs
       - run: npm run check
 
   package-install-smoke:

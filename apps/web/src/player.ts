@@ -96,6 +96,31 @@ export function isPrivatePlayDenial(error: unknown): boolean {
   return error instanceof Error && /play invite/i.test(error.message);
 }
 
+export function renderUnavailablePlayPage(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Game unavailable — Loki</title>
+  <link rel="icon" type="image/png" href="/assets/loki-app-icon-dark.png">
+  <style>
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#080806;color:#f4efe3;font:16px system-ui,sans-serif;padding:24px}
+    main{max-width:32rem}
+    .mark{margin:0 0 1.25rem;color:#d7b56d;font-size:.72rem;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+    h1{margin:0;font-size:clamp(1.8rem,4vw,2.4rem);font-weight:560;letter-spacing:-.04em;line-height:1.15}
+  </style>
+</head>
+<body>
+  <main>
+    <p class="mark">Loki</p>
+    <h1>This game is not available.</h1>
+  </main>
+</body>
+</html>`;
+}
+
 export function renderPrivatePlayPage(): string {
   return `<!doctype html>
 <html lang="en">

@@ -77,7 +77,8 @@ function pricingPlans(): string {
             <p class="pricing-amount">$0</p>
             <p class="pricing-period">Free</p>
             <ul class="pricing-features">
-              <li>1 game</li>
+              <li>2 stored games, 1 active</li>
+              <li>100 MiB of builds</li>
               <li>2 rooms at the same time</li>
               <li>4 players per room</li>
               <li>Host authoritative</li>
@@ -89,7 +90,8 @@ function pricingPlans(): string {
             <p class="pricing-amount"><span class="price-monthly">$12</span><span class="price-annual"><s class="price-was">$12</s>$8</span></p>
             <p class="pricing-period"><span class="price-monthly">per month</span><span class="price-annual">per month, billed annually</span></p>
             <ul class="pricing-features">
-              <li>20 games</li>
+              <li>20 stored games, 20 active</li>
+              <li>500 MiB of builds</li>
               <li>8 players per room</li>
               <li>Play links</li>
               <li>Host and server authoritative</li>
@@ -102,6 +104,7 @@ function pricingPlans(): string {
             <p class="pricing-period"><span class="price-monthly">per month</span><span class="price-annual">per month, billed annually</span></p>
             <ul class="pricing-features">
               <li>Unlimited games</li>
+              <li>2 GiB of builds</li>
               <li>Unlimited links</li>
               <li>8 players per room</li>
               <li>Host and server authoritative</li>
@@ -619,8 +622,9 @@ ${pricingPlans()}
             <tr><th></th><th>Free</th><th>Loki</th><th>Loki Pro</th></tr>
           </thead>
           <tbody>
-            <tr><td>Games</td><td>1</td><td>20</td><td>Unlimited</td></tr>
-            <tr><td>Play links</td><td>1</td><td>20</td><td>Unlimited</td></tr>
+            <tr><td>Stored games</td><td>2</td><td>20</td><td>Unlimited</td></tr>
+            <tr><td>Active games</td><td>1</td><td>20</td><td>Unlimited</td></tr>
+            <tr><td>Stored builds</td><td>100 MiB</td><td>500 MiB</td><td>2 GiB</td></tr>
             <tr><td>Players per room</td><td>4</td><td>8</td><td>8</td></tr>
             <tr><td>Public catalog</td><td>Closed</td><td>Closed</td><td>Closed</td></tr>
             <tr><td>Authority</td><td>Host</td><td>Host and server</td><td>Host and server</td></tr>

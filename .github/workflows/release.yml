@@ -70,6 +70,8 @@ jobs:
             }
           }
           EOF
+      - name: Hosted SDK version matches the tag
+        run: node scripts/check-hosted-sdk-version.mjs
       - run: npm run check
       - name: Publish npm packages
         run: |
@@ -267,6 +269,24 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Refuse a dirty tree or a tag that does not match the packages
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "production deploys run from a clean tag, not a manual railway up"
+            git status --porcelain
+            exit 1
+          fi
+          node --input-type=module <<'EOF'
+          import { readFileSync } from "node:fs";
+          const expected = process.env.GITHUB_REF_NAME.slice(1);
+          const version = JSON.parse(readFileSync("packages/protocol/package.json", "utf8")).version;
+          if (version !== expected) {
+            throw new Error(`protocol is ${version}, tag is ${expected}. Run scripts/bump-version.mjs first.`);
+          }
+          EOF
+          node scripts/check-hosted-sdk-version.mjs
+      - name: Record the released version and commit
+        run: node scripts/write-release-identity.mjs
       - name: Install Railway CLI
         run: npm install -g @railway/cli
       # Workspace/account tokens must be RAILWAY_API_TOKEN. RAILWAY_TOKEN is
@@ -300,9 +320,34 @@ jobs:
           railway up --service web --ci --yes \
             --project e59d29d4-a7f0-4d4f-a082-3097f31a0c3a \
             --environment production
+      - name: Verify the deployed version
+        run: node scripts/verify-deployed-health.mjs "${GITHUB_REF_NAME#v}" "$GITHUB_SHA"
+
+  deploy-sites:
+    needs: [nakama-live]
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Deploy marketing site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run marketing:deploy
+      - name: Deploy docs site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run docs:deploy
 
   github-release:
-    needs: [publish-npm, verify-swift, verify-unity, deploy-production]
+    needs: [publish-npm, verify-swift, verify-unity, deploy-production, deploy-sites]
     runs-on: ubuntu-latest
     environment: release
     steps:

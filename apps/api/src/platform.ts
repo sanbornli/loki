@@ -11,14 +11,19 @@ import {
 } from "../../../packages/protocol/src/index.js";
 import {
   activationState,
+  activeGameLimitMessage,
   assertPublicCatalog,
   assertRoomSize,
   assertServerAuthority,
   assertWithinCap,
   consumesPlayLink,
   entitledPlan,
+  INACTIVE_DEPLOY_MESSAGE,
   limitsFor,
+  PLAYABLE_PROJECT_STATES,
+  PROJECT_TRANSITIONS,
   roomQuotaForPlan,
+  storedGameLimitMessage,
   type BillingRecord,
   type PlanId,
   type PlanLimits,
@@ -31,6 +36,18 @@ import {
   validateProjectSlug,
 } from "./slugs.js";
 import { SessionTokenService } from "./tokens.js";
+
+export class InactiveProjectError extends Error {
+  constructor() {
+    super("project is inactive");
+    this.name = "InactiveProjectError";
+  }
+}
+
+export function isInactiveProject(error: unknown): boolean {
+  return error instanceof InactiveProjectError ||
+    (error instanceof Error && error.message === "project is inactive");
+}
 
 export interface Account {
   id: string;
@@ -144,7 +161,10 @@ export interface PlatformOperations {
     maxPlayersPerRoom: number;
     simultaneousRooms: number;
     serverAuthority: boolean;
+    storedBytes: number | null;
   }>;
+  /** Retained build bytes for the account that owns this project. */
+  retainedBytes(projectId: string): Awaitable<number>;
   assertManifestAllowed(
     projectId: string,
     manifest: { multiplayer?: { enabled?: boolean; authority: "host" | "server"; maxPlayers: number } },
@@ -159,15 +179,6 @@ interface DeploymentCredential {
   expiresAt: number;
   usedAt?: number;
 }
-
-const transitions: Record<ProjectState, ProjectState[]> = {
-  draft: ["private"],
-  private: ["draft", "unlisted", "review_requested"],
-  unlisted: ["private", "review_requested"],
-  review_requested: ["private"],
-  published: ["unlisted", "suspended"],
-  suspended: ["private"],
-};
 
 const secretHash = (value: string): string =>
   createHash("sha256").update(value).digest("hex");
@@ -197,6 +208,7 @@ export class PlatformService {
   readonly #stripe = new Map<string, StripeLink>();
   readonly #customers = new Map<string, string>();
   readonly #subscriptions = new Map<string, string>();
+  #retainedBytes = 0;
 
   constructor(readonly tokens = new SessionTokenService()) {}
 
@@ -289,7 +301,7 @@ export class PlatformService {
     assertWithinCap(
       this.#ownedProjects(owner.id).length,
       limits.games,
-      "plan game limit reached",
+      storedGameLimitMessage(this.#plan(owner)),
     );
     validateProjectSlug(input.slug);
     if (
@@ -332,7 +344,7 @@ export class PlatformService {
     if (next === "published") {
       throw new Error("Layer 2 publication is closed");
     }
-    if (!transitions[project.state].includes(next)) {
+    if (!PROJECT_TRANSITIONS[project.state].includes(next)) {
       throw new Error(`invalid project transition ${project.state} -> ${next}`);
     }
     this.#assertTransitionAllowed(project, next);
@@ -369,6 +381,7 @@ export class PlatformService {
     const project = this.#requireProject(projectId);
     this.#requireMember(actorId, project.organizationId);
     if (project.state === "suspended") throw new Error("project suspended");
+    if (project.state === "inactive") throw new Error(INACTIVE_DEPLOY_MESSAGE);
     const credentialId = randomUUID();
     const secret = `loki_deploy_${randomBytes(32).toString("base64url")}`;
     const credential: DeploymentCredential = {
@@ -403,8 +416,10 @@ export class PlatformService {
     if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
       throw new Error("invalid deployment credential");
     }
-    credential.usedAt = now;
     const project = this.#requireProject(credential.projectId);
+    if (project.state === "inactive") throw new Error(INACTIVE_DEPLOY_MESSAGE);
+    if (project.state === "suspended") throw new Error("project suspended");
+    credential.usedAt = now;
     this.#record(
       credential.actorId,
       project.organizationId,
@@ -422,6 +437,7 @@ export class PlatformService {
     now = Math.floor(Date.now() / 1_000),
   ): string {
     const project = this.#requireProject(projectId);
+    if (project.state === "inactive") throw new InactiveProjectError();
     if (!["private", "unlisted", "published"].includes(project.state)) {
       throw new Error("project is not playable");
     }
@@ -442,6 +458,7 @@ export class PlatformService {
   setActiveDeployment(actorId: string, projectId: string, deploymentId: string): Project {
     const project = this.#requireProject(projectId);
     this.#requireMember(actorId, project.organizationId);
+    if (project.state === "inactive") throw new Error(INACTIVE_DEPLOY_MESSAGE);
     project.activeDeploymentId = deploymentId;
     if (project.state === "draft") {
       const plan = this.#plan(this.#owner(project.organizationId));
@@ -467,6 +484,7 @@ export class PlatformService {
     "id" | "name" | "slug" | "state" | "activeDeploymentId"
   > {
     const project = this.#requireProject(projectId);
+    if (project.state === "inactive") throw new InactiveProjectError();
     if (
       !["private", "unlisted", "published"].includes(project.state) ||
       !project.activeDeploymentId
@@ -550,6 +568,7 @@ export class PlatformService {
     maxPlayersPerRoom: number;
     simultaneousRooms: number;
     serverAuthority: boolean;
+    storedBytes: number | null;
   } {
     const project = this.#requireProject(projectId);
     const plan = this.#plan(this.#owner(project.organizationId));
@@ -559,7 +578,17 @@ export class PlatformService {
       maxPlayersPerRoom: limits.maxPlayersPerRoom,
       simultaneousRooms: roomQuotaForPlan(plan),
       serverAuthority: limits.serverAuthority,
+      storedBytes: limits.storedBytes,
     };
+  }
+
+  retainedBytes(_projectId: string): number {
+    return this.#retainedBytes;
+  }
+
+  /** Test hook. Production bytes come from the deployment rows. */
+  setRetainedBytes(bytes: number): void {
+    this.#retainedBytes = bytes;
   }
 
   assertManifestAllowed(
@@ -622,12 +651,17 @@ export class PlatformService {
     const owner = this.#owner(project.organizationId);
     const plan = this.#plan(owner);
     const limits = limitsFor(plan);
-    if (next === "unlisted" || next === "published") assertPublicCatalog(plan);
+    if (next === "published") assertPublicCatalog(plan);
     if (consumesPlayLink(project.state, next)) {
       const playable = this.#ownedProjects(owner.id).filter((item) =>
-        consumesPlayLink("draft", item.state),
-      ).length;
-      assertWithinCap(playable, limits.playLinks, "plan play link limit reached");
+        (PLAYABLE_PROJECT_STATES as readonly string[]).includes(item.state),
+      );
+      const activeName = playable.find((item) => item.id !== project.id)?.name;
+      assertWithinCap(
+        playable.length,
+        limits.playLinks,
+        activeGameLimitMessage(plan, activeName),
+      );
     }
   }
 

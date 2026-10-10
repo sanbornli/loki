@@ -9,6 +9,8 @@
  * reconciled with each vendor's invoice.
  */
 
+import { isPlanId, limitsFor } from "./plans.js";
+
 export type VendorId = "railway" | "cloudflare" | "cloudflare-edge" | "supabase" | "nakama";
 
 export interface VendorRates {
@@ -1193,10 +1195,14 @@ export interface CostProjectRow {
   organizationName: string;
   ownerId: string | null;
   ownerEmail: string | null;
-  /** Total bytes ever uploaded. Releases are immutable, so they stay stored. */
+  /** Bytes uploaded in the current 30-day meter. This is not retained storage. */
   storedBytes: number;
   /** Player and guest sessions in the current 30-day window. */
   sessions: number;
+  /** Bytes still kept for this game. Older releases are 0 until the next ship. */
+  retainedBytes?: number;
+  releaseCount?: number;
+  ownerPlan?: string | null;
 }
 
 export interface GameCost {
@@ -1205,6 +1211,10 @@ export interface GameCost {
   organizationName: string;
   ownerEmail: string | null;
   storedBytes: number;
+  retainedBytes: number;
+  releaseCount: number;
+  storedBytesCap: number | null;
+  nearStorageCap: boolean;
   sessions: number;
   storageCostUsd: number;
   runtimeCostUsd: number;
@@ -1216,6 +1226,10 @@ export interface CreatorCost {
   email: string;
   games: number;
   storedBytes: number;
+  retainedBytes: number;
+  releaseCount: number;
+  storedBytesCap: number | null;
+  nearStorageCap: boolean;
   sessions: number;
   costUsd: number;
 }
@@ -1245,7 +1259,17 @@ export interface CostAnalytics {
 }
 
 const COST_METHOD =
-  "Storage cost (Cloudflare R2) is shared by bytes uploaded. Runtime cost (Railway, Supabase, and Cloudflare proxied traffic and DNS) is shared by player and guest sessions in the current 30-day window. Creators are charged for the games they own. Figures are estimates.";
+  "Storage cost (Cloudflare R2) is shared by 30-day uploads. Retained bytes are the builds still kept. Runtime cost (Railway, Supabase, and Cloudflare proxied traffic and DNS) is shared by player and guest sessions in the current 30-day window. Creators are charged for the games they own. Figures are estimates.";
+
+const NEAR_CAP = 0.8;
+
+function storageCap(plan: string | null | undefined): number | null {
+  return isPlanId(plan) ? limitsFor(plan).storedBytes : null;
+}
+
+function nearStorageCap(retained: number, cap: number | null): boolean {
+  return cap !== null && cap > 0 && retained / cap >= NEAR_CAP;
+}
 
 export function allocateCosts(
   usage: VendorUsage,
@@ -1268,12 +1292,18 @@ export function allocateCosts(
   const games: GameCost[] = projects.map((row) => {
     const storageCostUsd = totalBytes > 0 ? (storagePool * row.storedBytes) / totalBytes : 0;
     const runtimeCostUsd = totalSessions > 0 ? (runtimePool * row.sessions) / totalSessions : 0;
+    const retainedBytes = row.retainedBytes ?? 0;
+    const cap = storageCap(row.ownerPlan);
     return {
       projectId: row.projectId,
       name: row.name,
       organizationName: row.organizationName,
       ownerEmail: row.ownerEmail,
       storedBytes: row.storedBytes,
+      retainedBytes,
+      releaseCount: row.releaseCount ?? 0,
+      storedBytesCap: cap,
+      nearStorageCap: nearStorageCap(retainedBytes, cap),
       sessions: row.sessions,
       storageCostUsd: roundTo(storageCostUsd, 4),
       runtimeCostUsd: roundTo(runtimeCostUsd, 4),
@@ -1293,17 +1323,27 @@ export function allocateCosts(
         email: row.ownerEmail ?? row.ownerId,
         games: 0,
         storedBytes: 0,
+        retainedBytes: 0,
+        releaseCount: 0,
+        storedBytesCap: storageCap(row.ownerPlan),
+        nearStorageCap: false,
         sessions: 0,
         costUsd: 0,
       };
     entry.games += 1;
     entry.storedBytes += row.storedBytes;
+    entry.retainedBytes += row.retainedBytes ?? 0;
+    entry.releaseCount += row.releaseCount ?? 0;
     entry.sessions += row.sessions;
     entry.costUsd += game.costUsd;
     byCreator.set(row.ownerId, entry);
   }
   const creators = [...byCreator.values()]
-    .map((entry) => ({ ...entry, costUsd: roundTo(entry.costUsd, 4) }))
+    .map((entry) => ({
+      ...entry,
+      costUsd: roundTo(entry.costUsd, 4),
+      nearStorageCap: nearStorageCap(entry.retainedBytes, entry.storedBytesCap),
+    }))
     .sort((a, b) => b.costUsd - a.costUsd || a.email.localeCompare(b.email));
 
   const allocated = games.reduce((sum, game) => sum + game.costUsd, 0);

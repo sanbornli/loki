@@ -22,19 +22,24 @@ import type {
 } from "./platform.js";
 import {
   activationState,
+  activeGameLimitMessage,
   assertPublicCatalog,
   assertRoomSize,
   assertServerAuthority,
   assertWithinCap,
   consumesPlayLink,
   entitledPlan,
+  INACTIVE_DEPLOY_MESSAGE,
   isPlanId,
   isPlanStatus,
   limitsFor,
+  PROJECT_TRANSITIONS,
   roomQuotaForPlan,
+  storedGameLimitMessage,
   type PlanId,
   type PlanStatus,
 } from "./plans.js";
+import { InactiveProjectError } from "./platform.js";
 import {
   playablePath,
   validateOrganizationSlug,
@@ -183,12 +188,24 @@ async function assertPlanTransition(
   const owner = await lockOwnerBilling(client, organizationId);
   const plan = accountBilling(owner).plan;
   const limits = limitsFor(plan);
-  if (next === "unlisted" || next === "published") assertPublicCatalog(plan);
+  if (next === "published") assertPublicCatalog(plan);
   if (consumesPlayLink(from, next)) {
+    const active = await client.query<{ name: string }>(
+      `SELECT projects.name
+         FROM projects
+         JOIN organization_members
+           ON organization_members.organization_id = projects.organization_id
+          AND organization_members.role = 'owner'
+        WHERE organization_members.account_id = $1
+          AND projects.state IN ('private', 'unlisted', 'published')
+        ORDER BY projects.updated_at DESC
+        LIMIT 1`,
+      [owner.id],
+    );
     assertWithinCap(
       await countOwnedProjects(client, owner.id, true),
       limits.playLinks,
-      "plan play link limit reached",
+      activeGameLimitMessage(plan, active.rows[0]?.name),
     );
   }
 }
@@ -385,7 +402,7 @@ export class PostgresPlatformService implements PlatformOperations {
       assertWithinCap(
         await countOwnedProjects(client, owner.id, false),
         limits.games,
-        "plan game limit reached",
+        storedGameLimitMessage(accountBilling(owner).plan),
       );
       const result = await client.query<ProjectRow>(
         `INSERT INTO projects (organization_id, name, slug)
@@ -423,14 +440,6 @@ export class PostgresPlatformService implements PlatformOperations {
     next: ProjectState,
   ): Promise<Project> {
     ProjectStateSchema.parse(next);
-    const transitions: Record<ProjectState, ProjectState[]> = {
-      draft: ["private"],
-      private: ["draft", "unlisted", "review_requested"],
-      unlisted: ["private", "review_requested"],
-      review_requested: ["private"],
-      published: ["unlisted", "suspended"],
-      suspended: ["private"],
-    };
     return transaction(this.pool, async (client) => {
       const result = await client.query<ProjectRow>(
         "SELECT * FROM projects WHERE id = $1 FOR UPDATE",
@@ -452,7 +461,7 @@ export class PostgresPlatformService implements PlatformOperations {
       if (next === "published") {
         throw new Error("Layer 2 publication is closed");
       }
-      if (!transitions[row.state].includes(next)) {
+      if (!PROJECT_TRANSITIONS[row.state].includes(next)) {
         throw new Error(`invalid project transition ${row.state} -> ${next}`);
       }
       await assertPlanTransition(client, row.organization_id, row.state, next);
@@ -516,6 +525,7 @@ export class PostgresPlatformService implements PlatformOperations {
       if (!project) throw new Error("project not found");
       await requireMember(client, actorId, project.organization_id);
       if (project.state === "suspended") throw new Error("project suspended");
+      if (project.state === "inactive") throw new Error(INACTIVE_DEPLOY_MESSAGE);
       const actor = await client.query(
         "SELECT 1 FROM accounts WHERE id = $1 AND suspended_at IS NULL",
         [actorId],
@@ -547,6 +557,20 @@ export class PostgresPlatformService implements PlatformOperations {
     now = Math.floor(Date.now() / 1_000),
   ): Promise<{ projectId: string; actorId: string }> {
     return transaction(this.pool, async (client) => {
+      const inactive = await client.query<{ state: string }>(
+        `SELECT projects.state
+           FROM deployment_credentials AS credential
+           JOIN projects ON projects.id = credential.project_id
+          WHERE credential.id = $1
+            AND credential.secret_hash = $2
+            AND credential.used_at IS NULL
+            AND credential.revoked_at IS NULL
+            AND credential.expires_at > to_timestamp($3)`,
+        [credentialId, digest(secret), now],
+      );
+      if (inactive.rows[0]?.state === "inactive") {
+        throw new Error(INACTIVE_DEPLOY_MESSAGE);
+      }
       const result = await client.query<{
         project_id: string;
         actor_id: string;
@@ -653,6 +677,7 @@ export class PostgresPlatformService implements PlatformOperations {
       );
       if (!deployment.rowCount) throw new Error("deployment not found");
       let nextState = project.state;
+      if (project.state === "inactive") throw new Error(INACTIVE_DEPLOY_MESSAGE);
       if (project.state === "draft") {
         const owner = await lockOwnerBilling(client, project.organization_id);
         nextState = activationState(accountBilling(owner).plan);
@@ -777,7 +802,17 @@ export class PostgresPlatformService implements PlatformOperations {
       values,
     );
     const row = result.rows[0];
-    if (!row) throw new Error("project is not playable");
+    if (!row) {
+      const state = await this.pool.query<{ state: string }>(
+        `SELECT projects.state
+           FROM projects
+           JOIN organizations ON organizations.id = projects.organization_id
+          WHERE ${where}`,
+        values,
+      );
+      if (state.rows[0]?.state === "inactive") throw new InactiveProjectError();
+      throw new Error("project is not playable");
+    }
     const project = projectFromRow(row);
     return {
       id: project.id,
@@ -872,6 +907,7 @@ export class PostgresPlatformService implements PlatformOperations {
     maxPlayersPerRoom: number;
     simultaneousRooms: number;
     serverAuthority: boolean;
+    storedBytes: number | null;
   }> {
     const result = await this.pool.query<BillingRow>(
       `SELECT accounts.id, accounts.email, accounts.plan, accounts.plan_status, accounts.plan_period_end,
@@ -893,7 +929,29 @@ export class PostgresPlatformService implements PlatformOperations {
       maxPlayersPerRoom: limits.maxPlayersPerRoom,
       simultaneousRooms: roomQuotaForPlan(plan),
       serverAuthority: limits.serverAuthority,
+      storedBytes: limits.storedBytes,
     };
+  }
+
+  async retainedBytes(projectId: string): Promise<number> {
+    const result = await this.pool.query<{ bytes: string }>(
+      `SELECT COALESCE(SUM(deployments.total_bytes), 0)::text AS bytes
+         FROM deployments
+         JOIN projects ON projects.id = deployments.project_id
+         JOIN organization_members
+           ON organization_members.organization_id = projects.organization_id
+          AND organization_members.role = 'owner'
+        WHERE organization_members.account_id = (
+          SELECT members.account_id
+            FROM projects AS target
+            JOIN organization_members AS members
+              ON members.organization_id = target.organization_id
+             AND members.role = 'owner'
+           WHERE target.id = $1
+        )`,
+      [projectId],
+    );
+    return Number(result.rows[0]?.bytes ?? 0);
   }
 
   async assertManifestAllowed(
@@ -915,8 +973,8 @@ export class PostgresDeploymentRepository implements DeploymentRepository {
     try {
       await this.pool.query(
         `INSERT INTO deployments
-         (id, project_id, content_hash, manifest, files, findings, status, created_at)
-       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7, $8)`,
+         (id, project_id, content_hash, manifest, files, findings, status, total_bytes, created_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7, $8, $9)`,
         [
           deployment.id,
           deployment.projectId,
@@ -925,6 +983,7 @@ export class PostgresDeploymentRepository implements DeploymentRepository {
           JSON.stringify(deployment.files),
           JSON.stringify(deployment.findings),
           deployment.status,
+          deployment.totalBytes ?? 0,
           deployment.createdAt,
         ],
       );
@@ -952,6 +1011,7 @@ export class PostgresDeploymentRepository implements DeploymentRepository {
       files: unknown;
       findings: unknown;
       status: Deployment["status"];
+      total_bytes: string | number | null;
       created_at: Date | string;
     }>(
       "SELECT * FROM deployments WHERE id = $1 AND project_id = $2",
@@ -972,6 +1032,7 @@ export class PostgresDeploymentRepository implements DeploymentRepository {
       contentHash: row.content_hash,
       manifest: GameManifestSchema.parse(row.manifest),
       files: row.files,
+      totalBytes: Number(row.total_bytes ?? 0),
       findings: row.findings as ScanFinding[],
       status: row.status,
       createdAt: iso(row.created_at),
@@ -990,6 +1051,24 @@ export class PostgresDeploymentRepository implements DeploymentRepository {
     );
     const deploymentId = result.rows[0]?.id;
     return deploymentId ? this.get(projectId, deploymentId) : undefined;
+  }
+
+  async list(projectId: string): Promise<{ id: string; totalBytes: number; createdAt: string }[]> {
+    const result = await this.pool.query<{
+      id: string;
+      total_bytes: string | number | null;
+      created_at: Date | string;
+    }>(
+      `SELECT id, total_bytes, created_at
+         FROM deployments
+        WHERE project_id = $1`,
+      [projectId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      totalBytes: Number(row.total_bytes ?? 0),
+      createdAt: iso(row.created_at),
+    }));
   }
 
   async delete(projectId: string, deploymentId: string): Promise<void> {

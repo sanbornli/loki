@@ -24,6 +24,7 @@ const environment = z
     LOKI_TERMS_VERSION: z.string().min(1),
     LOKI_PRIVACY_VERSION: z.string().min(1),
     LOKI_AUP_VERSION: z.string().min(1),
+    LOKI_PLAYER_ORIGIN: z.string().url().default("https://play.lokiplay.cc"),
     // Hosted SDK rollout: unset both for stable everywhere (the rollback state).
     LOKI_HOSTED_SDK_SERVE: z.enum(["stable", "candidate"]).optional(),
     LOKI_HOSTED_SDK_CANARY_PROJECT_IDS: z.string().optional(),
@@ -84,6 +85,7 @@ const server = startWebServer(
     hostedSdk,
     productConfig: {
       apiOrigin: environment.LOKI_PUBLIC_API_ORIGIN,
+      playerOrigin: environment.LOKI_PLAYER_ORIGIN,
       supabaseUrl: environment.SUPABASE_URL,
       supabaseAnonKey: environment.SUPABASE_ANON_KEY,
       termsVersion: environment.LOKI_TERMS_VERSION,

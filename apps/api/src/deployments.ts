@@ -9,6 +9,10 @@ import {
 import { literalOutboundUrls } from "./network-scan.js";
 import type { PlatformOperations } from "./platform.js";
 import {
+  KEPT_RELEASES,
+  storedBytesLimitMessage,
+} from "./plans.js";
+import {
   MAX_STEP_MODULE_BYTES,
   MemoryStepModuleStore,
   sha256Hex,
@@ -49,6 +53,8 @@ export interface Deployment {
   contentHash: string;
   manifest: GameManifest;
   files: string[];
+  /** Uncompressed size of the build. Older rows may be 0 until the next ship. */
+  totalBytes?: number;
   findings: ScanFinding[];
   status:
     | "ready"
@@ -72,6 +78,12 @@ export interface ArtifactWriteStore extends ArtifactReadStore {
 /** @deprecated Prefer ArtifactReadStore or ArtifactWriteStore at trust boundaries. */
 export type ArtifactStore = ArtifactWriteStore;
 
+export interface ReleaseRecord {
+  id: string;
+  totalBytes: number;
+  createdAt: string;
+}
+
 export interface DeploymentRepository {
   save(deployment: Deployment): Promise<void>;
   get(projectId: string, deploymentId: string): Promise<Deployment | undefined>;
@@ -79,7 +91,51 @@ export interface DeploymentRepository {
     projectId: string,
     contentHash: string,
   ): Promise<Deployment | undefined>;
+  list(projectId: string): Promise<ReleaseRecord[]>;
   delete(projectId: string, deploymentId: string): Promise<void>;
+}
+
+/** Newest releases, plus the active release when it is older than those. */
+export function releasesToKeep(
+  releases: ReleaseRecord[],
+  activeId: string | undefined,
+  keepCount = KEPT_RELEASES,
+): Set<string> {
+  const sorted = [...releases].sort(
+    (left, right) =>
+      right.createdAt.localeCompare(left.createdAt) ||
+      right.id.localeCompare(left.id),
+  );
+  const keep = new Set(sorted.slice(0, keepCount).map((release) => release.id));
+  if (activeId && releases.some((release) => release.id === activeId)) {
+    keep.add(activeId);
+  }
+  return keep;
+}
+
+export function projectedRetainedBytes(input: {
+  accountBytes: number;
+  projectReleases: ReleaseRecord[];
+  incomingBytes: number;
+  activeDeploymentId?: string;
+}): number {
+  const projectBytes = input.projectReleases.reduce(
+    (sum, release) => sum + release.totalBytes,
+    0,
+  );
+  const incoming: ReleaseRecord = {
+    id: "incoming",
+    totalBytes: input.incomingBytes,
+    createdAt: "9999-12-31T00:00:00.000Z",
+  };
+  const keep = releasesToKeep(
+    [...input.projectReleases, incoming],
+    input.activeDeploymentId,
+  );
+  const kept = [...input.projectReleases, incoming]
+    .filter((release) => keep.has(release.id))
+    .reduce((sum, release) => sum + release.totalBytes, 0);
+  return input.accountBytes - projectBytes + kept;
 }
 
 export class DeploymentContentConflictError extends Error {
@@ -124,6 +180,16 @@ export class MemoryDeploymentRepository implements DeploymentRepository {
         stored.projectId === projectId && stored.contentHash === contentHash,
     );
     return deployment ? structuredClone(deployment) : undefined;
+  }
+
+  async list(projectId: string): Promise<ReleaseRecord[]> {
+    return [...this.#deployments.values()]
+      .filter((deployment) => deployment.projectId === projectId)
+      .map((deployment) => ({
+        id: deployment.id,
+        totalBytes: deployment.totalBytes ?? 0,
+        createdAt: deployment.createdAt,
+      }));
   }
 
   async delete(projectId: string, deploymentId: string): Promise<void> {
@@ -391,6 +457,18 @@ export class DeploymentService {
       if (files.has(name)) throw new Error(`duplicate archive path: ${name}`);
       files.set(name, bytes);
     }
+    const project = await this.platform.getProject(auth.actorId, auth.projectId);
+    const limits = await this.platform.projectRuntimeLimits(auth.projectId);
+    const releases = await this.repository.list(auth.projectId);
+    const projected = projectedRetainedBytes({
+      accountBytes: await this.platform.retainedBytes(auth.projectId),
+      projectReleases: releases,
+      incomingBytes: totalSize,
+      activeDeploymentId: project.activeDeploymentId,
+    });
+    if (limits.storedBytes !== null && projected > limits.storedBytes) {
+      throw new Error(storedBytesLimitMessage(limits.plan));
+    }
     await this.securityReviewQueue?.meter?.(
       "project",
       auth.projectId,
@@ -437,6 +515,7 @@ export class DeploymentService {
       contentHash,
       manifest,
       files: [...files.keys()].sort(),
+      totalBytes: totalSize,
       findings,
       status,
       createdAt: new Date().toISOString(),
@@ -466,8 +545,29 @@ export class DeploymentService {
       }
       throw error;
     }
-    await this.activateIfRequested(auth.actorId, deployment, input.activate);
+    try {
+      await this.activateIfRequested(auth.actorId, deployment, input.activate);
+    } finally {
+      await this.pruneReleases(auth.actorId, auth.projectId);
+    }
     return structuredClone(deployment);
+  }
+
+  private async pruneReleases(actorId: string, projectId: string): Promise<void> {
+    const project = await this.platform.getProject(actorId, projectId);
+    const releases = await this.repository.list(projectId);
+    const keep = releasesToKeep(releases, project.activeDeploymentId);
+    for (const release of releases) {
+      if (keep.has(release.id)) continue;
+      try {
+        await this.artifacts.delete(release.id);
+      } catch (error) {
+        const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+          ?.httpStatusCode;
+        if (status !== 404) throw error;
+      }
+      await this.repository.delete(projectId, release.id);
+    }
   }
 
   private async activateIfRequested(
